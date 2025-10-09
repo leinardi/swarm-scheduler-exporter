@@ -110,6 +110,7 @@ linters:
       - path: (.+)_test\.go
         linters:
           - dupl
+          - goconst
           - mnd
           - lll
 

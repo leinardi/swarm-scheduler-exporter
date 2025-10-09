@@ -1,5 +1,9 @@
 package collector
 
+// replicas_state exposes the gauge "swarm_service_replicas_state", which tracks
+// the number of tasks per service per state (new, running, failed, etc.).
+// A polling goroutine periodically refreshes counts by listing tasks.
+
 import (
 	"context"
 	"fmt"
@@ -13,8 +17,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// replicasStateGauge is the gauge vector exported at /metrics.
 var replicasStateGauge *prometheus.GaugeVec
 
+// ConfigureReplicasStateGauge registers the "swarm_service_replicas_state" gauge
+// with base labels (stack, service, service_mode, state) plus any custom labels.
 func ConfigureReplicasStateGauge() {
 	baseLabels := append([]string{
 		"stack",
@@ -33,17 +40,22 @@ func ConfigureReplicasStateGauge() {
 	prometheus.MustRegister(replicasStateGauge)
 }
 
+// taskCounter keeps a set of counters per Swarm task state for a given (service, version).
 type taskCounter struct {
 	states map[string]float64
 	labels prometheus.Labels
 }
 
+// inc increments the counter for a particular Swarm task state.
 func (tctr taskCounter) inc(state string) {
 	tctr.states[state]++
 }
 
+// serviceCounter organizes taskCounters by service name and service version
+// to avoid mixing counts across rollouts.
 type serviceCounter map[string]map[string]taskCounter
 
+// get returns the taskCounter for (service, version), creating it if necessary.
 func (sctr serviceCounter) get(labels prometheus.Labels) taskCounter {
 	service := labels["service"]
 	version := labels["service_version"]
@@ -59,6 +71,7 @@ func (sctr serviceCounter) get(labels prometheus.Labels) taskCounter {
 	return sctr[service][version]
 }
 
+// newTaskCounter initializes all known Swarm task states to 0 for a label combination.
 func newTaskCounter(labels map[string]string) taskCounter {
 	return taskCounter{
 		labels: labels,
@@ -82,6 +95,10 @@ func newTaskCounter(labels map[string]string) taskCounter {
 	}
 }
 
+// PollReplicasState lists tasks and aggregates them by state per service.
+// It returns an in-memory structure which UpdateReplicasStateGauge then publishes.
+// NOTE: This naive implementation includes historical tasks; improving it to only count
+// the latest per (service, slot) is a planned enhancement.
 func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter, error) {
 	tasks, err := cli.TaskList(ctx, types.TaskListOptions{
 		Filters: filters.Args{},
@@ -90,6 +107,7 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 		return serviceCounter{}, fmt.Errorf("task list: %w", err)
 	}
 
+	// Stable sort: by service id, then slot, then version descending.
 	sort.Slice(tasks, func(indexA int, indexB int) bool {
 		return tasks[indexA].ServiceID == tasks[indexB].ServiceID &&
 			tasks[indexA].Slot == tasks[indexB].Slot &&
@@ -101,10 +119,10 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 
 	replicas := make(serviceCounter)
 
-	for i := range tasks { // avoid copying large struct
+	for i := range tasks { // iterate by index to avoid copying
 		task := &tasks[i]
 
-		// Skip tasks whose service does not exist anymore
+		// Skip tasks whose service no longer exists.
 		labels, err := getServiceLabels(ctx, cli, task)
 		if client.IsErrNotFound(err) {
 			continue
@@ -118,6 +136,8 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 	return replicas, nil
 }
 
+// getServiceLabels returns label values for a task's parent service,
+// populating the local metadata cache if necessary.
 func getServiceLabels(
 	ctx context.Context,
 	cli *client.Client,
@@ -133,8 +153,7 @@ func getServiceLabels(
 			return map[string]string{}, fmt.Errorf("service inspect %s: %w", sid, err)
 		}
 
-		svcPtr := &svc
-		metadataCache[sid] = buildMetadata(svcPtr)
+		metadataCache[sid] = buildMetadata(&svc)
 	}
 
 	labels := prometheus.Labels{
@@ -150,6 +169,8 @@ func getServiceLabels(
 	return labels, nil
 }
 
+// UpdateReplicasStateGauge writes the aggregated state counters into the
+// "swarm_service_replicas_state" gauge, one metric per state label value.
 func UpdateReplicasStateGauge(sctr serviceCounter) {
 	for _, versions := range sctr {
 		for _, tctr := range versions {

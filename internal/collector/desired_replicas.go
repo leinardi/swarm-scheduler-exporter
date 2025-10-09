@@ -1,5 +1,11 @@
 package collector
 
+// desired_replicas exposes the gauge "swarm_service_desired_replicas", which tracks
+// the scheduler's desired replica count for each service. For replicated services,
+// this is the configured replica count. For global services, it approximates the
+// number of eligible nodes by counting nodes (note: constraints/drain are not
+// evaluated here; see README for caveats).
+
 import (
 	"context"
 	"fmt"
@@ -16,10 +22,14 @@ import (
 )
 
 var (
+	// desiredReplicasGauge is the gauge vector exported at /metrics.
 	desiredReplicasGauge *prometheus.GaugeVec
-	nodeCount            = 0
+	// nodeCount is used to approximate desired replicas for global services.
+	nodeCount = 0
 )
 
+// ConfigureDesiredReplicasGauge registers the "swarm_service_desired_replicas" gauge
+// with base labels (stack, service, service_mode) plus any user-specified custom labels.
 func ConfigureDesiredReplicasGauge() {
 	baseLabels := append([]string{
 		"stack",
@@ -37,6 +47,8 @@ func ConfigureDesiredReplicasGauge() {
 	prometheus.MustRegister(desiredReplicasGauge)
 }
 
+// InitDesiredReplicasGauge seeds the gauge with current desired replica counts
+// by listing services and nodes once at startup.
 func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 	services, err := cli.ServiceList(ctx, types.ServiceListOptions{
 		Filters: filters.Args{},
@@ -64,6 +76,8 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 	return nil
 }
 
+// updateServiceReplicasGauge sets the per-service desired replicas value
+// based on the service mode and configured replica count.
 func updateServiceReplicasGauge(svc *swarm.Service, metadata serviceMetadata) {
 	if svc.Spec.Mode.Replicated != nil {
 		setDesiredReplicasGauge(metadata, float64(*svc.Spec.Mode.Replicated.Replicas))
@@ -72,6 +86,7 @@ func updateServiceReplicasGauge(svc *swarm.Service, metadata serviceMetadata) {
 	}
 }
 
+// setDesiredReplicasGauge writes the gauge value with sanitized label keys.
 func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
 	labels := prometheus.Labels{
 		"stack":        metadata.stack,
@@ -85,6 +100,9 @@ func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
 	desiredReplicasGauge.With(labelutil.SanitizeMetricLabels(labels)).Set(val)
 }
 
+// ListenSwarmEvents listens to Docker events for service and node changes.
+// Node create/remove updates nodeCount and re-seeds the desired replicas gauge.
+// Service updates refresh the cached metadata; service remove clears the gauge.
 func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("type", "service")
@@ -101,10 +119,10 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	for {
 		select {
 		case err := <-errCh:
-			// @TODO: auto-reconnect when connection lost
+			// TODO: add reconnect with backoff.
 			return fmt.Errorf("events stream: %w", err)
 		case evt := <-evtCh:
-			// process in a goroutine but pass by pointer to avoid copying
+			// Process in a goroutine but pass by pointer to avoid copying the event struct.
 			go func(evt *events.Message) {
 				logrus.WithFields(logrus.Fields{
 					"type":       evt.Type,
@@ -122,11 +140,12 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	}
 }
 
+// processEvent handles node and service events. For nodes, only create/remove
+// matters for desired replica approximation. For services, remove clears metrics;
+// all other actions trigger a fresh inspect to update the cache and gauge.
 func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) error {
 	if evt.Type == "node" {
-		// Re-init desired replicas gauge when a node is added/deleted,
-		// to be sure global services have the right number of desired replicas
-		//nolint:exhaustive // we only care about create/remove for node counts
+		//nolint:exhaustive // only create/remove affect desired replica approximation
 		switch evt.Action {
 		case events.ActionCreate:
 			nodeCount++
@@ -143,7 +162,7 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node remove")
 			}
 		default:
-			// ignore other node actions
+			// Ignore other node events (e.g., updates) for this gauge.
 		}
 
 		return nil
@@ -159,7 +178,7 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 			return ErrNoCachedMetadata
 		}
 
-		//	@TODO:	at this point, the vector should be deleted (?)
+		// TODO: at this point, the vector should be deleted (?)
 		setDesiredReplicasGauge(metadata, float64(0))
 		// Clean up labels cache as this won't be used anymore
 		delete(metadataCache, sid)
@@ -176,9 +195,8 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 		return fmt.Errorf("service inspect %s: %w", sid, err)
 	}
 
-	svcPtr := &svc
-	metadataCache[sid] = buildMetadata(svcPtr)
-	updateServiceReplicasGauge(svcPtr, metadataCache[sid])
+	metadataCache[sid] = buildMetadata(&svc)
+	updateServiceReplicasGauge(&svc, metadataCache[sid])
 
 	return nil
 }

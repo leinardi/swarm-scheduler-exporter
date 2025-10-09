@@ -1,3 +1,5 @@
+// Package collector contains the Prometheus collectors and Swarm metadata helpers.
+// This package is internal because its API is not intended to be imported by others.
 package collector
 
 import (
@@ -7,29 +9,34 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 )
 
-// ErrNoCachedMetadata is returned when a removed service has no cached metadata.
+// ErrNoCachedMetadata is returned when a removed service is seen in events
+// but we don't have cached labels/metadata for it (should be rare).
 var ErrNoCachedMetadata = errors.New("no cached metadata found for removed service")
 
 var (
-	// set by main() after flags parsed.
+	// customLabels is set once from main() to add user-specified service labels
+	// (e.g., team, tier) as additional Prometheus label dimensions.
 	customLabels []string
 
-	// Prometheus exporter pattern: package singletons for caches/collectors.
+	// metadataCache stores service metadata (stack, service name, version, mode, custom labels)
+	// keyed by Docker ServiceID to avoid repeated inspections.
 	metadataCache = make(map[string]serviceMetadata)
 )
 
+// SetCustomLabels injects the list of label keys that should be propagated
+// from Swarm service annotations into metric labels (sanitized on write).
 func SetCustomLabels(ls []string) { customLabels = ls }
 
+// serviceMetadata is immutable data we keep per service to populate metric labels.
 type serviceMetadata struct {
-	stack          string
-	service        string
-	serviceVersion string
-	serviceMode    string
-	customLabels   map[string]string
+	stack          string            // Docker stack name from label "com.docker.stack.namespace"
+	service        string            // Service visible name (Annotations.Name)
+	serviceVersion string            // Service object version (used to partition rollouts if needed)
+	serviceMode    string            // "replicated" or "global"
+	customLabels   map[string]string // arbitrary user-selected labels copied from service annotations
 }
 
-// buildMetadata builds a serviceMetadata from a *swarm.Service.
-// Accept a pointer to avoid copying the large swarm.Service value.
+// buildMetadata constructs serviceMetadata from a Swarm service definition.
 func buildMetadata(svc *swarm.Service) serviceMetadata {
 	metadata := serviceMetadata{
 		stack:          svc.Spec.Labels["com.docker.stack.namespace"],
@@ -40,18 +47,23 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 	}
 
 	for _, label := range customLabels {
-		if val, ok := svc.Spec.Labels[label]; ok {
-			metadata.customLabels[label] = val
-		} else {
-			metadata.customLabels[label] = ""
+		// Most service labels are under Spec.Annotations.Labels.
+		if svc.Spec.Labels != nil {
+			if val, ok := svc.Spec.Labels[label]; ok {
+				metadata.customLabels[label] = val
+
+				continue
+			}
 		}
+		// Ensure the label exists even when absent on the service.
+		metadata.customLabels[label] = ""
 	}
 
 	return metadata
 }
 
-// serviceMode returns "replicated" or "global" for the provided service.
-// Accept a pointer to avoid copying the large swarm.Service value.
+// serviceMode returns the effective mode of a Swarm service as a string.
+// This simplifies downstream label handling and Prometheus group-bys.
 func serviceMode(svc *swarm.Service) string {
 	if svc.Spec.Mode.Replicated != nil {
 		return "replicated"

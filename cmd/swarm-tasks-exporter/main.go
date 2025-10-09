@@ -1,3 +1,5 @@
+// Package main wires and runs the exporter binary.
+// It owns CLI flag parsing, logging setup, and the HTTP server with timeouts.
 package main
 
 import (
@@ -20,6 +22,8 @@ const (
 	DefaultPollDelay = 10 * time.Second
 )
 
+// configureLogger applies the selected log formatter and level.
+// This keeps logging concerns isolated from business logic.
 func configureLogger() {
 	switch *logFormat {
 	case "text":
@@ -60,14 +64,21 @@ func configureLogger() {
 	}
 }
 
+// stringSlice implements flag.Value to support repeated -label flags
+// (e.g., -label team -label tier). Each call to Set appends a value.
 type stringSlice []string
 
+// ErrEmptyFlagValue is returned when a repeated flag (like -label)
+// is provided with an empty value. This is a sentinel error for tests
+// and for clearer calling code.
 var ErrEmptyFlagValue = errors.New("empty flag value")
 
+// String returns the flag value in a human-friendly form.
 func (i *stringSlice) String() string {
 	return fmt.Sprint(*i)
 }
 
+// Set implements flag.Value for stringSlice by appending non-empty values.
 func (i *stringSlice) Set(value string) error {
 	if value == "" {
 		return ErrEmptyFlagValue
@@ -79,6 +90,7 @@ func (i *stringSlice) Set(value string) error {
 }
 
 var (
+	// CLI flags.
 	listenAddr = flag.String("listen-addr", "0.0.0.0:8888", "IP address and port to bind")
 	pollDelay  = flag.Duration("poll-delay", DefaultPollDelay, "Delay in seconds between two polls")
 	logFormat  = flag.String("log-format", "text", "Either json or text")
@@ -88,14 +100,17 @@ var (
 	customLabels stringSlice
 )
 
+// usage prints flag usage to stdout. We avoid fmt.Print* linters by
+// writing to an explicit writer and by setting the flag package's output.
 func usage() {
-	// Avoid forbidigo: write to explicit writer instead of Printf
 	w := os.Stdout
 	_, _ = fmt.Fprintf(w, "Usage of %s:\n", os.Args[0])
 	flag.CommandLine.SetOutput(w)
 	flag.PrintDefaults()
 }
 
+// main initializes logging, Prometheus collectors, the Docker client,
+// starts the polling and events goroutines, and serves /metrics with timeouts.
 func main() {
 	flag.Var(&customLabels, "label", "Name of custom service labels to add to metrics")
 	flag.Parse()
@@ -107,7 +122,7 @@ func main() {
 
 	configureLogger()
 
-	// log version to avoid 'unused' for version vars and for observability
+	// Log version info for diagnostics and to keep ldflags-injected vars "used".
 	logrus.Infof(
 		"swarm-tasks-exporter starting… version=%s commit=%s date=%s",
 		version,
@@ -121,6 +136,7 @@ func main() {
 
 	ctx := context.Background()
 
+	// Docker client is configured from environment variables (DOCKER_HOST, etc.).
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		logrus.Fatal(err)
@@ -129,6 +145,7 @@ func main() {
 
 	cli.NegotiateAPIVersion(ctx)
 
+	// Goroutine #1: initial gauge fill + event listener.
 	go func() {
 		initErr := collector.InitDesiredReplicasGauge(ctx, cli)
 		if initErr != nil {
@@ -141,6 +158,7 @@ func main() {
 		}
 	}()
 
+	// Goroutine #2: periodic task-state polling to refresh per-state gauges.
 	go func() {
 		logrus.Info("Start polling replicas state every ", *pollDelay)
 
@@ -158,6 +176,7 @@ func main() {
 		}
 	}()
 
+	// HTTP server with sane timeouts to satisfy gosec G114 and production best practice.
 	mux := server.NewMux()
 
 	logrus.Infof("Start HTTP server on %q.", *listenAddr)
