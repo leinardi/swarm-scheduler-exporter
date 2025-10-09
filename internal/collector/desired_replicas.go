@@ -2,7 +2,7 @@ package collector
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -28,26 +28,35 @@ func ConfigureDesiredReplicasGauge() {
 	}, customLabels...)
 
 	desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "swarm_service_desired_replicas",
-		Help: "Number of desired replicas for swarm services",
+		Namespace:   "",
+		Subsystem:   "",
+		Name:        "swarm_service_desired_replicas",
+		Help:        "Number of desired replicas for swarm services",
+		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(desiredReplicasGauge)
 }
 
 func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
-	services, err := cli.ServiceList(ctx, types.ServiceListOptions{})
+	services, err := cli.ServiceList(ctx, types.ServiceListOptions{
+		Filters: filters.Args{},
+		Status:  false,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("service list: %w", err)
 	}
 
-	nodes, err := cli.NodeList(ctx, types.NodeListOptions{})
+	nodes, err := cli.NodeList(ctx, types.NodeListOptions{
+		Filters: filters.Args{},
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("node list: %w", err)
 	}
 
 	nodeCount = len(nodes)
 
-	for _, svc := range services {
+	for i := range services { // avoid copying large struct
+		svc := &services[i]
 		metadataCache[svc.ID] = buildMetadata(svc)
 		updateServiceReplicasGauge(svc, metadataCache[svc.ID])
 	}
@@ -55,7 +64,7 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 	return nil
 }
 
-func updateServiceReplicasGauge(svc swarm.Service, metadata serviceMetadata) {
+func updateServiceReplicasGauge(svc *swarm.Service, metadata serviceMetadata) {
 	if svc.Spec.Mode.Replicated != nil {
 		setDesiredReplicasGauge(metadata, float64(*svc.Spec.Mode.Replicated.Replicas))
 	} else {
@@ -69,7 +78,6 @@ func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
 		"service":      metadata.service,
 		"service_mode": metadata.serviceMode,
 	}
-
 	for k, v := range metadata.customLabels {
 		labels[k] = v
 	}
@@ -82,9 +90,10 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	filterArgs.Add("type", "service")
 	filterArgs.Add("type", "node")
 
-	evtCh, errCh := cli.Events(ctx, types.EventsOptions{
+	evtCh, errCh := cli.Events(ctx, events.ListOptions{
 		Since:   time.Now().Format(time.RFC3339),
 		Filters: filterArgs,
+		Until:   "",
 	})
 
 	logrus.Info("Start listening for new Swarm events...")
@@ -92,10 +101,11 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	for {
 		select {
 		case err := <-errCh:
-			//	@TODO:	auto-reconnect when connection lost
-			return err
+			// @TODO: auto-reconnect when connection lost
+			return fmt.Errorf("events stream: %w", err)
 		case evt := <-evtCh:
-			go func(evt events.Message) {
+			// process in a goroutine but pass by pointer to avoid copying
+			go func(evt *events.Message) {
 				logrus.WithFields(logrus.Fields{
 					"type":       evt.Type,
 					"action":     evt.Action,
@@ -107,24 +117,33 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 				if err != nil {
 					logrus.Error(err)
 				}
-			}(evt)
+			}(&evt)
 		}
 	}
 }
 
-func processEvent(ctx context.Context, cli *client.Client, evt events.Message) error {
+func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) error {
 	if evt.Type == "node" {
 		// Re-init desired replicas gauge when a node is added/deleted,
 		// to be sure global services have the right number of desired replicas
+		//nolint:exhaustive // we only care about create/remove for node counts
 		switch evt.Action {
-		case "create":
-			nodeCount = nodeCount + 1
+		case events.ActionCreate:
+			nodeCount++
 
-			InitDesiredReplicasGauge(ctx, cli)
-		case "remove":
-			nodeCount = nodeCount - 1
+			err := InitDesiredReplicasGauge(ctx, cli)
+			if err != nil {
+				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node create")
+			}
+		case events.ActionRemove:
+			nodeCount--
 
-			InitDesiredReplicasGauge(ctx, cli)
+			err := InitDesiredReplicasGauge(ctx, cli)
+			if err != nil {
+				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node remove")
+			}
+		default:
+			// ignore other node actions
 		}
 
 		return nil
@@ -132,28 +151,34 @@ func processEvent(ctx context.Context, cli *client.Client, evt events.Message) e
 
 	sid := evt.Actor.ID
 
-	if evt.Action == "remove" {
+	//nolint:exhaustive // for services we only handle remove vs others
+	switch evt.Action {
+	case events.ActionRemove:
 		metadata, ok := metadataCache[sid]
 		if !ok {
-			return errors.New("no cached metadata found for removed service")
+			return ErrNoCachedMetadata
 		}
 
 		//	@TODO:	at this point, the vector should be deleted (?)
 		setDesiredReplicasGauge(metadata, float64(0))
-
 		// Clean up labels cache as this won't be used anymore
 		delete(metadataCache, sid)
 
 		return nil
+	default:
+		// treat other service actions as update
 	}
 
-	svc, _, err := cli.ServiceInspectWithRaw(ctx, sid, types.ServiceInspectOptions{})
+	svc, _, err := cli.ServiceInspectWithRaw(ctx, sid, types.ServiceInspectOptions{
+		InsertDefaults: false,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("service inspect %s: %w", sid, err)
 	}
 
-	metadataCache[sid] = buildMetadata(svc)
-	updateServiceReplicasGauge(svc, metadataCache[sid])
+	svcPtr := &svc
+	metadataCache[sid] = buildMetadata(svcPtr)
+	updateServiceReplicasGauge(svcPtr, metadataCache[sid])
 
 	return nil
 }

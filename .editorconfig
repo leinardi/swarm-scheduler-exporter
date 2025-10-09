@@ -14,6 +14,12 @@ ij_smart_tabs = false
 ij_visual_guides = 80, 120, 160
 ij_wrap_on_typing = false
 
+# Editor settings specifically for Go files
+[*.go]
+indent_style = tab
+indent_size = 4
+tab_width = 4
+
 [*.{yml,yaml}]
 indent_size = 2
 

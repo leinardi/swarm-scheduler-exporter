@@ -2,9 +2,11 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
@@ -22,8 +24,11 @@ func ConfigureReplicasStateGauge() {
 	}, customLabels...)
 
 	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "swarm_service_replicas_state",
-		Help: "State of service replicas",
+		Namespace:   "",
+		Subsystem:   "",
+		Name:        "swarm_service_replicas_state",
+		Help:        "State of service replicas",
+		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(replicasStateGauge)
 }
@@ -34,7 +39,7 @@ type taskCounter struct {
 }
 
 func (tctr taskCounter) inc(state string) {
-	tctr.states[state] = tctr.states[state] + 1
+	tctr.states[state]++
 }
 
 type serviceCounter map[string]map[string]taskCounter
@@ -78,29 +83,33 @@ func newTaskCounter(labels map[string]string) taskCounter {
 }
 
 func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter, error) {
-	tasks, err := cli.TaskList(ctx, types.TaskListOptions{})
+	tasks, err := cli.TaskList(ctx, types.TaskListOptions{
+		Filters: filters.Args{},
+	})
 	if err != nil {
-		return serviceCounter{}, err
+		return serviceCounter{}, fmt.Errorf("task list: %w", err)
 	}
 
-	sort.Slice(tasks, func(i int, j int) bool {
-		return tasks[i].ServiceID == tasks[j].ServiceID &&
-			tasks[i].Slot == tasks[j].Slot &&
-			tasks[i].Version.Index > tasks[j].Version.Index ||
-			tasks[i].ServiceID == tasks[j].ServiceID &&
-				tasks[i].Slot < tasks[j].Slot ||
-			tasks[i].ServiceID < tasks[j].ServiceID
+	sort.Slice(tasks, func(indexA int, indexB int) bool {
+		return tasks[indexA].ServiceID == tasks[indexB].ServiceID &&
+			tasks[indexA].Slot == tasks[indexB].Slot &&
+			tasks[indexA].Version.Index > tasks[indexB].Version.Index ||
+			tasks[indexA].ServiceID == tasks[indexB].ServiceID &&
+				tasks[indexA].Slot < tasks[indexB].Slot ||
+			tasks[indexA].ServiceID < tasks[indexB].ServiceID
 	})
 
 	replicas := make(serviceCounter)
 
-	for _, task := range tasks {
+	for i := range tasks { // avoid copying large struct
+		task := &tasks[i]
+
 		// Skip tasks whose service does not exist anymore
 		labels, err := getServiceLabels(ctx, cli, task)
 		if client.IsErrNotFound(err) {
 			continue
 		} else if err != nil {
-			return serviceCounter{}, err
+			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, err)
 		}
 
 		replicas.get(labels).inc(string(task.Status.State))
@@ -112,17 +121,20 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 func getServiceLabels(
 	ctx context.Context,
 	cli *client.Client,
-	task swarm.Task,
+	task *swarm.Task,
 ) (prometheus.Labels, error) {
 	sid := task.ServiceID
 
 	if _, ok := metadataCache[sid]; !ok {
-		svc, _, err := cli.ServiceInspectWithRaw(ctx, sid, types.ServiceInspectOptions{})
+		svc, _, err := cli.ServiceInspectWithRaw(ctx, sid, types.ServiceInspectOptions{
+			InsertDefaults: false,
+		})
 		if err != nil {
-			return map[string]string{}, err
+			return map[string]string{}, fmt.Errorf("service inspect %s: %w", sid, err)
 		}
 
-		metadataCache[sid] = buildMetadata(svc)
+		svcPtr := &svc
+		metadataCache[sid] = buildMetadata(svcPtr)
 	}
 
 	labels := prometheus.Labels{
@@ -144,7 +156,6 @@ func UpdateReplicasStateGauge(sctr serviceCounter) {
 			for state, ctr := range tctr.states {
 				labels := labelutil.SanitizeMetricLabels(tctr.labels)
 				labels["state"] = state
-
 				replicasStateGauge.With(labels).Set(ctr)
 			}
 		}
