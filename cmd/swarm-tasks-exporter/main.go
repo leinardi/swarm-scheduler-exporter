@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/docker/docker/client"
@@ -21,6 +24,11 @@ import (
 const (
 	// DefaultPollDelay is the default interval between polls.
 	DefaultPollDelay = 10 * time.Second
+
+	// Operability constants.
+	minPollDelay        = 1 * time.Second
+	httpShutdownTimeout = 10 * time.Second
+	healthTickInterval  = 5 * time.Second
 )
 
 // configureLogger applies the selected log formatter and level.
@@ -93,10 +101,15 @@ func (i *stringSlice) Set(value string) error {
 var (
 	// CLI flags.
 	listenAddr = flag.String("listen-addr", "0.0.0.0:8888", "IP address and port to bind")
-	pollDelay  = flag.Duration("poll-delay", DefaultPollDelay, "Delay in seconds between two polls")
-	logFormat  = flag.String("log-format", "text", "Either json or text")
-	logLevel   = flag.String("log-level", "info", "Either debug, info, warn, error, fatal, panic")
-	help       = flag.Bool("help", false, "Display help message")
+	pollDelay  = flag.Duration(
+		"poll-delay",
+		DefaultPollDelay,
+		"How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s.",
+	)
+	logFormat = flag.String("log-format", "text", "Either json or text")
+	// Quieter by default to reduce chatter in production.
+	logLevel = flag.String("log-level", "warn", "Either debug, info, warn, error, fatal, panic")
+	help     = flag.Bool("help", false, "Display help message")
 
 	customLabels stringSlice
 )
@@ -121,6 +134,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *pollDelay < minPollDelay {
+		_, _ = fmt.Fprintf(os.Stderr, "poll-delay must be >= %s\n", minPollDelay)
+		os.Exit(1)
+	}
+
 	configureLogger()
 
 	// Log version info for diagnostics and to keep ldflags-injected vars "used".
@@ -131,23 +149,20 @@ func main() {
 		date,
 	)
 
-	// Validate and sanitize requested custom labels (+ guard count)
-	countErr := labelutil.ValidateCustomLabelCount(len(customLabels))
-	if countErr != nil {
-		logrus.Fatal(countErr)
+	// Validate + set custom labels
+	err := validateAndSetCustomLabels([]string(customLabels))
+	if err != nil {
+		logrus.Fatal(err)
 	}
 
-	sanitized, sanitizeErr := labelutil.ValidateAndSanitizeLabelNames([]string(customLabels))
-	if sanitizeErr != nil {
-		logrus.Fatal(sanitizeErr)
-	}
-
-	// Store both raw and sanitized forms so we can look up by raw and emit by sanitized.
-	collector.SetCustomLabels([]string(customLabels), sanitized)
+	// Register metrics (including health/build info)
 	collector.ConfigureDesiredReplicasGauge()
 	collector.ConfigureReplicasStateGauge()
+	collector.ConfigureHealthGauges(version, commit, date)
 
-	ctx := context.Background()
+	// Root context canceled on SIGINT/SIGTERM
+	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	// Docker client is configured from environment variables (DOCKER_HOST, etc.).
 	cli, err := client.NewClientWithOpts(client.FromEnv)
@@ -156,55 +171,154 @@ func main() {
 	}
 	defer cli.Close()
 
-	cli.NegotiateAPIVersion(ctx)
+	cli.NegotiateAPIVersion(rootCtx)
 
-	// Goroutine #1: initial gauge fill + event listener.
+	// wg to wait for goroutines (event listener + poller)
+	var workers sync.WaitGroup
+	startEventListener(rootCtx, &workers, cli)
+	startPoller(rootCtx, &workers, cli, *pollDelay)
+	startHealthUpdater(rootCtx, &workers, *pollDelay)
+
+	// HTTP server with sane timeouts + graceful shutdown.
+	isHealthy := func() (bool, string) {
+		return collector.HealthSnapshot(*pollDelay, time.Now())
+	}
+	mux := server.NewMuxWithHealth(isHealthy)
+
+	err = runHTTPServer(rootCtx, *listenAddr, mux)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, context.Canceled) {
+		logrus.Fatalf("http server error: %v", err)
+	}
+
+	// Wait for workers to exit.
+	workers.Wait()
+}
+
+// --- helpers to reduce main() complexity ---
+
+func validateAndSetCustomLabels(rawKeys []string) error {
+	countErr := labelutil.ValidateCustomLabelCount(len(rawKeys))
+	if countErr != nil {
+		return fmt.Errorf("validate custom label count: %w", countErr)
+	}
+
+	sanitized, sanitizeErr := labelutil.ValidateAndSanitizeLabelNames(rawKeys)
+	if sanitizeErr != nil {
+		return fmt.Errorf("sanitize custom label names: %w", sanitizeErr)
+	}
+
+	collector.SetCustomLabels(rawKeys, sanitized)
+
+	return nil
+}
+
+func startEventListener(ctx context.Context, wg *sync.WaitGroup, cli *client.Client) {
+	wg.Add(1)
+
 	go func() {
+		defer wg.Done()
+
 		initErr := collector.InitDesiredReplicasGauge(ctx, cli)
 		if initErr != nil {
 			logrus.Fatal(initErr)
 		}
 
 		listenErr := collector.ListenSwarmEvents(ctx, cli)
-		if listenErr != nil {
-			logrus.Fatal(listenErr)
+		if listenErr != nil && !errors.Is(listenErr, context.Canceled) {
+			logrus.Error(listenErr)
 		}
 	}()
+}
 
-	// Goroutine #2: periodic task-state polling to refresh per-state gauges.
+func startPoller(ctx context.Context, wg *sync.WaitGroup, cli *client.Client, delay time.Duration) {
+	wg.Add(1)
+
 	go func() {
-		logrus.Info("Start polling replicas state every ", *pollDelay)
+		defer wg.Done()
+
+		logrus.Debug("Start polling replicas state every ", delay)
+
+		ticker := time.NewTicker(delay)
+		defer ticker.Stop()
 
 		for {
-			logrus.Info("Polling replicas state...")
+			select {
+			case <-ctx.Done():
+				logrus.Debug("polling loop: context canceled")
+
+				return
+			case <-ticker.C:
+			}
+
+			logrus.Debug("Polling replicas state...")
 
 			polled, pollErr := collector.PollReplicasState(ctx, cli)
 			if pollErr != nil {
 				logrus.Error(pollErr)
-			} else {
-				collector.UpdateReplicasStateGauge(polled)
+
+				continue
 			}
 
-			time.Sleep(*pollDelay)
+			collector.UpdateReplicasStateGauge(polled)
+			collector.MarkPollOK(time.Now())
 		}
 	}()
+}
 
-	// HTTP server with sane timeouts to satisfy gosec G114 and production best practice.
-	mux := server.NewMux()
+func startHealthUpdater(ctx context.Context, wg *sync.WaitGroup, delay time.Duration) {
+	wg.Add(1)
 
-	logrus.Infof("Start HTTP server on %q.", *listenAddr)
+	go func() {
+		defer wg.Done()
 
+		ticker := time.NewTicker(healthTickInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				healthy, _ := collector.HealthSnapshot(delay, time.Now())
+				collector.SetExporterHealth(healthy)
+			}
+		}
+	}()
+}
+
+func runHTTPServer(ctx context.Context, addr string, handler http.Handler) error {
 	var srv http.Server
 
-	srv.Addr = *listenAddr
-	srv.Handler = mux
+	srv.Addr = addr
+	srv.Handler = handler
 	srv.ReadHeaderTimeout = 5 * time.Second
 	srv.ReadTimeout = 10 * time.Second
 	srv.WriteTimeout = 15 * time.Second
 	srv.IdleTimeout = 60 * time.Second
 
-	err = srv.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logrus.Fatalf("http server error: %v", err)
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- srv.ListenAndServe()
+	}()
+
+	var err error
+
+	select {
+	case err = <-errCh:
+		// fallthrough to shutdown path
+	case <-ctx.Done():
+		// context canceled: proceed to shutdown
 	}
+
+	// Graceful HTTP shutdown.
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, httpShutdownTimeout)
+	defer shutdownCancel()
+
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		logrus.WithError(shutdownErr).Warn("HTTP server shutdown")
+	}
+
+	return err
 }

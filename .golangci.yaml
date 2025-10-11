@@ -5,6 +5,7 @@ linters:
 
   disable:
     - gochecknoglobals
+    - nonamedreturns
     - wsl
 
   settings:

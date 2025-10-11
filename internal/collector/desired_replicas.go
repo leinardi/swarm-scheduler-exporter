@@ -175,6 +175,9 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 			Until:   "",
 		})
 
+		// Mark event stream connected for health.
+		MarkEventsConnected(time.Now())
+
 		logrus.WithFields(logrus.Fields{
 			"worker_count":   eventWorkerCount,
 			"queue_capacity": eventQueueCapacity,
