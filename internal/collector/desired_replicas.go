@@ -19,8 +19,8 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
-	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
-	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
+	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

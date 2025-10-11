@@ -173,4 +173,4 @@ formatters:
           replacement: "any"
     goimports:
       local-prefixes:
-        - github.com/leinardi/swarm-tasks-exporter
+        - github.com/leinardi/swarm-scheduler-exporter

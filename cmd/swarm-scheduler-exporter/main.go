@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/docker/docker/client"
-	"github.com/leinardi/swarm-tasks-exporter/internal/collector"
-	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
-	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
-	"github.com/leinardi/swarm-tasks-exporter/internal/server"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/collector"
+	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/server"
 )
 
 const (
@@ -66,7 +66,7 @@ var (
 	)
 	logFormat = flag.String("log-format", "plain", "Either json, text or plain")
 	// Quieter by default to reduce chatter in production.
-	logLevel = flag.String("log-level", "warn", "Either debug, info, warn, error, fatal, panic")
+	logLevel = flag.String("log-level", "info", "Either debug, info, warn, error, fatal, panic")
 	logTime  = flag.Bool("log-time", false, "Include timestamp in logs")
 	help     = flag.Bool("help", false, "Display help message")
 
@@ -111,7 +111,7 @@ func run() int {
 	log := logger.L()
 
 	// Log version info for diagnostics and to keep ldflags-injected vars "used".
-	log.Info("swarm-tasks-exporter starting",
+	log.Info("swarm-scheduler-exporter starting",
 		"version", version,
 		"commit", commit,
 		"date", date,

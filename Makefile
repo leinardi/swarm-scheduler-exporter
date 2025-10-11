@@ -4,8 +4,8 @@
 # ==== Project vars ====
 GO        ?= go
 PKG       := ./...                          # all packages
-CMD_DIR   := ./cmd/swarm-tasks-exporter     # main package
-BIN_NAME  := swarm-tasks-exporter
+CMD_DIR   := ./cmd/swarm-scheduler-exporter     # main package
+BIN_NAME  := swarm-scheduler-exporter
 DIST_DIR  := dist
 
 # Derive version info from git (fallbacks provided)

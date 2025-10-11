@@ -7,7 +7,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

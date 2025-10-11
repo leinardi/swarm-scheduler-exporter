@@ -4,8 +4,8 @@ import (
 	"sync"
 
 	"github.com/docker/docker/api/types/swarm"
-	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
-	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
+	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

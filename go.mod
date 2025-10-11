@@ -1,4 +1,4 @@
-module github.com/leinardi/swarm-tasks-exporter
+module github.com/leinardi/swarm-scheduler-exporter
 
 go 1.25.2
 
