@@ -20,8 +20,8 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
+	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 )
 
 // desiredReplicasGauge is the gauge vector exported at /metrics.
@@ -98,7 +98,7 @@ func mustGetServiceMetadata(serviceID string) serviceMetadata {
 	metadata, ok := getServiceMetadata(serviceID)
 	if !ok {
 		// This should not happen in current flows; log and return empty labels instead of panicking.
-		logrus.WithField("service_id", serviceID).Warn("metadata missing unexpectedly")
+		logger.L().Warn("metadata missing unexpectedly", "service_id", serviceID)
 
 		return serviceMetadata{
 			stack:        "",
@@ -152,12 +152,12 @@ func updateServiceReplicasGauge(
 
 	eligible, err := countEligibleNodesForService(ctx, cli, svc)
 	if err != nil {
-		logrus.WithError(err).
-			Warn("countEligibleNodesForService failed; falling back to counting active nodes")
+		logger.L().
+			Warn("countEligibleNodesForService failed; falling back to counting active nodes", "err", err)
 		// Fallback: count READY+active nodes ignoring constraints.
 		allActive, fallbackErr := countActiveNodes(ctx, cli)
 		if fallbackErr != nil {
-			logrus.WithError(fallbackErr).Warn("countActiveNodes fallback failed")
+			logger.L().Warn("countActiveNodes fallback failed", "err", fallbackErr)
 		} else {
 			setDesiredReplicasGauge(metadata, float64(allActive))
 		}
@@ -200,10 +200,10 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 		// Mark event stream connected for health.
 		MarkEventsConnected(time.Now())
 
-		logrus.WithFields(logrus.Fields{
-			"worker_count":   eventWorkerCount,
-			"queue_capacity": eventQueueCapacity,
-		}).Info("Event stream connected; starting dispatcher and workers")
+		logger.L().Info("event stream connected; starting dispatcher and workers",
+			"worker_count", eventWorkerCount,
+			"queue_capacity", eventQueueCapacity,
+		)
 
 		// Run the dispatcher + worker pool until the stream ends or errors.
 		runErr := runEventPump(ctx, cli, eventChan, errorChan)
@@ -216,7 +216,10 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 		IncEventReconnect()
 
 		// Log and backoff before reconnecting.
-		logrus.WithError(runErr).Warnf("Event stream ended; reconnecting in %s", backoffDelay)
+		logger.L().Warn("event stream ended; will reconnect",
+			"err", runErr,
+			"backoff", backoffDelay,
+		)
 
 		// Wait for backoff or context cancellation.
 		timer := time.NewTimer(backoffDelay)
@@ -274,21 +277,20 @@ func processEventMessage(
 ) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logrus.WithFields(logrus.Fields{
-				"worker":     workerID,
-				"panic":      recovered,
-				"evt.type":   eventMsg.Type,
-				"evt.action": eventMsg.Action,
-				"actor.id":   eventMsg.Actor.ID,
-			}).Errorf("event worker recovered from panic\n%s", string(debug.Stack()))
+			logger.L().Error("event worker recovered from panic",
+				"worker", workerID,
+				"panic", recovered,
+				"evt.type", eventMsg.Type,
+				"evt.action", eventMsg.Action,
+				"actor.id", eventMsg.Actor.ID,
+				"stack", string(debug.Stack()),
+			)
 		}
 	}()
 
 	err := processEvent(ctx, cli, eventMsg)
 	if err != nil {
-		logrus.WithFields(logrus.Fields{
-			"worker": workerID,
-		}).WithError(err).Error("error processing event")
+		logger.L().Error("error processing event", "worker", workerID, "err", err)
 	}
 }
 
@@ -387,7 +389,7 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 			// Node topology/schedulability changed → refresh nodes, recompute only globals.
 			refErr := refreshNodesAndRecomputeGlobals(ctx, cli)
 			if refErr != nil {
-				logrus.WithError(refErr).Warn("refresh nodes and recompute globals")
+				logger.L().Warn("refresh nodes and recompute globals", "err", refErr)
 			}
 		default:
 			// Ignore other node events (e.g., updates) for this gauge.
@@ -721,8 +723,7 @@ func refreshNodesAndRecomputeGlobals(ctx context.Context, cli *client.Client) er
 		metadata, ok := getServiceMetadata(serviceID)
 		if !ok {
 			// Should be rare; skip with a warning.
-			logrus.WithField("service_id", serviceID).
-				Warn("metadata missing during global recompute")
+			logger.L().Warn("metadata missing during global recompute", "service_id", serviceID)
 
 			continue
 		}

@@ -15,7 +15,6 @@ var (
 
 // ConfigureExporterOpsMetrics registers exporter self-observability metrics.
 func ConfigureExporterOpsMetrics() {
-	//nolint:exhaustruct // use default native-histogram fields per client_golang docs
 	pollDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "swarm",
 		Subsystem: "exporter",

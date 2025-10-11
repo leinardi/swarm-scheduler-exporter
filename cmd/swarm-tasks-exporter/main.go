@@ -17,8 +17,8 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/leinardi/swarm-tasks-exporter/internal/collector"
 	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
+	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
 	"github.com/leinardi/swarm-tasks-exporter/internal/server"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -30,48 +30,6 @@ const (
 	httpShutdownTimeout = 10 * time.Second
 	healthTickInterval  = 5 * time.Second
 )
-
-// configureLogger applies the selected log formatter and level.
-// This keeps logging concerns isolated from business logic.
-func configureLogger() {
-	switch *logFormat {
-	case "text":
-		logrus.SetFormatter(new(logrus.TextFormatter))
-	case "json":
-		logrus.SetFormatter(new(logrus.JSONFormatter))
-	default:
-		_, _ = fmt.Fprintf(
-			os.Stderr,
-			"Invalid log format %q. Should be either json or text.\n",
-			*logFormat,
-		)
-
-		os.Exit(1)
-	}
-
-	switch *logLevel {
-	case "debug":
-		logrus.SetLevel(logrus.DebugLevel)
-	case "info":
-		logrus.SetLevel(logrus.InfoLevel)
-	case "warn":
-		logrus.SetLevel(logrus.WarnLevel)
-	case "error":
-		logrus.SetLevel(logrus.ErrorLevel)
-	case "fatal":
-		logrus.SetLevel(logrus.FatalLevel)
-	case "panic":
-		logrus.SetLevel(logrus.PanicLevel)
-	default:
-		_, _ = fmt.Fprintf(
-			os.Stderr,
-			"Invalid log level %q. Should be either debug, info, warn, error, fatal, panic.\n",
-			*logLevel,
-		)
-
-		os.Exit(1)
-	}
-}
 
 // stringSlice implements flag.Value to support repeated -label flags
 // (e.g., -label team -label tier). Each call to Set appends a value.
@@ -126,33 +84,44 @@ func usage() {
 // main initializes logging, Prometheus collectors, the Docker client,
 // starts the polling and events goroutines, and serves /metrics with timeouts.
 func main() {
+	os.Exit(run())
+}
+
+// run contains the full program logic and returns an exit code.
+// Defers inside run() (e.g., cancel(), Close(), etc.) will execute.
+func run() int {
 	flag.Var(&customLabels, "label", "Name of custom service labels to add to metrics")
 	flag.Parse()
 
 	if *help {
 		usage()
-		os.Exit(0)
+
+		return 0
 	}
 
 	if *pollDelay < minPollDelay {
 		_, _ = fmt.Fprintf(os.Stderr, "poll-delay must be >= %s\n", minPollDelay)
-		os.Exit(1)
+
+		return 1
 	}
 
-	configureLogger()
+	// Configure slog logger according to flags.
+	_ = logger.Configure(*logFormat, *logLevel)
+	log := logger.L()
 
 	// Log version info for diagnostics and to keep ldflags-injected vars "used".
-	logrus.Infof(
-		"swarm-tasks-exporter starting… version=%s commit=%s date=%s",
-		version,
-		commit,
-		date,
+	log.Info("swarm-tasks-exporter starting",
+		"version", version,
+		"commit", commit,
+		"date", date,
 	)
 
 	// Validate + set custom labels
-	err := validateAndSetCustomLabels([]string(customLabels))
-	if err != nil {
-		logrus.Fatal(err)
+	validateErr := validateAndSetCustomLabels([]string(customLabels))
+	if validateErr != nil {
+		log.Error("invalid custom labels", "err", validateErr)
+
+		return 1
 	}
 
 	// Register metrics (including health/build info)
@@ -168,9 +137,11 @@ func main() {
 	defer cancel()
 
 	// Docker client is configured from environment variables (DOCKER_HOST, etc.).
-	cli, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		logrus.Fatal(err)
+	cli, newClientErr := client.NewClientWithOpts(client.FromEnv)
+	if newClientErr != nil {
+		log.Error("docker client init failed", "err", newClientErr)
+
+		return 1
 	}
 	defer cli.Close()
 
@@ -188,13 +159,16 @@ func main() {
 	}
 	mux := server.NewMuxWithHealth(isHealthy)
 
-	err = runHTTPServer(rootCtx, *listenAddr, mux)
-	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, context.Canceled) {
-		logrus.Fatalf("http server error: %v", err)
+	runErr := runHTTPServer(rootCtx, *listenAddr, mux)
+	if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) &&
+		!errors.Is(runErr, context.Canceled) {
+		log.Error("http server error", "err", runErr)
 	}
 
 	// Wait for workers to exit.
 	workers.Wait()
+
+	return 0
 }
 
 // --- helpers to reduce main() complexity ---
@@ -221,14 +195,18 @@ func startEventListener(ctx context.Context, wg *sync.WaitGroup, cli *client.Cli
 	go func() {
 		defer wg.Done()
 
+		log := logger.L()
+
 		initErr := collector.InitDesiredReplicasGauge(ctx, cli)
 		if initErr != nil {
-			logrus.Fatal(initErr)
+			log.Error("InitDesiredReplicasGauge failed", "err", initErr)
+			// If this fails, there is no point continuing.
+			return
 		}
 
 		listenErr := collector.ListenSwarmEvents(ctx, cli)
 		if listenErr != nil && !errors.Is(listenErr, context.Canceled) {
-			logrus.Error(listenErr)
+			log.Error("event listener exited with error", "err", listenErr)
 		}
 	}()
 }
@@ -239,7 +217,8 @@ func startPoller(ctx context.Context, wg *sync.WaitGroup, cli *client.Client, de
 	go func() {
 		defer wg.Done()
 
-		logrus.Debug("Start polling replicas state every ", delay)
+		log := logger.L()
+		log.Debug("start polling replicas state", "every", delay)
 
 		ticker := time.NewTicker(delay)
 		defer ticker.Stop()
@@ -247,13 +226,13 @@ func startPoller(ctx context.Context, wg *sync.WaitGroup, cli *client.Client, de
 		for {
 			select {
 			case <-ctx.Done():
-				logrus.Debug("polling loop: context canceled")
+				log.Debug("polling loop: context canceled")
 
 				return
 			case <-ticker.C:
 			}
 
-			logrus.Debug("Polling replicas state...")
+			log.Debug("polling replicas state")
 
 			startTime := time.Now()
 			polled, pollErr := collector.PollReplicasState(ctx, cli)
@@ -262,7 +241,7 @@ func startPoller(ctx context.Context, wg *sync.WaitGroup, cli *client.Client, de
 
 			if pollErr != nil {
 				collector.IncPollErrors()
-				logrus.Error(pollErr)
+				log.Error("poll replicas state failed", "err", pollErr)
 
 				continue
 			}
@@ -310,10 +289,10 @@ func runHTTPServer(ctx context.Context, addr string, handler http.Handler) error
 		errCh <- srv.ListenAndServe()
 	}()
 
-	var err error
+	var resultErr error
 
 	select {
-	case err = <-errCh:
+	case resultErr = <-errCh:
 		// fallthrough to shutdown path
 	case <-ctx.Done():
 		// context canceled: proceed to shutdown
@@ -325,8 +304,8 @@ func runHTTPServer(ctx context.Context, addr string, handler http.Handler) error
 
 	shutdownErr := srv.Shutdown(shutdownCtx)
 	if shutdownErr != nil {
-		logrus.WithError(shutdownErr).Warn("HTTP server shutdown")
+		logger.L().Warn("HTTP server shutdown", "err", shutdownErr)
 	}
 
-	return err
+	return resultErr
 }

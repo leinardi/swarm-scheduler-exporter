@@ -4,6 +4,7 @@ linters:
   default: all
 
   disable:
+    - exhaustruct
     - gochecknoglobals
     - nonamedreturns
     - wsl

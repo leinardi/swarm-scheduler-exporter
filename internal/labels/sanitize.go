@@ -7,8 +7,8 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 )
 
 // Prometheus label name must match: [a-zA-Z_][a-zA-Z0-9_]*
@@ -123,10 +123,11 @@ func MaybeWarnHighCardinality(labelKey, labelValue string) {
 		return
 	}
 
-	logrus.WithFields(logrus.Fields{
-		"label":        labelKey,
-		"sample_value": truncate(labelValue, highCardinalitySampleSize),
-	}).Warn("Label appears high-cardinality; consider avoiding IDs/hashes as metric labels")
+	logger.L().Warn(
+		"label appears high-cardinality; consider avoiding IDs/hashes as metric labels",
+		"label", labelKey,
+		"sample_value", truncate(labelValue, highCardinalitySampleSize),
+	)
 }
 
 // ---- internal helpers ----

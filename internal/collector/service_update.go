@@ -5,8 +5,8 @@ import (
 
 	"github.com/docker/docker/api/types/swarm"
 	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
+	"github.com/leinardi/swarm-tasks-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 )
 
 // Known service update state strings we’ll expose.
@@ -110,7 +110,7 @@ func UpdateServiceUpdateMetricsForService(svc *swarm.Service, metadata serviceMe
 	if serviceUpdateStateGauge == nil || serviceUpdateStartedTs == nil ||
 		serviceUpdateCompletedTs == nil {
 		serviceUpdateMetricsInitWarnOnce.Do(func() {
-			logrus.Error("service update metrics not configured before use; skipping emission")
+			logger.L().Error("service update metrics not configured before use; skipping emission")
 		})
 
 		return
@@ -177,7 +177,7 @@ func ClearServiceUpdateMetrics(metadata serviceMetadata) {
 	if serviceUpdateStateGauge == nil || serviceUpdateStartedTs == nil ||
 		serviceUpdateCompletedTs == nil {
 		serviceUpdateMetricsInitWarnOnce.Do(func() {
-			logrus.Error("service update metrics not configured before use; skipping clear")
+			logger.L().Error("service update metrics not configured before use; skipping clear")
 		})
 
 		return
