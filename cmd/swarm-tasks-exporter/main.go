@@ -161,6 +161,7 @@ func main() {
 	collector.ConfigureHealthGauges(version, commit, date)
 	collector.ConfigureNodesByStateGauge()
 	collector.ConfigureExporterOpsMetrics()
+	collector.ConfigureServiceUpdateMetrics()
 
 	// Root context canceled on SIGINT/SIGTERM
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

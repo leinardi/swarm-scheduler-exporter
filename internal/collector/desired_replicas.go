@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -85,6 +86,7 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 		svc := &services[i]
 		setServiceMetadata(svc.ID, buildMetadata(svc))
 		updateServiceReplicasGauge(ctx, cli, svc, mustGetServiceMetadata(svc.ID))
+		UpdateServiceUpdateMetricsForService(svc, mustGetServiceMetadata(svc.ID))
 	}
 
 	return nil
@@ -251,35 +253,92 @@ func runEventPump(
 	workerGroup.Add(eventWorkerCount)
 
 	// Start workers.
-	for workerIndex := range eventWorkerCount {
-		go func(idx int) {
-			defer workerGroup.Done()
+	startEventWorkers(ctx, cli, jobs, eventWorkerCount, &workerGroup)
 
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case msg, ok := <-jobs:
-					if !ok {
-						// Dispatcher closed the queue—drain done.
-						return
-					}
+	// Run dispatcher.
+	dispatcherErr := dispatchEvents(ctx, jobs, eventChan, errorChan)
 
-					// Take address of a local copy to avoid pointer-to-loop-var issues.
-					localMsg := msg
+	// Stop accepting new jobs and wait for workers to finish.
+	close(jobs)
+	workerGroup.Wait()
 
-					err := processEvent(ctx, cli, &localMsg)
-					if err != nil {
-						logrus.WithFields(logrus.Fields{
-							"worker": idx,
-						}).WithError(err).Error("Error processing event")
-					}
-				}
-			}
-		}(workerIndex)
+	return dispatcherErr
+}
+
+// processEventMessage handles a single event with panic recovery and logging.
+func processEventMessage(
+	workerID int,
+	ctx context.Context,
+	cli *client.Client,
+	eventMsg *events.Message,
+) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logrus.WithFields(logrus.Fields{
+				"worker":     workerID,
+				"panic":      recovered,
+				"evt.type":   eventMsg.Type,
+				"evt.action": eventMsg.Action,
+				"actor.id":   eventMsg.Actor.ID,
+			}).Errorf("event worker recovered from panic\n%s", string(debug.Stack()))
+		}
+	}()
+
+	err := processEvent(ctx, cli, eventMsg)
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"worker": workerID,
+		}).WithError(err).Error("error processing event")
 	}
+}
 
-	// Dispatcher: fan-in docker events to the jobs queue; handle errors and shutdown.
+// workerLoop consumes events from jobs until context is canceled or the channel closes.
+func workerLoop(
+	workerID int,
+	ctx context.Context,
+	cli *client.Client,
+	jobs <-chan events.Message,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-jobs:
+			if !ok {
+				// Dispatcher closed the queue—drain done.
+				return
+			}
+
+			// Take address of a local copy to avoid pointer-to-loop-var issues.
+			localMsg := msg
+			processEventMessage(workerID, ctx, cli, &localMsg)
+		}
+	}
+}
+
+// startEventWorkers launches a fixed-size pool consuming from jobs.
+func startEventWorkers(
+	ctx context.Context,
+	cli *client.Client,
+	jobs <-chan events.Message,
+	workerCount int,
+	wg *sync.WaitGroup,
+) {
+	for workerIndex := range workerCount {
+		go workerLoop(workerIndex, ctx, cli, jobs, wg)
+	}
+}
+
+// dispatchEvents fans in Docker events into jobs; returns when stream ends or context cancels.
+func dispatchEvents(
+	ctx context.Context,
+	jobs chan<- events.Message,
+	eventChan <-chan events.Message,
+	errorChan <-chan error,
+) error {
 	var dispatcherErr error
 
 dispatchLoop:
@@ -304,7 +363,7 @@ dispatchLoop:
 				break dispatchLoop
 			}
 
-			// Non-blocking enqueue with respect to context.
+			// Enqueue respecting context.
 			select {
 			case <-ctx.Done():
 				dispatcherErr = fmt.Errorf("event pump context canceled while enqueueing: %w", ctx.Err())
@@ -314,10 +373,6 @@ dispatchLoop:
 			}
 		}
 	}
-
-	// Stop accepting new jobs and wait for workers to finish.
-	close(jobs)
-	workerGroup.Wait()
 
 	return dispatcherErr
 }
@@ -351,7 +406,7 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 		}
 		// Delete the series entirely to avoid stale zero-valued metrics.
 		_ = desiredReplicasGauge.Delete(labelsForMetadata(metadata))
-
+		ClearServiceUpdateMetrics(metadata)
 		deleteServiceMetadata(serviceID)
 
 		return nil
@@ -368,6 +423,7 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 
 	setServiceMetadata(serviceID, buildMetadata(&service))
 	updateServiceReplicasGauge(ctx, cli, &service, mustGetServiceMetadata(serviceID))
+	UpdateServiceUpdateMetricsForService(&service, mustGetServiceMetadata(serviceID))
 
 	return nil
 }
