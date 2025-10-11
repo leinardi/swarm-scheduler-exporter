@@ -4,7 +4,6 @@ package collector
 
 import (
 	"errors"
-	"strconv"
 
 	"github.com/docker/docker/api/types/swarm"
 )
@@ -29,21 +28,19 @@ func SetCustomLabels(ls []string) { customLabels = ls }
 
 // serviceMetadata is immutable data we keep per service to populate metric labels.
 type serviceMetadata struct {
-	stack          string            // Docker stack name from label "com.docker.stack.namespace"
-	service        string            // Service visible name (Annotations.Name)
-	serviceVersion string            // Service object version (used to partition rollouts if needed)
-	serviceMode    string            // "replicated" or "global"
-	customLabels   map[string]string // arbitrary user-selected labels copied from service annotations
+	stack        string            // Docker stack name from label "com.docker.stack.namespace"
+	service      string            // Service visible name (Annotations.Name)
+	serviceMode  string            // "replicated" or "global"
+	customLabels map[string]string // arbitrary user-selected labels copied from service annotations
 }
 
 // buildMetadata constructs serviceMetadata from a Swarm service definition.
 func buildMetadata(svc *swarm.Service) serviceMetadata {
 	metadata := serviceMetadata{
-		stack:          svc.Spec.Labels["com.docker.stack.namespace"],
-		service:        svc.Spec.Name,
-		serviceVersion: strconv.FormatUint(svc.Version.Index, 10),
-		serviceMode:    serviceMode(svc),
-		customLabels:   make(map[string]string),
+		stack:        svc.Spec.Labels["com.docker.stack.namespace"],
+		service:      svc.Spec.Name,
+		serviceMode:  serviceMode(svc),
+		customLabels: make(map[string]string),
 	}
 
 	for _, label := range customLabels {

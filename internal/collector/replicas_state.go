@@ -2,12 +2,13 @@ package collector
 
 // replicas_state exposes the gauge "swarm_service_replicas_state", which tracks
 // the number of tasks per service per state (new, running, failed, etc.).
-// A polling goroutine periodically refreshes counts by listing tasks.
+// This implementation counts only the "latest" task per (service,slot) for
+// replicated services and per (service,nodeID) for global services, so that
+// historical tasks from previous rollouts do not inflate counts.
 
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
@@ -40,7 +41,7 @@ func ConfigureReplicasStateGauge() {
 	prometheus.MustRegister(replicasStateGauge)
 }
 
-// taskCounter keeps a set of counters per Swarm task state for a given (service, version).
+// taskCounter keeps a set of counters per Swarm task state for a given service.
 type taskCounter struct {
 	states map[string]float64
 	labels prometheus.Labels
@@ -51,24 +52,18 @@ func (tctr taskCounter) inc(state string) {
 	tctr.states[state]++
 }
 
-// serviceCounter organizes taskCounters by service name and service version
-// to avoid mixing counts across rollouts.
-type serviceCounter map[string]map[string]taskCounter
+// serviceCounter organizes taskCounters keyed by ServiceID (unique, avoids
+// collisions between stacks/services that share the same visible name).
+type serviceCounter map[string]taskCounter
 
-// get returns the taskCounter for (service, version), creating it if necessary.
-func (sctr serviceCounter) get(labels prometheus.Labels) taskCounter {
-	service := labels["service"]
-	version := labels["service_version"]
-
-	if _, ok := sctr[service]; !ok {
-		sctr[service] = map[string]taskCounter{}
+// get returns the taskCounter for ServiceID, creating it if necessary.
+// labels must already contain stack/service/service_mode (+ custom labels).
+func (sctr serviceCounter) get(serviceID string, labels prometheus.Labels) taskCounter {
+	if _, ok := sctr[serviceID]; !ok {
+		sctr[serviceID] = newTaskCounter(labels)
 	}
 
-	if _, ok := sctr[service][version]; !ok {
-		sctr[service][version] = newTaskCounter(labels)
-	}
-
-	return sctr[service][version]
+	return sctr[serviceID]
 }
 
 // newTaskCounter initializes all known Swarm task states to 0 for a label combination.
@@ -95,10 +90,33 @@ func newTaskCounter(labels map[string]string) taskCounter {
 	}
 }
 
-// PollReplicasState lists tasks and aggregates them by state per service.
-// It returns an in-memory structure which UpdateReplicasStateGauge then publishes.
-// NOTE: This naive implementation includes historical tasks; improving it to only count
-// the latest per (service, slot) is a planned enhancement.
+// latestKey identifies a deduplication group:
+// - replicated services → (serviceID, slot)
+// - global services     → (serviceID, nodeID).
+type latestKey struct {
+	serviceID string
+	slot      int // for replicated; 0 for global
+	nodeID    string
+}
+
+// newerThan returns true if candidate is strictly newer than current.
+// First compare Status.Timestamp (if both non-zero), else fall back to Version.Index.
+func newerThan(candidate, current *swarm.Task) bool {
+	cTS := candidate.Status.Timestamp
+	pTS := current.Status.Timestamp
+
+	// Prefer Status.Timestamp when present on both
+	if !cTS.IsZero() && !pTS.IsZero() {
+		return cTS.After(pTS)
+	}
+
+	// Fallback to Version.Index (monotonic increasing)
+	return candidate.Version.Index > current.Version.Index
+}
+
+// PollReplicasState lists tasks and aggregates them by state per service,
+// counting only the latest task per (service, slot) for replicated services
+// and per (service, nodeID) for global services.
 func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter, error) {
 	tasks, err := cli.TaskList(ctx, types.TaskListOptions{
 		Filters: filters.Args{},
@@ -107,33 +125,77 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 		return serviceCounter{}, fmt.Errorf("task list: %w", err)
 	}
 
-	// Stable sort: by service id, then slot, then version descending.
-	sort.Slice(tasks, func(indexA int, indexB int) bool {
-		return tasks[indexA].ServiceID == tasks[indexB].ServiceID &&
-			tasks[indexA].Slot == tasks[indexB].Slot &&
-			tasks[indexA].Version.Index > tasks[indexB].Version.Index ||
-			tasks[indexA].ServiceID == tasks[indexB].ServiceID &&
-				tasks[indexA].Slot < tasks[indexB].Slot ||
-			tasks[indexA].ServiceID < tasks[indexB].ServiceID
-	})
-
-	replicas := make(serviceCounter)
+	// Step 1: choose the latest task per dedupe key.
+	latestByKey := make(map[latestKey]*swarm.Task)
 
 	for i := range tasks { // iterate by index to avoid copying
 		task := &tasks[i]
 
-		// Skip tasks whose service no longer exists.
-		labels, err := getServiceLabels(ctx, cli, task)
-		if client.IsErrNotFound(err) {
+		// Ensure we have metadata cached (and skip tasks for deleted services).
+		_, labelErr := getServiceLabels(ctx, cli, task)
+		if client.IsErrNotFound(labelErr) {
 			continue
-		} else if err != nil {
-			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, err)
+		} else if labelErr != nil {
+			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
 		}
 
-		replicas.get(labels).inc(string(task.Status.State))
+		mode := metadataCache[task.ServiceID].serviceMode
+
+		var key latestKey
+
+		if mode == "replicated" {
+			key = latestKey{
+				serviceID: task.ServiceID,
+				slot:      task.Slot,
+				nodeID:    "",
+			}
+		} else {
+			// global services do not use slots; use NodeID instead
+			key = latestKey{
+				serviceID: task.ServiceID,
+				slot:      0,
+				nodeID:    task.NodeID,
+			}
+		}
+
+		if prevTask, ok := latestByKey[key]; !ok || newerThan(task, prevTask) {
+			latestByKey[key] = task
+		}
+	}
+
+	// Step 2: aggregate chosen tasks per serviceID into states.
+	replicas := make(serviceCounter)
+
+	for key, task := range latestByKey {
+		labels, labelErr := getServiceLabels(ctx, cli, task)
+		if client.IsErrNotFound(labelErr) {
+			// Service disappeared between selection and labeling; ignore.
+			continue
+		} else if labelErr != nil {
+			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
+		}
+
+		// Ensure label keys are Prometheus-safe (values are passed through).
+		labels = labelutil.SanitizeMetricLabels(labels)
+
+		counter := replicas.get(key.serviceID, labels)
+		counter.inc(string(task.Status.State))
+		replicas[key.serviceID] = counter
 	}
 
 	return replicas, nil
+}
+
+// UpdateReplicasStateGauge writes the aggregated state counters into the
+// "swarm_service_replicas_state" gauge, one metric per state label value.
+func UpdateReplicasStateGauge(sctr serviceCounter) {
+	for _, tctr := range sctr {
+		for state, cnt := range tctr.states {
+			labels := labelutil.SanitizeMetricLabels(tctr.labels)
+			labels["state"] = state
+			replicasStateGauge.With(labels).Set(cnt)
+		}
+	}
 }
 
 // getServiceLabels returns label values for a task's parent service,
@@ -167,18 +229,4 @@ func getServiceLabels(
 	}
 
 	return labels, nil
-}
-
-// UpdateReplicasStateGauge writes the aggregated state counters into the
-// "swarm_service_replicas_state" gauge, one metric per state label value.
-func UpdateReplicasStateGauge(sctr serviceCounter) {
-	for _, versions := range sctr {
-		for _, tctr := range versions {
-			for state, ctr := range tctr.states {
-				labels := labelutil.SanitizeMetricLabels(tctr.labels)
-				labels["state"] = state
-				replicasStateGauge.With(labels).Set(ctr)
-			}
-		}
-	}
 }
