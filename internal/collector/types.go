@@ -4,6 +4,7 @@ package collector
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/docker/docker/api/types/swarm"
 )
@@ -17,9 +18,12 @@ var (
 	// (e.g., team, tier) as additional Prometheus label dimensions.
 	customLabels []string
 
-	// metadataCache stores service metadata (stack, service name, version, mode, custom labels)
-	// keyed by Docker ServiceID to avoid repeated inspections.
-	metadataCache = make(map[string]serviceMetadata)
+	// metadataCache stores service metadata (stack, service name, mode, custom labels)
+	// keyed by Docker ServiceID. Protected by metadataMu.
+	metadataMu     sync.RWMutex
+	metadataCache  = make(map[string]serviceMetadata)
+	nodeMu         sync.RWMutex
+	currentNodeCnt int // protected by nodeMu
 )
 
 // SetCustomLabels injects the list of label keys that should be propagated
@@ -67,4 +71,72 @@ func serviceMode(svc *swarm.Service) string {
 	}
 
 	return "global"
+}
+
+// --- Synchronized accessors for metadataCache ---
+
+func setServiceMetadata(serviceID string, md serviceMetadata) {
+	metadataMu.Lock()
+
+	metadataCache[serviceID] = md
+
+	metadataMu.Unlock()
+}
+
+func getServiceMetadata(serviceID string) (serviceMetadata, bool) {
+	metadataMu.RLock()
+
+	md, ok := metadataCache[serviceID]
+
+	metadataMu.RUnlock()
+
+	return md, ok
+}
+
+func deleteServiceMetadata(serviceID string) {
+	metadataMu.Lock()
+	delete(metadataCache, serviceID)
+	metadataMu.Unlock()
+}
+
+func getServiceModeCached(serviceID string) (string, bool) {
+	metadataMu.RLock()
+
+	metadata, ok := metadataCache[serviceID]
+
+	metadataMu.RUnlock()
+
+	if !ok {
+		return "", false
+	}
+
+	return metadata.serviceMode, true
+}
+
+// --- Synchronized accessors for node count ---
+
+func setNodeCount(n int) {
+	nodeMu.Lock()
+
+	currentNodeCnt = n
+
+	nodeMu.Unlock()
+}
+
+func incNodeCount(delta int) {
+	nodeMu.Lock()
+
+	currentNodeCnt += delta
+
+	nodeMu.Unlock()
+}
+
+func getNodeCount() int {
+	nodeMu.RLock()
+
+	n := currentNodeCnt
+
+	nodeMu.RUnlock()
+
+	return n
 }

@@ -95,19 +95,19 @@ func newTaskCounter(labels map[string]string) taskCounter {
 // - global services     → (serviceID, nodeID).
 type latestKey struct {
 	serviceID string
-	slot      int // for replicated; 0 for global
-	nodeID    string
+	slot      int    // for replicated; 0 for global
+	nodeID    string // for global; empty for replicated
 }
 
 // newerThan returns true if candidate is strictly newer than current.
 // First compare Status.Timestamp (if both non-zero), else fall back to Version.Index.
 func newerThan(candidate, current *swarm.Task) bool {
-	cTS := candidate.Status.Timestamp
-	pTS := current.Status.Timestamp
+	candidateTS := candidate.Status.Timestamp
+	currentTS := current.Status.Timestamp
 
 	// Prefer Status.Timestamp when present on both
-	if !cTS.IsZero() && !pTS.IsZero() {
-		return cTS.After(pTS)
+	if !candidateTS.IsZero() && !currentTS.IsZero() {
+		return candidateTS.After(currentTS)
 	}
 
 	// Fallback to Version.Index (monotonic increasing)
@@ -139,7 +139,12 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
 		}
 
-		mode := metadataCache[task.ServiceID].serviceMode
+		mode, ok := getServiceModeCached(task.ServiceID)
+		if !ok {
+			// Should not happen because getServiceLabels() above populates the cache,
+			// but if it does, skip this task defensively.
+			continue
+		}
 
 		var key latestKey
 
@@ -158,7 +163,7 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 			}
 		}
 
-		if prevTask, ok := latestByKey[key]; !ok || newerThan(task, prevTask) {
+		if previousTask, exists := latestByKey[key]; !exists || newerThan(task, previousTask) {
 			latestByKey[key] = task
 		}
 	}
@@ -189,11 +194,11 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 // UpdateReplicasStateGauge writes the aggregated state counters into the
 // "swarm_service_replicas_state" gauge, one metric per state label value.
 func UpdateReplicasStateGauge(sctr serviceCounter) {
-	for _, tctr := range sctr {
-		for state, cnt := range tctr.states {
-			labels := labelutil.SanitizeMetricLabels(tctr.labels)
+	for _, taskCtr := range sctr {
+		for state, count := range taskCtr.states {
+			labels := labelutil.SanitizeMetricLabels(taskCtr.labels)
 			labels["state"] = state
-			replicasStateGauge.With(labels).Set(cnt)
+			replicasStateGauge.With(labels).Set(count)
 		}
 	}
 }
@@ -205,28 +210,41 @@ func getServiceLabels(
 	cli *client.Client,
 	task *swarm.Task,
 ) (prometheus.Labels, error) {
-	sid := task.ServiceID
+	serviceID := task.ServiceID
 
-	if _, ok := metadataCache[sid]; !ok {
-		svc, _, err := cli.ServiceInspectWithRaw(ctx, sid, types.ServiceInspectOptions{
-			InsertDefaults: false,
-		})
-		if err != nil {
-			return map[string]string{}, fmt.Errorf("service inspect %s: %w", sid, err)
+	// Fast path: metadata present
+	if metadata, ok := getServiceMetadata(serviceID); ok {
+		labelSet := prometheus.Labels{
+			"stack":        metadata.stack,
+			"service":      metadata.service,
+			"service_mode": metadata.serviceMode,
+		}
+		for key, value := range metadata.customLabels {
+			labelSet[key] = value
 		}
 
-		metadataCache[sid] = buildMetadata(&svc)
+		return labelSet, nil
 	}
 
-	labels := prometheus.Labels{
-		"stack":        metadataCache[sid].stack,
-		"service":      metadataCache[sid].service,
-		"service_mode": metadataCache[sid].serviceMode,
+	// Slow path: inspect and cache
+	service, _, err := cli.ServiceInspectWithRaw(ctx, serviceID, types.ServiceInspectOptions{
+		InsertDefaults: false,
+	})
+	if err != nil {
+		return map[string]string{}, fmt.Errorf("service inspect %s: %w", serviceID, err)
 	}
 
-	for k, v := range metadataCache[sid].customLabels {
-		labels[k] = v
+	metadata := buildMetadata(&service)
+	setServiceMetadata(serviceID, metadata)
+
+	labelSet := prometheus.Labels{
+		"stack":        metadata.stack,
+		"service":      metadata.service,
+		"service_mode": metadata.serviceMode,
+	}
+	for key, value := range metadata.customLabels {
+		labelSet[key] = value
 	}
 
-	return labels, nil
+	return labelSet, nil
 }
