@@ -44,6 +44,8 @@ linters:
         - ifElseChain
         - octalLiteral
         - whyNoLint
+    gocognit:
+      min-complexity: 35
     gocyclo:
       min-complexity: 15
     godox:

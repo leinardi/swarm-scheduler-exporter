@@ -7,8 +7,10 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -23,6 +25,18 @@ import (
 
 // desiredReplicasGauge is the gauge vector exported at /metrics.
 var desiredReplicasGauge *prometheus.GaugeVec
+
+// Event stream / worker pool configuration.
+// These defaults keep memory bounded and provide good throughput.
+const (
+	eventWorkerCount    = 4                      // number of concurrent event workers
+	eventQueueCapacity  = 256                    // buffered queue size for incoming events
+	backoffInitialDelay = 500 * time.Millisecond // first reconnect delay
+	backoffMaxDelay     = 30 * time.Second       // cap for exponential backoff
+	backoffMultiplier   = 2                      // multiplier for exponential backoff
+)
+
+var ErrEventsStreamClosed = errors.New("events stream closed")
 
 // ConfigureDesiredReplicasGauge registers the "swarm_service_desired_replicas" gauge
 // with base labels (stack, service, service_mode) plus any user-specified custom labels.
@@ -136,44 +150,148 @@ func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
 }
 
 // ListenSwarmEvents listens to Docker events for service and node changes.
-// Node create/remove triggers a full re-seed (which re-evaluates placement).
-// Service updates refresh the cached metadata; service remove deletes the time-series.
+// It maintains a resilient connection with capped exponential backoff,
+// and uses a bounded worker pool to process events without unbounded goroutines.
 func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("type", "service")
 	filterArgs.Add("type", "node")
 
-	eventChan, errorChan := cli.Events(ctx, events.ListOptions{
-		Since:   time.Now().Format(time.RFC3339),
-		Filters: filterArgs,
-		Until:   "",
-	})
-
-	logrus.Info("Start listening for new Swarm events...")
+	// Exponential backoff for reconnects.
+	backoffDelay := backoffInitialDelay
 
 	for {
 		select {
-		case err := <-errorChan:
-			// TODO: add reconnect with backoff.
-			return fmt.Errorf("events stream: %w", err)
-		case evt := <-eventChan:
-			// Process in a goroutine but pass by value to avoid pointer-to-loop-var pitfalls.
-			eventCopy := evt
-			go func(eventMsg events.Message) {
-				logrus.WithFields(logrus.Fields{
-					"type":       eventMsg.Type,
-					"action":     eventMsg.Action,
-					"actor.id":   eventMsg.Actor.ID,
-					"actor.name": eventMsg.Actor.Attributes["name"],
-				}).Info("New event received.")
+		case <-ctx.Done():
+			return fmt.Errorf("event listener stopping: %w", ctx.Err())
+		default:
+		}
 
-				err := processEvent(ctx, cli, &eventMsg)
-				if err != nil {
-					logrus.Error(err)
+		eventChan, errorChan := cli.Events(ctx, events.ListOptions{
+			Since:   time.Now().Format(time.RFC3339),
+			Filters: filterArgs,
+			Until:   "",
+		})
+
+		logrus.WithFields(logrus.Fields{
+			"worker_count":   eventWorkerCount,
+			"queue_capacity": eventQueueCapacity,
+		}).Info("Event stream connected; starting dispatcher and workers")
+
+		// Run the dispatcher + worker pool until the stream ends or errors.
+		runErr := runEventPump(ctx, cli, eventChan, errorChan)
+		if runErr == nil {
+			// Normal exit (no error set by pump).
+			return nil
+		}
+
+		// Log and backoff before reconnecting.
+		logrus.WithError(runErr).Warnf("Event stream ended; reconnecting in %s", backoffDelay)
+
+		// Wait for backoff or context cancellation.
+		timer := time.NewTimer(backoffDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return fmt.Errorf("event listener canceled during backoff: %w", ctx.Err())
+		case <-timer.C:
+		}
+
+		// Exponential backoff with cap.
+		next := time.Duration(int64(backoffDelay) * int64(backoffMultiplier))
+		if next > backoffMaxDelay {
+			next = backoffMaxDelay
+		}
+
+		backoffDelay = next
+	}
+}
+
+// runEventPump wires a bounded queue and a fixed pool of workers to process events.
+// It returns when the stream errors/closes or when the context is canceled.
+func runEventPump(
+	ctx context.Context,
+	cli *client.Client,
+	eventChan <-chan events.Message,
+	errorChan <-chan error,
+) error {
+	// Bounded queue so we never spawn unbounded goroutines.
+	jobs := make(chan events.Message, eventQueueCapacity)
+
+	var workerGroup sync.WaitGroup
+	workerGroup.Add(eventWorkerCount)
+
+	// Start workers.
+	for workerIndex := range eventWorkerCount {
+		go func(idx int) {
+			defer workerGroup.Done()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg, ok := <-jobs:
+					if !ok {
+						// Dispatcher closed the queue—drain done.
+						return
+					}
+
+					// Take address of a local copy to avoid pointer-to-loop-var issues.
+					localMsg := msg
+
+					err := processEvent(ctx, cli, &localMsg)
+					if err != nil {
+						logrus.WithFields(logrus.Fields{
+							"worker": idx,
+						}).WithError(err).Error("Error processing event")
+					}
 				}
-			}(eventCopy)
+			}
+		}(workerIndex)
+	}
+
+	// Dispatcher: fan-in docker events to the jobs queue; handle errors and shutdown.
+	var dispatcherErr error
+
+dispatchLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			dispatcherErr = fmt.Errorf("event pump context canceled: %w", ctx.Err())
+
+			break dispatchLoop
+
+		case err := <-errorChan:
+			// Stream error—trigger reconnect at the caller.
+			dispatcherErr = fmt.Errorf("events stream error: %w", err)
+
+			break dispatchLoop
+
+		case msg, ok := <-eventChan:
+			if !ok {
+				// Channel closed by Docker client—treat as EOF and reconnect.
+				dispatcherErr = fmt.Errorf("events stream closed: %w", ErrEventsStreamClosed)
+
+				break dispatchLoop
+			}
+
+			// Non-blocking enqueue with respect to context.
+			select {
+			case <-ctx.Done():
+				dispatcherErr = fmt.Errorf("event pump context canceled while enqueueing: %w", ctx.Err())
+
+				break dispatchLoop
+			case jobs <- msg:
+			}
 		}
 	}
+
+	// Stop accepting new jobs and wait for workers to finish.
+	close(jobs)
+	workerGroup.Wait()
+
+	return dispatcherErr
 }
 
 // processEvent handles node and service events. For nodes, only create/remove
