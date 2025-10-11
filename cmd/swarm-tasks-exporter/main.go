@@ -64,9 +64,10 @@ var (
 		DefaultPollDelay,
 		"How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s.",
 	)
-	logFormat = flag.String("log-format", "text", "Either json or text")
+	logFormat = flag.String("log-format", "plain", "Either json, text or plain")
 	// Quieter by default to reduce chatter in production.
 	logLevel = flag.String("log-level", "warn", "Either debug, info, warn, error, fatal, panic")
+	logTime  = flag.Bool("log-time", false, "Include timestamp in logs")
 	help     = flag.Bool("help", false, "Display help message")
 
 	customLabels stringSlice
@@ -106,7 +107,7 @@ func run() int {
 	}
 
 	// Configure slog logger according to flags.
-	_ = logger.Configure(*logFormat, *logLevel)
+	_ = logger.Configure(*logFormat, *logLevel, *logTime)
 	log := logger.L()
 
 	// Log version info for diagnostics and to keep ldflags-injected vars "used".

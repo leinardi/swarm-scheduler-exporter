@@ -14,7 +14,9 @@ var globalLogger *slog.Logger
 // it returns a reasonable default text logger at INFO level to avoid nil panics.
 func L() *slog.Logger {
 	if globalLogger == nil {
-		handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+		handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})
 		globalLogger = slog.New(handler)
 	}
 
@@ -27,28 +29,46 @@ func Set(l *slog.Logger) {
 }
 
 // Configure builds and installs a slog.Logger based on CLI flags.
-// format: "json" or "text" (default text if unknown)
-// level:  "debug", "info", "warn", "error", "fatal", "panic" (fatal/panic map to error)
-func Configure(format, level string) *slog.Logger {
-	sanitizedLevel := parseLevel(level)
-	handler := buildHandler(format, sanitizedLevel)
+// format: "json" or "text" (unknown -> text)
+// level:  "debug", "info", "warn", "error", "fatal", "panic" (fatal/panic -> error)
+// includeTime: if false, the time attribute is removed from log records.
+func Configure(format, level string, includeTime bool) *slog.Logger {
+	lvl := parseLevel(level)
+
+	var handler slog.Handler
+
+	switch strings.ToLower(format) {
+	case "json":
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level:       lvl,
+			ReplaceAttr: timeStripper(includeTime),
+		})
+	case "plain":
+		handler = newPlainTextHandler(os.Stdout, lvl, includeTime)
+	default: // "text"
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level:       lvl,
+			ReplaceAttr: timeStripper(includeTime),
+		})
+	}
+
 	logger := slog.New(handler)
 	Set(logger)
 
 	return logger
 }
 
-func buildHandler(format string, level slog.Level) slog.Handler {
-	opts := &slog.HandlerOptions{
-		Level:     level,
-		AddSource: false,
+func timeStripper(includeTime bool) func([]string, slog.Attr) slog.Attr {
+	if includeTime {
+		return nil
 	}
 
-	switch strings.ToLower(format) {
-	case "json":
-		return slog.NewJSONHandler(os.Stdout, opts)
-	default: // "text" or unknown
-		return slog.NewTextHandler(os.Stdout, opts)
+	return func(_ []string, a slog.Attr) slog.Attr {
+		if a.Key == slog.TimeKey {
+			return slog.Attr{} // drop time
+		}
+
+		return a
 	}
 }
 
