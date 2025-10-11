@@ -18,6 +18,29 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// Capacity hint for the per-service state map.
+const defaultStatesCapacity = 16
+
+// knownTaskStates enumerates all Swarm task states we expose.
+// We iterate this list during emission to ensure exhaustive output with zeros.
+var knownTaskStates = []string{
+	string(swarm.TaskStateNew),
+	string(swarm.TaskStateAllocated),
+	string(swarm.TaskStatePending),
+	string(swarm.TaskStateAssigned),
+	string(swarm.TaskStateAccepted),
+	string(swarm.TaskStatePreparing),
+	string(swarm.TaskStateReady),
+	string(swarm.TaskStateStarting),
+	string(swarm.TaskStateRunning),
+	string(swarm.TaskStateComplete),
+	string(swarm.TaskStateShutdown),
+	string(swarm.TaskStateFailed),
+	string(swarm.TaskStateRejected),
+	string(swarm.TaskStateRemove),
+	string(swarm.TaskStateOrphaned),
+}
+
 // replicasStateGauge is the gauge vector exported at /metrics.
 var replicasStateGauge *prometheus.GaugeVec
 
@@ -66,27 +89,12 @@ func (sctr serviceCounter) get(serviceID string, labels prometheus.Labels) taskC
 	return sctr[serviceID]
 }
 
-// newTaskCounter initializes all known Swarm task states to 0 for a label combination.
+// newTaskCounter initializes an empty state map; we only record states that are present
+// during aggregation. Exhaustive emission (including zeros) is handled at publish-time.
 func newTaskCounter(labels map[string]string) taskCounter {
 	return taskCounter{
 		labels: labels,
-		states: map[string]float64{
-			string(swarm.TaskStateNew):       0,
-			string(swarm.TaskStateAllocated): 0,
-			string(swarm.TaskStatePending):   0,
-			string(swarm.TaskStateAssigned):  0,
-			string(swarm.TaskStateAccepted):  0,
-			string(swarm.TaskStatePreparing): 0,
-			string(swarm.TaskStateReady):     0,
-			string(swarm.TaskStateStarting):  0,
-			string(swarm.TaskStateRunning):   0,
-			string(swarm.TaskStateComplete):  0,
-			string(swarm.TaskStateShutdown):  0,
-			string(swarm.TaskStateFailed):    0,
-			string(swarm.TaskStateRejected):  0,
-			string(swarm.TaskStateRemove):    0,
-			string(swarm.TaskStateOrphaned):  0,
-		},
+		states: make(map[string]float64, defaultStatesCapacity),
 	}
 }
 
@@ -192,13 +200,26 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 }
 
 // UpdateReplicasStateGauge writes the aggregated state counters into the
-// "swarm_service_replicas_state" gauge, one metric per state label value.
-func UpdateReplicasStateGauge(sctr serviceCounter) {
-	for _, taskCtr := range sctr {
-		for state, count := range taskCtr.states {
-			labels := labelutil.SanitizeMetricLabels(taskCtr.labels)
+// "swarm_service_replicas_state" gauge. It resets the vector first so series
+// for services that disappeared are removed. For each service present in the
+// current snapshot, it emits ALL known states, setting 0 where absent.
+func UpdateReplicasStateGauge(counterByService serviceCounter) {
+	// Drop all previous label sets for this metric vector.
+	replicasStateGauge.Reset()
+
+	for _, taskCtr := range counterByService {
+		baseLabels := labelutil.SanitizeMetricLabels(taskCtr.labels)
+
+		for _, state := range knownTaskStates {
+			labels := prometheus.Labels{}
+			for k, v := range baseLabels {
+				labels[k] = v
+			}
+
 			labels["state"] = state
-			replicasStateGauge.With(labels).Set(count)
+
+			value := taskCtr.states[state] // zero if missing
+			replicasStateGauge.With(labels).Set(value)
 		}
 	}
 }

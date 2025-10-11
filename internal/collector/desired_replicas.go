@@ -63,6 +63,9 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 
 	setNodeCount(len(nodes))
 
+	// Reset the whole vector so removed services are dropped from Prometheus.
+	desiredReplicasGauge.Reset()
+
 	for i := range services { // avoid copying large struct
 		svc := &services[i]
 		setServiceMetadata(svc.ID, buildMetadata(svc))
@@ -73,7 +76,7 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 }
 
 // mustGetServiceMetadata loads metadata for serviceID; it logs a warning and
-// returns an empty metadata instance if missing.
+// returns an empty (but fully constructed) metadata instance if missing.
 func mustGetServiceMetadata(serviceID string) serviceMetadata {
 	metadata, ok := getServiceMetadata(serviceID)
 	if !ok {
@@ -91,6 +94,20 @@ func mustGetServiceMetadata(serviceID string) serviceMetadata {
 	return metadata
 }
 
+// labelsForMetadata builds a sanitized label set (same keys used for With/Delete).
+func labelsForMetadata(metadata serviceMetadata) prometheus.Labels {
+	labels := prometheus.Labels{
+		"stack":        metadata.stack,
+		"service":      metadata.service,
+		"service_mode": metadata.serviceMode,
+	}
+	for key, value := range metadata.customLabels {
+		labels[key] = value
+	}
+
+	return labelutil.SanitizeMetricLabels(labels)
+}
+
 // updateServiceReplicasGauge sets the per-service desired replicas value
 // based on the service mode and configured replica count.
 func updateServiceReplicasGauge(svc *swarm.Service, metadata serviceMetadata) {
@@ -103,21 +120,12 @@ func updateServiceReplicasGauge(svc *swarm.Service, metadata serviceMetadata) {
 
 // setDesiredReplicasGauge writes the gauge value with sanitized label keys.
 func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
-	labels := prometheus.Labels{
-		"stack":        metadata.stack,
-		"service":      metadata.service,
-		"service_mode": metadata.serviceMode,
-	}
-	for key, value := range metadata.customLabels {
-		labels[key] = value
-	}
-
-	desiredReplicasGauge.With(labelutil.SanitizeMetricLabels(labels)).Set(val)
+	desiredReplicasGauge.With(labelsForMetadata(metadata)).Set(val)
 }
 
 // ListenSwarmEvents listens to Docker events for service and node changes.
 // Node create/remove updates nodeCount and re-seeds the desired replicas gauge.
-// Service updates refresh the cached metadata; service remove clears the gauge.
+// Service updates refresh the cached metadata; service remove deletes the time-series.
 func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("type", "service")
@@ -157,7 +165,7 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 }
 
 // processEvent handles node and service events. For nodes, only create/remove
-// matters for desired replica approximation. For services, remove clears metrics;
+// matters for desired replica approximation. For services, remove deletes the series;
 // all other actions trigger a fresh inspect to update the cache and gauge.
 func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) error {
 	if evt.Type == "node" {
@@ -191,8 +199,9 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 		if !ok {
 			return ErrNoCachedMetadata
 		}
-		// Set metric to 0 and drop from cache.
-		setDesiredReplicasGauge(metadata, 0)
+		// Delete the series entirely to avoid stale zero-valued metrics.
+		_ = desiredReplicasGauge.Delete(labelsForMetadata(metadata))
+
 		deleteServiceMetadata(serviceID)
 
 		return nil
