@@ -60,20 +60,26 @@ func ConfigureDesiredReplicasGauge() {
 
 // InitDesiredReplicasGauge seeds the gauge with current desired replica counts
 // by listing services and nodes once at startup (or after node changes).
-func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
+// It returns a time anchor captured immediately before the first API call,
+// which should be used as the initial "Since" value when starting the events stream.
+func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) (time.Time, error) {
+	// Capture an anchor *before* we read the world, so any concurrent changes
+	// during seeding will still be caught by the event stream started with this "since".
+	initialSinceAnchor := time.Now()
+
 	// Seed service gauges
 	services, err := cli.ServiceList(ctx, types.ServiceListOptions{
 		Filters: filters.Args{},
 		Status:  false,
 	})
 	if err != nil {
-		return fmt.Errorf("service list: %w", err)
+		return time.Time{}, fmt.Errorf("service list: %w", err)
 	}
 
 	// Also seed nodes snapshot and nodes-by-state metric
 	nodes, nodeErr := cli.NodeList(ctx, types.NodeListOptions{Filters: filters.Args{}})
 	if nodeErr != nil {
-		return fmt.Errorf("node list: %w", nodeErr)
+		return time.Time{}, fmt.Errorf("node list: %w", nodeErr)
 	}
 
 	setCachedNodes(nodes)
@@ -89,7 +95,7 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 		UpdateServiceUpdateMetricsForService(svc, mustGetServiceMetadata(svc.ID))
 	}
 
-	return nil
+	return initialSinceAnchor, nil
 }
 
 // mustGetServiceMetadata loads metadata for serviceID; it logs a warning and
@@ -176,13 +182,18 @@ func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
 // ListenSwarmEvents listens to Docker events for service and node changes.
 // It maintains a resilient connection with capped exponential backoff,
 // and uses a bounded worker pool to process events without unbounded goroutines.
-func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
+// The stream will include events "since" the given time anchor, so that no changes
+// are missed between the initial seeding and the first stream connection.
+func ListenSwarmEvents(ctx context.Context, cli *client.Client, initialSince time.Time) error {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("type", "service")
 	filterArgs.Add("type", "node")
 
 	// Exponential backoff for reconnects.
 	backoffDelay := backoffInitialDelay
+
+	// Track where to resume from on reconnects.
+	reconnectSince := initialSince
 
 	for {
 		select {
@@ -191,8 +202,8 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 		default:
 		}
 
-		eventChan, errorChan := cli.Events(ctx, events.ListOptions{
-			Since:   time.Now().Format(time.RFC3339),
+		eventChannel, errorChannel := cli.Events(ctx, events.ListOptions{
+			Since:   reconnectSince.Format(time.RFC3339), // include events since our last anchor
 			Filters: filterArgs,
 			Until:   "",
 		})
@@ -203,10 +214,23 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 		logger.L().Info("event stream connected; starting dispatcher and workers",
 			"worker_count", eventWorkerCount,
 			"queue_capacity", eventQueueCapacity,
+			"since", reconnectSince.Format(time.RFC3339Nano),
 		)
 
 		// Run the dispatcher + worker pool until the stream ends or errors.
-		runErr := runEventPump(ctx, cli, eventChan, errorChan)
+		lastSeenEventTime, runErr := runEventPump(ctx, cli, eventChannel, errorChannel)
+
+		// Update the resume point for the next connection:
+		// if we processed at least one event, resume from the timestamp
+		// of the last seen event; otherwise resume from now to avoid replaying
+		// a large historical range.
+		if !lastSeenEventTime.IsZero() {
+			// Small overlap for safety; Docker events are idempotent for our usage.
+			reconnectSince = lastSeenEventTime.Add(-500 * time.Millisecond)
+		} else {
+			reconnectSince = time.Now().Add(-500 * time.Millisecond)
+		}
+
 		if runErr == nil {
 			// Normal exit (no error set by pump).
 			return nil
@@ -219,6 +243,7 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 		logger.L().Warn("event stream ended; will reconnect",
 			"err", runErr,
 			"backoff", backoffDelay,
+			"next_since", reconnectSince.Format(time.RFC3339Nano),
 		)
 
 		// Wait for backoff or context cancellation.
@@ -232,23 +257,25 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 		}
 
 		// Exponential backoff with cap.
-		next := time.Duration(int64(backoffDelay) * int64(backoffMultiplier))
-		if next > backoffMaxDelay {
-			next = backoffMaxDelay
+		nextBackoff := time.Duration(int64(backoffDelay) * int64(backoffMultiplier))
+		if nextBackoff > backoffMaxDelay {
+			nextBackoff = backoffMaxDelay
 		}
 
-		backoffDelay = next
+		backoffDelay = nextBackoff
 	}
 }
 
 // runEventPump wires a bounded queue and a fixed pool of workers to process events.
 // It returns when the stream errors/closes or when the context is canceled.
+// The returned time is the timestamp of the last event that was dequeued
+// (and therefore eligible for processing).
 func runEventPump(
 	ctx context.Context,
 	cli *client.Client,
-	eventChan <-chan events.Message,
-	errorChan <-chan error,
-) error {
+	eventChannel <-chan events.Message,
+	errorChannel <-chan error,
+) (time.Time, error) {
 	// Bounded queue so we never spawn unbounded goroutines.
 	jobs := make(chan events.Message, eventQueueCapacity)
 
@@ -259,13 +286,15 @@ func runEventPump(
 	startEventWorkers(ctx, cli, jobs, eventWorkerCount, &workerGroup)
 
 	// Run dispatcher.
-	dispatcherErr := dispatchEvents(ctx, jobs, eventChan, errorChan)
+	var lastSeenEventTime time.Time
+
+	dispatcherErr := dispatchEvents(ctx, jobs, eventChannel, errorChannel, &lastSeenEventTime)
 
 	// Stop accepting new jobs and wait for workers to finish.
 	close(jobs)
 	workerGroup.Wait()
 
-	return dispatcherErr
+	return lastSeenEventTime, dispatcherErr
 }
 
 // processEventMessage handles a single event with panic recovery and logging.
@@ -335,11 +364,14 @@ func startEventWorkers(
 }
 
 // dispatchEvents fans in Docker events into jobs; returns when stream ends or context cancels.
+// It also tracks the timestamp of the last event observed, which is used to resume the stream
+// on reconnect without missing changes.
 func dispatchEvents(
 	ctx context.Context,
 	jobs chan<- events.Message,
-	eventChan <-chan events.Message,
-	errorChan <-chan error,
+	eventChannel <-chan events.Message,
+	errorChannel <-chan error,
+	lastSeenEventTime *time.Time,
 ) error {
 	var dispatcherErr error
 
@@ -351,18 +383,26 @@ dispatchLoop:
 
 			break dispatchLoop
 
-		case err := <-errorChan:
+		case err := <-errorChannel:
 			// Stream error—trigger reconnect at the caller.
 			dispatcherErr = fmt.Errorf("events stream error: %w", err)
 
 			break dispatchLoop
 
-		case msg, ok := <-eventChan:
+		case msg, ok := <-eventChannel:
 			if !ok {
 				// Channel closed by Docker client—treat as EOF and reconnect.
 				dispatcherErr = fmt.Errorf("events stream closed: %w", ErrEventsStreamClosed)
 
 				break dispatchLoop
+			}
+
+			// Update last seen event time from Docker's event timestamps.
+			// Prefer TimeNano when present; fall back to Time (seconds).
+			if msg.TimeNano > 0 {
+				*lastSeenEventTime = time.Unix(0, msg.TimeNano)
+			} else if msg.Time > 0 {
+				*lastSeenEventTime = time.Unix(msg.Time, 0)
 			}
 
 			// Enqueue respecting context.

@@ -198,14 +198,15 @@ func startEventListener(ctx context.Context, wg *sync.WaitGroup, cli *client.Cli
 
 		log := logger.L()
 
-		initErr := collector.InitDesiredReplicasGauge(ctx, cli)
+		// Init now returns an anchor to use as the initial "since" for events.
+		initialSinceAnchor, initErr := collector.InitDesiredReplicasGauge(ctx, cli)
 		if initErr != nil {
 			log.Error("InitDesiredReplicasGauge failed", "err", initErr)
 			// If this fails, there is no point continuing.
 			return
 		}
 
-		listenErr := collector.ListenSwarmEvents(ctx, cli)
+		listenErr := collector.ListenSwarmEvents(ctx, cli, initialSinceAnchor)
 		if listenErr != nil && !errors.Is(listenErr, context.Canceled) {
 			log.Error("event listener exited with error", "err", listenErr)
 		}
