@@ -48,10 +48,10 @@ func ConfigureDesiredReplicasGauge() {
 	}, getSanitizedCustomLabelNames()...)
 
 	desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "",
-		Subsystem:   "",
-		Name:        "swarm_service_desired_replicas",
-		Help:        "Number of desired replicas for swarm services",
+		Namespace:   "swarm",
+		Subsystem:   "service",
+		Name:        "desired_replicas",
+		Help:        "Number of desired replicas for a Swarm service (replicated: configured replicas; global: eligible nodes).",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(desiredReplicasGauge)

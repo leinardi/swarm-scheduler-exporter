@@ -48,7 +48,7 @@ var knownTaskStates = []string{
 // replicasStateGauge is the gauge vector exported at /metrics.
 var replicasStateGauge *prometheus.GaugeVec
 
-// ConfigureReplicasStateGauge registers the "swarm_service_replicas_state" gauge
+// ConfigureReplicasStateGauge registers the "swarm_task_replicas_state" gauge
 // with base labels (stack, service, service_mode, state) plus any custom labels.
 func ConfigureReplicasStateGauge() {
 	baseLabels := append([]string{
@@ -59,10 +59,10 @@ func ConfigureReplicasStateGauge() {
 	}, getSanitizedCustomLabelNames()...)
 
 	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "",
-		Subsystem:   "",
-		Name:        "swarm_service_replicas_state",
-		Help:        "State of service replicas",
+		Namespace:   "swarm",
+		Subsystem:   "task",
+		Name:        "replicas_state",
+		Help:        "Number of tasks per Swarm service segmented by task state (latest per slot).",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(replicasStateGauge)
