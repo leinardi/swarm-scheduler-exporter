@@ -1,0 +1,32 @@
+# Intellij
+.idea/*
+!.idea/codeStyles/
+!.idea/copyright/
+*.iml
+
+# --- Go build outputs ---
+/dist/
+/bin/
+/build/
+/coverage.out
+/coverage.html
+*.test
+*.out
+*.prof
+*.pprof
+*.coverprofile
+profile.*
+
+# Go workspaces (if you ever use them)
+go.work
+go.work.sum
+
+# Vendoring (if you ever run go mod vendor)
+vendor/
+
+# IDE/editor (optional to add)
+.vscode/
+*.code-workspace
+
+# macOS cruft
+.DS_Store

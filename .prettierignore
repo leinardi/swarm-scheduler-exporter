@@ -1,0 +1,6 @@
+# .gitignore
+*.iml
+.idea/*
+
+# DCLint
+# deployments/docker/compose.yaml
