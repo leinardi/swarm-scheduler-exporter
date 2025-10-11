@@ -130,6 +130,14 @@ func updateServiceReplicasGauge(
 		return
 	}
 
+	// Attempt to use cached nodes if available.
+	if nodes := getCachedNodes(); len(nodes) > 0 {
+		eligible := countEligibleNodesForServiceFromNodes(nodes, svc)
+		setDesiredReplicasGauge(metadata, float64(eligible))
+
+		return
+	}
+
 	eligible, err := countEligibleNodesForService(ctx, cli, svc)
 	if err != nil {
 		logrus.WithError(err).
@@ -139,8 +147,10 @@ func updateServiceReplicasGauge(
 		if fallbackErr != nil {
 			logrus.WithError(fallbackErr).Warn("countActiveNodes fallback failed")
 		} else {
-			eligible = allActive
+			setDesiredReplicasGauge(metadata, float64(allActive))
 		}
+
+		return
 	}
 
 	setDesiredReplicasGauge(metadata, float64(eligible))
@@ -305,11 +315,11 @@ dispatchLoop:
 func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) error {
 	if evt.Type == "node" {
 		switch evt.Action { //nolint:exhaustive // only create/remove affect desired replica approximation here
-		case events.ActionCreate, events.ActionRemove:
-			// Any node topology change → full re-seed to re-evaluate placement.
-			err := InitDesiredReplicasGauge(ctx, cli)
-			if err != nil {
-				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node change")
+		case events.ActionCreate, events.ActionRemove, events.ActionUpdate:
+			// Node topology/schedulability changed → refresh nodes, recompute only globals.
+			refErr := refreshNodesAndRecomputeGlobals(ctx, cli)
+			if refErr != nil {
+				logrus.WithError(refErr).Warn("refresh nodes and recompute globals")
 			}
 		default:
 			// Ignore other node events (e.g., updates) for this gauge.
@@ -417,6 +427,43 @@ func countEligibleNodesForService(
 	}
 
 	return eligible, nil
+}
+
+// countEligibleNodesForServiceFromNodes returns eligible nodes count using a provided snapshot.
+// It mirrors countEligibleNodesForService but avoids NodeList round-trips.
+func countEligibleNodesForServiceFromNodes(nodes []swarm.Node, svc *swarm.Service) int {
+	var constraints []string
+	if svc.Spec.TaskTemplate.Placement != nil &&
+		len(svc.Spec.TaskTemplate.Placement.Constraints) > 0 {
+		constraints = svc.Spec.TaskTemplate.Placement.Constraints
+	}
+
+	var platforms []swarm.Platform
+	if svc.Spec.TaskTemplate.Placement != nil &&
+		len(svc.Spec.TaskTemplate.Placement.Platforms) > 0 {
+		platforms = svc.Spec.TaskTemplate.Placement.Platforms
+	}
+
+	eligible := 0
+
+	for i := range nodes {
+		node := &nodes[i]
+		if !isNodeSchedulable(node) {
+			continue
+		}
+
+		if len(platforms) > 0 && !platformMatches(node, platforms) {
+			continue
+		}
+
+		if !constraintsMatch(node, constraints) {
+			continue
+		}
+
+		eligible++
+	}
+
+	return eligible
 }
 
 // isNodeSchedulable applies basic Swarm scheduling preconditions:
@@ -566,4 +613,53 @@ func nodeAttributes(node *swarm.Node) map[string]string {
 	}
 
 	return attributes
+}
+
+// refreshNodesAndRecomputeGlobals refreshes the nodes cache once and recomputes
+// desired replicas for all global-mode services using the cached nodes.
+// It avoids a full metric Reset or ServiceList.
+func refreshNodesAndRecomputeGlobals(ctx context.Context, cli *client.Client) error {
+	nodes, listErr := cli.NodeList(ctx, types.NodeListOptions{Filters: filters.Args{}})
+	if listErr != nil {
+		return fmt.Errorf("node list: %w", listErr)
+	}
+
+	setCachedNodes(nodes)
+
+	globalIDs := getGlobalServiceIDs()
+	if len(globalIDs) == 0 {
+		return nil
+	}
+
+	// Recompute desired replicas only for global services using the snapshot.
+	for i := range globalIDs {
+		serviceID := globalIDs[i]
+
+		// We need the current service spec to properly evaluate constraints/platforms.
+		svc, _, inspErr := cli.ServiceInspectWithRaw(ctx, serviceID, types.ServiceInspectOptions{
+			InsertDefaults: false,
+		})
+		if inspErr != nil {
+			// If service disappeared during the window, skip.
+			if client.IsErrNotFound(inspErr) {
+				continue
+			}
+
+			return fmt.Errorf("service inspect %s: %w", serviceID, inspErr)
+		}
+
+		metadata, ok := getServiceMetadata(serviceID)
+		if !ok {
+			// Should be rare; skip with a warning.
+			logrus.WithField("service_id", serviceID).
+				Warn("metadata missing during global recompute")
+
+			continue
+		}
+
+		eligible := countEligibleNodesForServiceFromNodes(nodes, &svc)
+		setDesiredReplicasGauge(metadata, float64(eligible))
+	}
+
+	return nil
 }

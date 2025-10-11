@@ -20,6 +20,71 @@ var (
 	metadataCache = make(map[string]serviceMetadata)
 )
 
+// Cached nodes (latest snapshot) with a lock for concurrent access.
+var (
+	nodesMu     sync.RWMutex
+	cachedNodes []swarm.Node
+)
+
+// setCachedNodes replaces the node snapshot.
+func setCachedNodes(nodes []swarm.Node) {
+	nodesMu.Lock()
+	// copy to avoid sharing memory with the Docker client slice
+	dst := make([]swarm.Node, len(nodes))
+	copy(dst, nodes)
+	cachedNodes = dst
+
+	nodesMu.Unlock()
+}
+
+// getCachedNodes returns a copy of the last cached nodes (may be nil).
+func getCachedNodes() []swarm.Node {
+	nodesMu.RLock()
+	defer nodesMu.RUnlock()
+
+	if len(cachedNodes) == 0 {
+		return nil
+	}
+
+	dst := make([]swarm.Node, len(cachedNodes))
+	copy(dst, cachedNodes)
+
+	return dst
+}
+
+// getAllServiceIDs returns a stable copy of all known service IDs from the metadata cache.
+func getAllServiceIDs() []string {
+	metadataMu.RLock()
+	defer metadataMu.RUnlock()
+
+	if len(metadataCache) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(metadataCache))
+	for sid := range metadataCache {
+		ids = append(ids, sid)
+	}
+
+	return ids
+}
+
+// getGlobalServiceIDs returns only global-mode service IDs from the cache.
+func getGlobalServiceIDs() []string {
+	metadataMu.RLock()
+	defer metadataMu.RUnlock()
+
+	var ids []string
+
+	for sid, md := range metadataCache {
+		if md.serviceMode == "global" {
+			ids = append(ids, sid)
+		}
+	}
+
+	return ids
+}
+
 // customLabelDef pairs the raw service label key with its sanitized Prometheus label name.
 type customLabelDef struct {
 	raw       string

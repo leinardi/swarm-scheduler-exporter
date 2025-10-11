@@ -21,6 +21,10 @@ import (
 // Capacity hint for the per-service state map.
 const defaultStatesCapacity = 16
 
+// Limit for the number of service filters to attach to TaskList calls.
+// Prevents extremely large filter payloads; adjust as needed.
+const maxServicesInTaskFilter = 10000
+
 // knownTaskStates enumerates all Swarm task states we expose.
 // We iterate this list during emission to ensure exhaustive output with zeros.
 var knownTaskStates = []string{
@@ -126,11 +130,27 @@ func newerThan(candidate, current *swarm.Task) bool {
 // counting only the latest task per (service, slot) for replicated services
 // and per (service, nodeID) for global services.
 func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter, error) {
-	tasks, err := cli.TaskList(ctx, types.TaskListOptions{
-		Filters: filters.Args{},
+	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
+	serviceIDs := getAllServiceIDs()
+
+	taskFilters := filters.NewArgs()
+
+	if len(serviceIDs) > 0 {
+		limit := len(serviceIDs)
+		if limit > maxServicesInTaskFilter {
+			limit = maxServicesInTaskFilter
+		}
+
+		for idx := range limit {
+			taskFilters.Add("service", serviceIDs[idx])
+		}
+	}
+
+	tasks, listErr := cli.TaskList(ctx, types.TaskListOptions{
+		Filters: taskFilters,
 	})
-	if err != nil {
-		return serviceCounter{}, fmt.Errorf("task list: %w", err)
+	if listErr != nil {
+		return serviceCounter{}, fmt.Errorf("task list: %w", listErr)
 	}
 
 	// Step 1: choose the latest task per dedupe key.
