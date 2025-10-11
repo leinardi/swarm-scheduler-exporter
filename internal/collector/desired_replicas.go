@@ -3,12 +3,12 @@ package collector
 // desired_replicas exposes the gauge "swarm_service_desired_replicas", which tracks
 // the scheduler's desired replica count for each service. For replicated services,
 // this is the configured replica count. For global services, it approximates the
-// number of eligible nodes by counting nodes (note: constraints/drain are not
-// evaluated here; see README for caveats).
+// number of eligible nodes by evaluating placement constraints and node status.
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -54,22 +54,13 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 		return fmt.Errorf("service list: %w", err)
 	}
 
-	nodes, err := cli.NodeList(ctx, types.NodeListOptions{
-		Filters: filters.Args{},
-	})
-	if err != nil {
-		return fmt.Errorf("node list: %w", err)
-	}
-
-	setNodeCount(len(nodes))
-
 	// Reset the whole vector so removed services are dropped from Prometheus.
 	desiredReplicasGauge.Reset()
 
 	for i := range services { // avoid copying large struct
 		svc := &services[i]
 		setServiceMetadata(svc.ID, buildMetadata(svc))
-		updateServiceReplicasGauge(svc, mustGetServiceMetadata(svc.ID))
+		updateServiceReplicasGauge(ctx, cli, svc, mustGetServiceMetadata(svc.ID))
 	}
 
 	return nil
@@ -110,12 +101,33 @@ func labelsForMetadata(metadata serviceMetadata) prometheus.Labels {
 
 // updateServiceReplicasGauge sets the per-service desired replicas value
 // based on the service mode and configured replica count.
-func updateServiceReplicasGauge(svc *swarm.Service, metadata serviceMetadata) {
+// For global services, it counts eligible nodes using placement constraints.
+func updateServiceReplicasGauge(
+	ctx context.Context,
+	cli *client.Client,
+	svc *swarm.Service,
+	metadata serviceMetadata,
+) {
 	if svc.Spec.Mode.Replicated != nil {
 		setDesiredReplicasGauge(metadata, float64(*svc.Spec.Mode.Replicated.Replicas))
-	} else {
-		setDesiredReplicasGauge(metadata, float64(getNodeCount()))
+
+		return
 	}
+
+	eligible, err := countEligibleNodesForService(ctx, cli, svc)
+	if err != nil {
+		logrus.WithError(err).
+			Warn("countEligibleNodesForService failed; falling back to counting active nodes")
+		// Fallback: count READY+active nodes ignoring constraints.
+		allActive, fallbackErr := countActiveNodes(ctx, cli)
+		if fallbackErr != nil {
+			logrus.WithError(fallbackErr).Warn("countActiveNodes fallback failed")
+		} else {
+			eligible = allActive
+		}
+	}
+
+	setDesiredReplicasGauge(metadata, float64(eligible))
 }
 
 // setDesiredReplicasGauge writes the gauge value with sanitized label keys.
@@ -124,7 +136,7 @@ func setDesiredReplicasGauge(metadata serviceMetadata, val float64) {
 }
 
 // ListenSwarmEvents listens to Docker events for service and node changes.
-// Node create/remove updates nodeCount and re-seeds the desired replicas gauge.
+// Node create/remove triggers a full re-seed (which re-evaluates placement).
 // Service updates refresh the cached metadata; service remove deletes the time-series.
 func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 	filterArgs := filters.NewArgs()
@@ -170,19 +182,11 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) error {
 	if evt.Type == "node" {
 		switch evt.Action { //nolint:exhaustive // only create/remove affect desired replica approximation here
-		case events.ActionCreate:
-			incNodeCount(1)
-
+		case events.ActionCreate, events.ActionRemove:
+			// Any node topology change → full re-seed to re-evaluate placement.
 			err := InitDesiredReplicasGauge(ctx, cli)
 			if err != nil {
-				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node create")
-			}
-		case events.ActionRemove:
-			incNodeCount(-1)
-
-			err := InitDesiredReplicasGauge(ctx, cli)
-			if err != nil {
-				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node remove")
+				logrus.WithError(err).Warn("InitDesiredReplicasGauge after node change")
 			}
 		default:
 			// Ignore other node events (e.g., updates) for this gauge.
@@ -217,7 +221,226 @@ func processEvent(ctx context.Context, cli *client.Client, evt *events.Message) 
 	}
 
 	setServiceMetadata(serviceID, buildMetadata(&service))
-	updateServiceReplicasGauge(&service, mustGetServiceMetadata(serviceID))
+	updateServiceReplicasGauge(ctx, cli, &service, mustGetServiceMetadata(serviceID))
 
 	return nil
+}
+
+//
+// ---- Helpers for global desired replicas accuracy ----
+//
+
+// countActiveNodes returns the number of nodes that are READY and Availability=active.
+func countActiveNodes(ctx context.Context, cli *client.Client) (int, error) {
+	nodes, err := cli.NodeList(ctx, types.NodeListOptions{Filters: filters.Args{}})
+	if err != nil {
+		return 0, fmt.Errorf("node list: %w", err)
+	}
+
+	active := 0
+
+	for i := range nodes {
+		node := &nodes[i]
+		if isNodeSchedulable(node) {
+			active++
+		}
+	}
+
+	return active, nil
+}
+
+// countEligibleNodesForService returns the number of nodes where a GLOBAL service
+// would place tasks, based on node schedulability + placement constraints + platforms.
+func countEligibleNodesForService(
+	ctx context.Context,
+	cli *client.Client,
+	svc *swarm.Service,
+) (int, error) {
+	nodes, err := cli.NodeList(ctx, types.NodeListOptions{Filters: filters.Args{}})
+	if err != nil {
+		return 0, fmt.Errorf("node list: %w", err)
+	}
+
+	// Precompute constraint predicates
+	var constraints []string
+	if svc.Spec.TaskTemplate.Placement != nil &&
+		len(svc.Spec.TaskTemplate.Placement.Constraints) > 0 {
+		constraints = svc.Spec.TaskTemplate.Placement.Constraints
+	}
+
+	var platforms []swarm.Platform
+	if svc.Spec.TaskTemplate.Placement != nil &&
+		len(svc.Spec.TaskTemplate.Placement.Platforms) > 0 {
+		platforms = svc.Spec.TaskTemplate.Placement.Platforms
+	}
+
+	eligible := 0
+
+	for i := range nodes {
+		node := &nodes[i]
+		if !isNodeSchedulable(node) {
+			continue
+		}
+
+		if len(platforms) > 0 && !platformMatches(node, platforms) {
+			continue
+		}
+
+		if !constraintsMatch(node, constraints) {
+			continue
+		}
+
+		eligible++
+	}
+
+	return eligible, nil
+}
+
+// isNodeSchedulable applies basic Swarm scheduling preconditions:
+// - Node Status is READY
+// - Node Availability is active (not paused/drain).
+func isNodeSchedulable(node *swarm.Node) bool {
+	if node == nil {
+		return false
+	}
+
+	if node.Status.State != swarm.NodeStateReady {
+		return false
+	}
+
+	if node.Spec.Availability != swarm.NodeAvailabilityActive {
+		return false
+	}
+
+	return true
+}
+
+// platformMatches returns true if node.Description.Platform matches any required platform.
+func platformMatches(node *swarm.Node, required []swarm.Platform) bool {
+	nodeOS := ""
+	nodeArch := ""
+
+	if node.Description.Platform.OS != "" {
+		nodeOS = strings.ToLower(node.Description.Platform.OS)
+	}
+
+	if node.Description.Platform.Architecture != "" {
+		nodeArch = strings.ToLower(node.Description.Platform.Architecture)
+	}
+
+	for i := range required {
+		req := &required[i]
+		reqOS := strings.ToLower(req.OS)
+		reqArch := strings.ToLower(req.Architecture)
+
+		osOK := (reqOS == "" || reqOS == nodeOS)
+
+		archOK := (reqArch == "" || reqArch == nodeArch)
+		if osOK && archOK {
+			return true
+		}
+	}
+
+	return false
+}
+
+// constraintsMatch evaluates a subset of Swarm placement constraints commonly used in practice.
+// Supported forms (== and !=):
+//
+//	node.role == manager|worker
+//	node.hostname == <value>
+//	node.id == <value>
+//	node.platform.os == <value>
+//	node.platform.arch == <value>
+//	node.labels.<k> == <value>
+//	engine.labels.<k> == <value>
+//
+// Any unsupported or malformed constraint returns false (conservative).
+func constraintsMatch(node *swarm.Node, constraints []string) bool {
+	if len(constraints) == 0 {
+		return true
+	}
+
+	attributes := nodeAttributes(node)
+
+	for i := range constraints {
+		constraintExpr := strings.TrimSpace(constraints[i])
+
+		var operator string
+		if strings.Contains(constraintExpr, "!=") {
+			operator = "!="
+		} else if strings.Contains(constraintExpr, "==") {
+			operator = "=="
+		} else {
+			// Unsupported operator
+			return false
+		}
+
+		parts := strings.SplitN(constraintExpr, operator, 2)
+		if len(parts) != 2 {
+			return false
+		}
+
+		leftKey := strings.TrimSpace(parts[0])
+		expectedValue := strings.TrimSpace(parts[1])
+
+		nodeValue, ok := attributes[leftKey]
+		if !ok {
+			// If the attribute is missing, constraint fails.
+			return false
+		}
+
+		switch operator {
+		case "==":
+			if nodeValue != expectedValue {
+				return false
+			}
+		case "!=":
+			if nodeValue == expectedValue {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// Capacity hint for the node attribute map; avoids magic numbers.
+const defaultNodeAttrCapacity = 32
+
+// nodeAttributes flattens a node into a string map keyed by the constraint left-hand side.
+func nodeAttributes(node *swarm.Node) map[string]string {
+	attributes := make(
+		map[string]string,
+		defaultNodeAttrCapacity,
+	) // small map; keys are fixed + labels
+
+	attributes["node.id"] = node.ID
+	attributes["node.hostname"] = node.Description.Hostname
+	attributes["node.role"] = strings.ToLower(string(node.Spec.Role))
+
+	// Platform
+	if node.Description.Platform.OS != "" {
+		attributes["node.platform.os"] = strings.ToLower(node.Description.Platform.OS)
+	}
+
+	if node.Description.Platform.Architecture != "" {
+		attributes["node.platform.arch"] = strings.ToLower(node.Description.Platform.Architecture)
+	}
+
+	// Node labels
+	for k, v := range node.Spec.Labels {
+		attributes["node.labels."+k] = v
+	}
+
+	// Engine labels
+	if node.Description.Engine.Labels != nil {
+		for k, v := range node.Description.Engine.Labels {
+			attributes["engine.labels."+k] = v
+		}
+	}
+
+	return attributes
 }

@@ -20,10 +20,8 @@ var (
 
 	// metadataCache stores service metadata (stack, service name, mode, custom labels)
 	// keyed by Docker ServiceID. Protected by metadataMu.
-	metadataMu     sync.RWMutex
-	metadataCache  = make(map[string]serviceMetadata)
-	nodeMu         sync.RWMutex
-	currentNodeCnt int // protected by nodeMu
+	metadataMu    sync.RWMutex
+	metadataCache = make(map[string]serviceMetadata)
 )
 
 // SetCustomLabels injects the list of label keys that should be propagated
@@ -75,10 +73,10 @@ func serviceMode(svc *swarm.Service) string {
 
 // --- Synchronized accessors for metadataCache ---
 
-func setServiceMetadata(serviceID string, md serviceMetadata) {
+func setServiceMetadata(serviceID string, metadata serviceMetadata) {
 	metadataMu.Lock()
 
-	metadataCache[serviceID] = md
+	metadataCache[serviceID] = metadata
 
 	metadataMu.Unlock()
 }
@@ -86,11 +84,11 @@ func setServiceMetadata(serviceID string, md serviceMetadata) {
 func getServiceMetadata(serviceID string) (serviceMetadata, bool) {
 	metadataMu.RLock()
 
-	md, ok := metadataCache[serviceID]
+	metadata, ok := metadataCache[serviceID]
 
 	metadataMu.RUnlock()
 
-	return md, ok
+	return metadata, ok
 }
 
 func deleteServiceMetadata(serviceID string) {
@@ -111,32 +109,4 @@ func getServiceModeCached(serviceID string) (string, bool) {
 	}
 
 	return metadata.serviceMode, true
-}
-
-// --- Synchronized accessors for node count ---
-
-func setNodeCount(n int) {
-	nodeMu.Lock()
-
-	currentNodeCnt = n
-
-	nodeMu.Unlock()
-}
-
-func incNodeCount(delta int) {
-	nodeMu.Lock()
-
-	currentNodeCnt += delta
-
-	nodeMu.Unlock()
-}
-
-func getNodeCount() int {
-	nodeMu.RLock()
-
-	n := currentNodeCnt
-
-	nodeMu.RUnlock()
-
-	return n
 }
