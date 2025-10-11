@@ -45,7 +45,7 @@ func ConfigureDesiredReplicasGauge() {
 		"stack",
 		"service",
 		"service_mode",
-	}, customLabels...)
+	}, getSanitizedCustomLabelNames()...)
 
 	desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   "",
@@ -108,6 +108,8 @@ func labelsForMetadata(metadata serviceMetadata) prometheus.Labels {
 	}
 	for key, value := range metadata.customLabels {
 		labels[key] = value
+		// Warn once if a value looks high-cardinality.
+		labelutil.MaybeWarnHighCardinality(key, value)
 	}
 
 	return labelutil.SanitizeMetricLabels(labels)

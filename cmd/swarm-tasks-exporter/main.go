@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker/client"
 	"github.com/leinardi/swarm-tasks-exporter/internal/collector"
+	labelutil "github.com/leinardi/swarm-tasks-exporter/internal/labels"
 	"github.com/leinardi/swarm-tasks-exporter/internal/server"
 	"github.com/sirupsen/logrus"
 )
@@ -130,7 +131,19 @@ func main() {
 		date,
 	)
 
-	collector.SetCustomLabels([]string(customLabels))
+	// Validate and sanitize requested custom labels (+ guard count)
+	countErr := labelutil.ValidateCustomLabelCount(len(customLabels))
+	if countErr != nil {
+		logrus.Fatal(countErr)
+	}
+
+	sanitized, sanitizeErr := labelutil.ValidateAndSanitizeLabelNames([]string(customLabels))
+	if sanitizeErr != nil {
+		logrus.Fatal(sanitizeErr)
+	}
+
+	// Store both raw and sanitized forms so we can look up by raw and emit by sanitized.
+	collector.SetCustomLabels([]string(customLabels), sanitized)
 	collector.ConfigureDesiredReplicasGauge()
 	collector.ConfigureReplicasStateGauge()
 

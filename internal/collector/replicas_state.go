@@ -52,7 +52,7 @@ func ConfigureReplicasStateGauge() {
 		"service",
 		"service_mode",
 		"state",
-	}, customLabels...)
+	}, getSanitizedCustomLabelNames()...)
 
 	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   "",
@@ -265,6 +265,7 @@ func getServiceLabels(
 	}
 	for key, value := range metadata.customLabels {
 		labelSet[key] = value
+		labelutil.MaybeWarnHighCardinality(key, value)
 	}
 
 	return labelSet, nil

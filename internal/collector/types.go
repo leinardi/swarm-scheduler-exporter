@@ -14,26 +14,51 @@ import (
 var ErrNoCachedMetadata = errors.New("no cached metadata found for removed service")
 
 var (
-	// customLabels is set once from main() to add user-specified service labels
-	// (e.g., team, tier) as additional Prometheus label dimensions.
-	customLabels []string
-
 	// metadataCache stores service metadata (stack, service name, mode, custom labels)
 	// keyed by Docker ServiceID. Protected by metadataMu.
 	metadataMu    sync.RWMutex
 	metadataCache = make(map[string]serviceMetadata)
 )
 
-// SetCustomLabels injects the list of label keys that should be propagated
-// from Swarm service annotations into metric labels (sanitized on write).
-func SetCustomLabels(ls []string) { customLabels = ls }
+// customLabelDef pairs the raw service label key with its sanitized Prometheus label name.
+type customLabelDef struct {
+	raw       string
+	sanitized string
+}
+
+// customLabelDefs holds the list of user-requested custom labels as raw+sanitized pairs.
+var customLabelDefs []customLabelDef
+
+// SetCustomLabels records both the raw keys (as they appear in Swarm) and their sanitized names.
+// rawKeys and sanitizedKeys must have the same length and aligned order.
+func SetCustomLabels(rawKeys, sanitizedKeys []string) {
+	defs := make([]customLabelDef, 0, len(rawKeys))
+	for i := range rawKeys {
+		defs = append(defs, customLabelDef{
+			raw:       rawKeys[i],
+			sanitized: sanitizedKeys[i],
+		})
+	}
+
+	customLabelDefs = defs
+}
+
+// getSanitizedCustomLabelNames returns the sanitized label names for metric definitions.
+func getSanitizedCustomLabelNames() []string {
+	out := make([]string, 0, len(customLabelDefs))
+	for i := range customLabelDefs {
+		out = append(out, customLabelDefs[i].sanitized)
+	}
+
+	return out
+}
 
 // serviceMetadata is immutable data we keep per service to populate metric labels.
 type serviceMetadata struct {
 	stack        string            // Docker stack name from label "com.docker.stack.namespace"
 	service      string            // Service visible name (Annotations.Name)
 	serviceMode  string            // "replicated" or "global"
-	customLabels map[string]string // arbitrary user-selected labels copied from service annotations
+	customLabels map[string]string // key: sanitized name; value: service label value
 }
 
 // buildMetadata constructs serviceMetadata from a Swarm service definition.
@@ -42,20 +67,22 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 		stack:        svc.Spec.Labels["com.docker.stack.namespace"],
 		service:      svc.Spec.Name,
 		serviceMode:  serviceMode(svc),
-		customLabels: make(map[string]string),
+		customLabels: make(map[string]string, len(customLabelDefs)),
 	}
 
-	for _, label := range customLabels {
-		// Most service labels are under Spec.Annotations.Labels.
+	for i := range customLabelDefs {
+		rawKey := customLabelDefs[i].raw
+		sanitizedKey := customLabelDefs[i].sanitized
+
 		if svc.Spec.Labels != nil {
-			if val, ok := svc.Spec.Labels[label]; ok {
-				metadata.customLabels[label] = val
+			if val, ok := svc.Spec.Labels[rawKey]; ok {
+				metadata.customLabels[sanitizedKey] = val
 
 				continue
 			}
 		}
-		// Ensure the label exists even when absent on the service.
-		metadata.customLabels[label] = ""
+		// Ensure the label exists even when absent on the service (exhaustive emission).
+		metadata.customLabels[sanitizedKey] = ""
 	}
 
 	return metadata
