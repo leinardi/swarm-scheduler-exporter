@@ -60,6 +60,7 @@ func ConfigureDesiredReplicasGauge() {
 // InitDesiredReplicasGauge seeds the gauge with current desired replica counts
 // by listing services and nodes once at startup (or after node changes).
 func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
+	// Seed service gauges
 	services, err := cli.ServiceList(ctx, types.ServiceListOptions{
 		Filters: filters.Args{},
 		Status:  false,
@@ -68,7 +69,16 @@ func InitDesiredReplicasGauge(ctx context.Context, cli *client.Client) error {
 		return fmt.Errorf("service list: %w", err)
 	}
 
-	// Reset the whole vector so removed services are dropped from Prometheus.
+	// Also seed nodes snapshot and nodes-by-state metric
+	nodes, nodeErr := cli.NodeList(ctx, types.NodeListOptions{Filters: filters.Args{}})
+	if nodeErr != nil {
+		return fmt.Errorf("node list: %w", nodeErr)
+	}
+
+	setCachedNodes(nodes)
+	UpdateNodesByStateFromSlice(nodes)
+
+	// Reset service desired replicas vector so removed services are dropped.
 	desiredReplicasGauge.Reset()
 
 	for i := range services { // avoid copying large struct
@@ -199,6 +209,9 @@ func ListenSwarmEvents(ctx context.Context, cli *client.Client) error {
 			// Normal exit (no error set by pump).
 			return nil
 		}
+
+		// We will reconnect → count it.
+		IncEventReconnect()
 
 		// Log and backoff before reconnecting.
 		logrus.WithError(runErr).Warnf("Event stream ended; reconnecting in %s", backoffDelay)
@@ -625,6 +638,7 @@ func refreshNodesAndRecomputeGlobals(ctx context.Context, cli *client.Client) er
 	}
 
 	setCachedNodes(nodes)
+	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
 
 	globalIDs := getGlobalServiceIDs()
 	if len(globalIDs) == 0 {

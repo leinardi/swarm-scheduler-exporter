@@ -159,6 +159,8 @@ func main() {
 	collector.ConfigureDesiredReplicasGauge()
 	collector.ConfigureReplicasStateGauge()
 	collector.ConfigureHealthGauges(version, commit, date)
+	collector.ConfigureNodesByStateGauge()
+	collector.ConfigureExporterOpsMetrics()
 
 	// Root context canceled on SIGINT/SIGTERM
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -252,8 +254,13 @@ func startPoller(ctx context.Context, wg *sync.WaitGroup, cli *client.Client, de
 
 			logrus.Debug("Polling replicas state...")
 
+			startTime := time.Now()
 			polled, pollErr := collector.PollReplicasState(ctx, cli)
+			collector.ObservePollDuration(time.Since(startTime))
+			collector.IncPolls()
+
 			if pollErr != nil {
+				collector.IncPollErrors()
 				logrus.Error(pollErr)
 
 				continue
