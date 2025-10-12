@@ -75,33 +75,99 @@ All metrics live under the `swarm_` namespace.
 
 ## 🚀 Quick Start
 
-### Docker (single host)
+When running the exporter inside a container, it needs permission to talk to the Docker Engine.
+On most systems, this means allowing access to the Docker UNIX socket at `/var/run/docker.sock`.
+
+### 🔍 Finding the correct socket group
+
+Docker’s socket is owned by a specific group (e.g., `docker` or `root`).
+Check the numeric group ID (GID) on your system:
+
+```bash
+stat -c %g /var/run/docker.sock
+```
+
+Use that GID in the `--group` or `--group-add` flag so the container’s user
+(in the distroless image it’s a nonroot user, UID 65532) can connect to the socket.
+
+If you skip this step, you’ll see errors like:
+
+```
+permission denied while trying to connect to the Docker daemon socket
+```
+
+> ⚠️ The GID must be the same on **all Swarm manager nodes** if you use a bind mount for the socket.
+> If GIDs differ, use the **TCP/TLS approach** below instead of the socket.
+
+---
+
+### 🐳 Docker (single host)
 
 ```bash
 docker run --rm \
-  -p 8888:8888 \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  ghcr.io/leinardi/swarm-scheduler-exporter:latest \
-  -log-format text \
-  -log-level warn
+ -p 8888:8888 \
+ -v /var/run/docker.sock:/var/run/docker.sock:ro \
+ --group-add 140 \
+ ghcr.io/leinardi/swarm-scheduler-exporter:latest \
+ -log-format text \
+ -log-level warn
 ```
 
-### Swarm service (recommended)
+Replace `140` with the value from `stat -c %g /var/run/docker.sock`.
+
+---
+
+### 🐝 Swarm service (recommended)
 
 ```bash
 docker service create \
-  --name swarm-scheduler-exporter \
-  --mode replicated --replicas 1 \
-  --constraint 'node.role == manager' \
-  --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock,ro \
-  --publish published=8888,target=8888 \
-  ghcr.io/leinardi/swarm-scheduler-exporter:latest \
-  -log-format text \
-  -log-level warn \
-  -poll-delay 10s
+ --name swarm-scheduler-exporter \
+ --mode replicated --replicas 1 \
+ --constraint 'node.role == manager' \
+ --group 140 \
+ --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+ --read-only \
+ --mount type=tmpfs,dst=/tmp,tmpfs-size=16m \
+ --publish published=8888,target=8888 \
+ ghcr.io/leinardi/swarm-scheduler-exporter:latest \
+ -poll-delay 10s
 ```
 
-> ℹ️ **Why manager constraint?** Access to cluster-wide events and service/node inspection requires a manager.
+> ℹ️ **Why the `manager` constraint?**
+> Only manager nodes can access cluster-wide service, node, and event data required by the exporter.
+
+---
+
+### 🔐 Alternative: TCP/TLS (no socket mount)
+
+If your nodes have mismatched socket GIDs or you prefer not to expose `/var/run/docker.sock`,
+you can use Docker’s authenticated API instead:
+
+```bash
+docker service create \
+ --name swarm-scheduler-exporter \
+ --mode replicated --replicas 1 \
+ --constraint 'node.role == manager' \
+ --read-only \
+ --mount type=tmpfs,dst=/tmp,tmpfs-size=16m \
+ --publish published=8888,target=8888 \
+ --env DOCKER_HOST=tcp://manager.example.internal:2376 \
+ --env DOCKER_TLS_VERIFY=1 \
+ --mount type=bind,src=/path/to/certs,dst=/run/certs,ro \
+ --env DOCKER_CERT_PATH=/run/certs \
+ ghcr.io/leinardi/swarm-scheduler-exporter:latest \
+ -poll-delay 10s
+```
+
+This avoids group and permission issues, relying instead on proper TLS authentication.
+
+---
+
+### 🧩 Docker Compose Example
+
+A complete Compose setup (replicated mode, manager constraint, and environment hints)
+is available at:
+[`deployments/docker/docker-compose.yaml`](deployments/docker/docker-compose.yaml)
 
 ---
 
@@ -109,18 +175,18 @@ docker service create \
 
 ### Flags
 
-- `-listen-addr <ip:port>` — HTTP listen address. *(default `0.0.0.0:8888`)*
-- `-poll-delay <duration>` — How often to poll tasks, e.g. `10s`, `1m`. *(min `1s`, default `10s`)*
-- `-label <key>` — Add a **service label key** as a metric label. Repeatable.
+- `-listen-addr <ip:port>` — HTTP listen address *(default `0.0.0.0:8888`)*
+- `-poll-delay <duration>` — How often to poll tasks, e.g. `10s`, `1m` *(min `1s`, default `10s`)*
+- `-label <key>` — Add a **service label key** as a Prometheus metric label (repeatable)
   Example: `-label app.kubernetes.io/name -label team.name`
-- `-log-format <text|json|plain>` — Log format. *(default `plain`)*
-- `-log-level <debug|info|warn|error>` — Minimum log level. *(default `warn`)*
+- `-log-format <text|json|plain>` — Log format *(default `plain`)*
+- `-log-level <debug|info|warn|error>` — Minimum log level *(default `warn`)*
 
 ### Environment (Docker client)
 
-- `DOCKER_HOST` — Docker daemon URL.
-- `DOCKER_CERT_PATH` — TLS certs path.
-- `DOCKER_TLS_VERIFY` — Enable TLS verification (set to `1`).
+- `DOCKER_HOST` — Docker daemon URL
+- `DOCKER_CERT_PATH` — Path to TLS certs
+- `DOCKER_TLS_VERIFY` — Enable TLS verification (set to `1`)
 
 ### Custom label guardrails
 
