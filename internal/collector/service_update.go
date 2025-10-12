@@ -18,13 +18,22 @@ const (
 	updateStateRollbackCompleted = "rollback_completed"
 )
 
+// knownStates is the exhaustive list of update/rollback states we export.
+var knownStates = []string{
+	updateStateUpdating,
+	updateStateCompleted,
+	updateStatePaused,
+	updateStateRollbackStarted,
+	updateStateRollbackCompleted,
+}
+
 // serviceUpdateStateGauge is the “info-style” gauge (one label state=… set to 1, the rest 0).
 var serviceUpdateStateGauge *prometheus.GaugeVec
 
-// serviceUpdateStartedTs and serviceUpdateCompletedTs are unix timestamp gauges.
+// serviceUpdateStartedTimestamp and serviceUpdateCompletedTimestamp are unix timestamp gauges.
 var (
-	serviceUpdateStartedTs   *prometheus.GaugeVec
-	serviceUpdateCompletedTs *prometheus.GaugeVec
+	serviceUpdateStartedTimestamp   *prometheus.GaugeVec
+	serviceUpdateCompletedTimestamp *prometheus.GaugeVec
 )
 
 var serviceUpdateMetricsInitWarnOnce sync.Once
@@ -43,36 +52,36 @@ func ConfigureServiceUpdateMetrics() {
 	stateLabels = append(stateLabels, "state")
 
 	serviceUpdateStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "service",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusServiceSubsystem,
 		Name:        "update_state_info",
 		Help:        "Service update/rollback state indicator (1 for the current state, 0 otherwise).",
 		ConstLabels: nil,
 	}, stateLabels)
 	prometheus.MustRegister(serviceUpdateStateGauge)
 
-	serviceUpdateStartedTs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "service",
+	serviceUpdateStartedTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusServiceSubsystem,
 		Name:        "update_started_timestamp_seconds",
 		Help:        "Unix timestamp (seconds) when the current/last service update started (0 if unknown).",
 		ConstLabels: nil,
 	}, baseLabels)
-	prometheus.MustRegister(serviceUpdateStartedTs)
+	prometheus.MustRegister(serviceUpdateStartedTimestamp)
 
-	serviceUpdateCompletedTs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "service",
+	serviceUpdateCompletedTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusServiceSubsystem,
 		Name:        "update_completed_timestamp_seconds",
 		Help:        "Unix timestamp (seconds) when the current/last service update completed (0 if unknown).",
 		ConstLabels: nil,
 	}, baseLabels)
-	prometheus.MustRegister(serviceUpdateCompletedTs)
+	prometheus.MustRegister(serviceUpdateCompletedTimestamp)
 }
 
 // updateStateFromSwarm maps swarm.UpdateState to our label strings.
-func updateStateFromSwarm(s swarm.UpdateState) string {
-	switch s {
+func updateStateFromSwarm(state swarm.UpdateState) string {
+	switch state {
 	case swarm.UpdateStateUpdating:
 		return updateStateUpdating
 	case swarm.UpdateStateCompleted:
@@ -91,7 +100,7 @@ func updateStateFromSwarm(s swarm.UpdateState) string {
 
 // labelsForService builds the sanitized label set for a service from cached metadata.
 func labelsForService(metadata serviceMetadata) prometheus.Labels {
-	base := prometheus.Labels{
+	baseLabels := prometheus.Labels{
 		"stack":        metadata.stack,
 		"service":      metadata.service,
 		"service_mode": metadata.serviceMode,
@@ -99,16 +108,16 @@ func labelsForService(metadata serviceMetadata) prometheus.Labels {
 	for key, value := range metadata.customLabels {
 		// Warn once if a value looks high-cardinality.
 		labelutil.MaybeWarnHighCardinality(key, value)
-		base[key] = value
+		baseLabels[key] = value
 	}
 
-	return labelutil.SanitizeMetricLabels(base)
+	return labelutil.SanitizeMetricLabels(baseLabels)
 }
 
 // UpdateServiceUpdateMetricsForService emits the info-style state and timestamps for one service.
-func UpdateServiceUpdateMetricsForService(svc *swarm.Service, metadata serviceMetadata) {
-	if serviceUpdateStateGauge == nil || serviceUpdateStartedTs == nil ||
-		serviceUpdateCompletedTs == nil {
+func UpdateServiceUpdateMetricsForService(service *swarm.Service, metadata serviceMetadata) {
+	if serviceUpdateStateGauge == nil || serviceUpdateStartedTimestamp == nil ||
+		serviceUpdateCompletedTimestamp == nil {
 		serviceUpdateMetricsInitWarnOnce.Do(func() {
 			logger.L().Error("service update metrics not configured before use; skipping emission")
 		})
@@ -116,66 +125,52 @@ func UpdateServiceUpdateMetricsForService(svc *swarm.Service, metadata serviceMe
 		return
 	}
 
-	base := labelsForService(metadata)
+	baseLabels := labelsForService(metadata)
 
 	// Update state info gauge: exhaustive emission across known states.
-	// Determine the “current” label value (or paused if nil/unknown).
+	// Determine the “current” label value (or completed default; paused if unknown).
 	currentState := updateStateCompleted
-	if svc.UpdateStatus != nil {
-		currentState = updateStateFromSwarm(svc.UpdateStatus.State)
+	if service.UpdateStatus != nil {
+		currentState = updateStateFromSwarm(service.UpdateStatus.State)
 	}
 
-	knownStates := []string{
-		updateStateUpdating,
-		updateStateCompleted,
-		updateStatePaused,
-		updateStateRollbackStarted,
-		updateStateRollbackCompleted,
-	}
+	for index := range knownStates {
+		state := knownStates[index]
+		labelsWithState := cloneLabelsWithState(baseLabels, state)
 
-	for i := range knownStates {
-		state := knownStates[i]
-
-		labels := make(prometheus.Labels, len(base)+1)
-		for k, v := range base {
-			labels[k] = v
-		}
-
-		labels["state"] = state
-
-		val := 0.0
+		value := 0.0
 		if state == currentState {
-			val = 1.0
+			value = 1.0
 		}
 
-		serviceUpdateStateGauge.With(labels).Set(val)
+		serviceUpdateStateGauge.With(labelsWithState).Set(value)
 	}
 
 	// Timestamps: 0 if nil.
 	var (
-		startedSec   float64
-		completedSec float64
+		startedSeconds   float64
+		completedSeconds float64
 	)
 
-	if svc.UpdateStatus != nil {
+	if service.UpdateStatus != nil {
 		// NOTE: UpdateStatus.StartedAt / CompletedAt are *time.Time in current docker client.
-		if svc.UpdateStatus.StartedAt != nil {
-			startedSec = float64(svc.UpdateStatus.StartedAt.Unix())
+		if service.UpdateStatus.StartedAt != nil {
+			startedSeconds = float64(service.UpdateStatus.StartedAt.Unix())
 		}
 
-		if svc.UpdateStatus.CompletedAt != nil {
-			completedSec = float64(svc.UpdateStatus.CompletedAt.Unix())
+		if service.UpdateStatus.CompletedAt != nil {
+			completedSeconds = float64(service.UpdateStatus.CompletedAt.Unix())
 		}
 	}
 
-	serviceUpdateStartedTs.With(base).Set(startedSec)
-	serviceUpdateCompletedTs.With(base).Set(completedSec)
+	serviceUpdateStartedTimestamp.With(baseLabels).Set(startedSeconds)
+	serviceUpdateCompletedTimestamp.With(baseLabels).Set(completedSeconds)
 }
 
 // ClearServiceUpdateMetrics deletes all series for a removed service.
 func ClearServiceUpdateMetrics(metadata serviceMetadata) {
-	if serviceUpdateStateGauge == nil || serviceUpdateStartedTs == nil ||
-		serviceUpdateCompletedTs == nil {
+	if serviceUpdateStateGauge == nil || serviceUpdateStartedTimestamp == nil ||
+		serviceUpdateCompletedTimestamp == nil {
 		serviceUpdateMetricsInitWarnOnce.Do(func() {
 			logger.L().Error("service update metrics not configured before use; skipping clear")
 		})
@@ -183,30 +178,28 @@ func ClearServiceUpdateMetrics(metadata serviceMetadata) {
 		return
 	}
 
-	base := labelsForService(metadata)
-
-	knownStates := []string{
-		updateStateUpdating,
-		updateStateCompleted,
-		updateStatePaused,
-		updateStateRollbackStarted,
-		updateStateRollbackCompleted,
-	}
+	baseLabels := labelsForService(metadata)
 
 	// Delete state series (one per known state)
-	for i := range knownStates {
-		state := knownStates[i]
-
-		labels := make(prometheus.Labels, len(base)+1)
-		for k, v := range base {
-			labels[k] = v
-		}
-
-		labels["state"] = state
-		_ = serviceUpdateStateGauge.Delete(labels)
+	for index := range knownStates {
+		state := knownStates[index]
+		labelsWithState := cloneLabelsWithState(baseLabels, state)
+		_ = serviceUpdateStateGauge.Delete(labelsWithState)
 	}
 
 	// Delete timestamp series
-	_ = serviceUpdateStartedTs.Delete(base)
-	_ = serviceUpdateCompletedTs.Delete(base)
+	_ = serviceUpdateStartedTimestamp.Delete(baseLabels)
+	_ = serviceUpdateCompletedTimestamp.Delete(baseLabels)
+}
+
+// cloneLabelsWithState returns a copy of baseLabels with the "state" label set.
+func cloneLabelsWithState(baseLabels prometheus.Labels, state string) prometheus.Labels {
+	labels := make(prometheus.Labels, len(baseLabels)+1)
+	for key, value := range baseLabels {
+		labels[key] = value
+	}
+
+	labels["state"] = state
+
+	return labels
 }

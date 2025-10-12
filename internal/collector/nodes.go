@@ -16,8 +16,8 @@ var nodesByStateGauge *prometheus.GaugeVec
 // ConfigureNodesByStateGauge registers swarm_cluster_nodes_by_state.
 func ConfigureNodesByStateGauge() {
 	nodesByStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "cluster",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusClusterSubsystem,
 		Name:        "nodes_by_state",
 		Help:        "Number of Swarm nodes grouped by role, availability, and status.",
 		ConstLabels: nil,

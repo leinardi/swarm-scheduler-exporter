@@ -16,8 +16,8 @@ var (
 // ConfigureExporterOpsMetrics registers exporter self-observability metrics.
 func ConfigureExporterOpsMetrics() {
 	pollDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "swarm",
-		Subsystem: "exporter",
+		Namespace: prometheusNamespace,
+		Subsystem: prometheusExporterSubsystem,
 		Name:      "poll_duration_seconds",
 		Help:      "Duration of replicas-state polling, in seconds.",
 		// Use Prometheus default buckets to avoid magic-number lints and to be generally useful.
@@ -27,8 +27,8 @@ func ConfigureExporterOpsMetrics() {
 	prometheus.MustRegister(pollDurationHistogram)
 
 	pollsTotalCounter = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace:   "swarm",
-		Subsystem:   "exporter",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
 		Name:        "polls_total",
 		Help:        "Total number of replicas-state polls attempted.",
 		ConstLabels: nil,
@@ -36,8 +36,8 @@ func ConfigureExporterOpsMetrics() {
 	prometheus.MustRegister(pollsTotalCounter)
 
 	pollErrorsTotalCounter = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace:   "swarm",
-		Subsystem:   "exporter",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
 		Name:        "poll_errors_total",
 		Help:        "Total number of replicas-state polls that resulted in error.",
 		ConstLabels: nil,
@@ -45,8 +45,8 @@ func ConfigureExporterOpsMetrics() {
 	prometheus.MustRegister(pollErrorsTotalCounter)
 
 	eventsReconnectsTotalCounter = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace:   "swarm",
-		Subsystem:   "exporter",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
 		Name:        "events_reconnects_total",
 		Help:        "Total number of event stream reconnects.",
 		ConstLabels: nil,
@@ -55,12 +55,12 @@ func ConfigureExporterOpsMetrics() {
 }
 
 // ObservePollDuration records a single poll duration.
-func ObservePollDuration(d time.Duration) {
+func ObservePollDuration(duration time.Duration) {
 	if pollDurationHistogram == nil {
 		return
 	}
 
-	pollDurationHistogram.Observe(d.Seconds())
+	pollDurationHistogram.Observe(duration.Seconds())
 }
 
 // IncPolls increments the total polls counter.

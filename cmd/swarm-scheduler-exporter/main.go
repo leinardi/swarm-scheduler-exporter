@@ -41,17 +41,17 @@ type stringSlice []string
 var ErrEmptyFlagValue = errors.New("empty flag value")
 
 // String returns the flag value in a human-friendly form.
-func (i *stringSlice) String() string {
-	return fmt.Sprint(*i)
+func (values *stringSlice) String() string {
+	return fmt.Sprint(*values)
 }
 
 // Set implements flag.Value for stringSlice by appending non-empty values.
-func (i *stringSlice) Set(value string) error {
+func (values *stringSlice) Set(value string) error {
 	if value == "" {
 		return ErrEmptyFlagValue
 	}
 
-	*i = append(*i, value)
+	*values = append(*values, value)
 
 	return nil
 }
@@ -76,9 +76,9 @@ var (
 // usage prints flag usage to stdout. We avoid fmt.Print* linters by
 // writing to an explicit writer and by setting the flag package's output.
 func usage() {
-	w := os.Stdout
-	_, _ = fmt.Fprintf(w, "Usage of %s:\n", os.Args[0])
-	flag.CommandLine.SetOutput(w)
+	outWriter := os.Stdout
+	_, _ = fmt.Fprintf(outWriter, "Usage of %s:\n", os.Args[0])
+	flag.CommandLine.SetOutput(outWriter)
 	flag.PrintDefaults()
 }
 
@@ -108,10 +108,10 @@ func run() int {
 
 	// Configure slog logger according to flags.
 	_ = logger.Configure(*logFormat, *logLevel, *logTime)
-	log := logger.L()
+	loggerInstance := logger.L()
 
 	// Log version info for diagnostics and to keep ldflags-injected vars "used".
-	log.Info("swarm-scheduler-exporter starting",
+	loggerInstance.Info("swarm-scheduler-exporter starting",
 		"version", version,
 		"commit", commit,
 		"date", date,
@@ -120,7 +120,7 @@ func run() int {
 	// Validate + set custom labels
 	validateErr := validateAndSetCustomLabels([]string(customLabels))
 	if validateErr != nil {
-		log.Error("invalid custom labels", "err", validateErr)
+		loggerInstance.Error("invalid custom labels", "err", validateErr)
 
 		return 1
 	}
@@ -134,40 +134,44 @@ func run() int {
 	collector.ConfigureServiceUpdateMetrics()
 
 	// Root context canceled on SIGINT/SIGTERM
-	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	rootContext, cancelRoot := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGINT,
+		syscall.SIGTERM,
+	)
+	defer cancelRoot()
 
 	// Docker client is configured from environment variables (DOCKER_HOST, etc.).
-	cli, newClientErr := client.NewClientWithOpts(client.FromEnv)
+	dockerClient, newClientErr := client.NewClientWithOpts(client.FromEnv)
 	if newClientErr != nil {
-		log.Error("docker client init failed", "err", newClientErr)
+		loggerInstance.Error("docker client init failed", "err", newClientErr)
 
 		return 1
 	}
-	defer cli.Close()
+	defer dockerClient.Close()
 
-	cli.NegotiateAPIVersion(rootCtx)
+	dockerClient.NegotiateAPIVersion(rootContext)
 
-	// wg to wait for goroutines (event listener + poller)
-	var workers sync.WaitGroup
-	startEventListener(rootCtx, &workers, cli)
-	startPoller(rootCtx, &workers, cli, *pollDelay)
-	startHealthUpdater(rootCtx, &workers, *pollDelay)
+	// WaitGroup to wait for goroutines (event listener + poller + health updater).
+	var workerGroup sync.WaitGroup
+	startEventListener(rootContext, &workerGroup, dockerClient)
+	startPoller(rootContext, &workerGroup, dockerClient, *pollDelay)
+	startHealthUpdater(rootContext, &workerGroup, *pollDelay)
 
 	// HTTP server with sane timeouts + graceful shutdown.
 	isHealthy := func() (bool, string) {
 		return collector.HealthSnapshot(*pollDelay, time.Now())
 	}
-	mux := server.NewMuxWithHealth(isHealthy)
+	httpMux := server.NewMuxWithHealth(isHealthy)
 
-	runErr := runHTTPServer(rootCtx, *listenAddr, mux)
-	if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) &&
-		!errors.Is(runErr, context.Canceled) {
-		log.Error("http server error", "err", runErr)
+	runError := runHTTPServer(rootContext, *listenAddr, httpMux)
+	if runError != nil && !errors.Is(runError, http.ErrServerClosed) &&
+		!errors.Is(runError, context.Canceled) {
+		loggerInstance.Error("http server error", "err", runError)
 	}
 
 	// Wait for workers to exit.
-	workers.Wait()
+	workerGroup.Wait()
 
 	return 0
 }
@@ -190,82 +194,98 @@ func validateAndSetCustomLabels(rawKeys []string) error {
 	return nil
 }
 
-func startEventListener(ctx context.Context, wg *sync.WaitGroup, cli *client.Client) {
-	wg.Add(1)
+func startEventListener(
+	parentContext context.Context,
+	waitGroup *sync.WaitGroup,
+	dockerClient *client.Client,
+) {
+	waitGroup.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer waitGroup.Done()
 
-		log := logger.L()
+		loggerInstance := logger.L()
 
 		// Init now returns an anchor to use as the initial "since" for events.
-		initialSinceAnchor, initErr := collector.InitDesiredReplicasGauge(ctx, cli)
+		initialSinceAnchor, initErr := collector.InitDesiredReplicasGauge(
+			parentContext,
+			dockerClient,
+		)
 		if initErr != nil {
-			log.Error("InitDesiredReplicasGauge failed", "err", initErr)
+			loggerInstance.Error("InitDesiredReplicasGauge failed", "err", initErr)
 			// If this fails, there is no point continuing.
 			return
 		}
 
-		listenErr := collector.ListenSwarmEvents(ctx, cli, initialSinceAnchor)
+		listenErr := collector.ListenSwarmEvents(parentContext, dockerClient, initialSinceAnchor)
 		if listenErr != nil && !errors.Is(listenErr, context.Canceled) {
-			log.Error("event listener exited with error", "err", listenErr)
+			loggerInstance.Error("event listener exited with error", "err", listenErr)
 		}
 	}()
 }
 
-func startPoller(ctx context.Context, wg *sync.WaitGroup, cli *client.Client, delay time.Duration) {
-	wg.Add(1)
+func startPoller(
+	parentContext context.Context,
+	waitGroup *sync.WaitGroup,
+	dockerClient *client.Client,
+	delay time.Duration,
+) {
+	waitGroup.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer waitGroup.Done()
 
-		log := logger.L()
-		log.Debug("start polling replicas state", "every", delay)
+		loggerInstance := logger.L()
+		loggerInstance.Debug("start polling replicas state", "every", delay)
 
 		ticker := time.NewTicker(delay)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-ctx.Done():
-				log.Debug("polling loop: context canceled")
+			case <-parentContext.Done():
+				loggerInstance.Debug("polling loop: context canceled")
 
 				return
 			case <-ticker.C:
 			}
 
-			log.Debug("polling replicas state")
+			loggerInstance.Debug("polling replicas state")
 
 			startTime := time.Now()
-			polled, pollErr := collector.PollReplicasState(ctx, cli)
+			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerClient)
 			collector.ObservePollDuration(time.Since(startTime))
 			collector.IncPolls()
 
 			if pollErr != nil {
 				collector.IncPollErrors()
-				log.Error("poll replicas state failed", "err", pollErr)
+				loggerInstance.Error("poll replicas state failed", "err", pollErr)
 
 				continue
 			}
 
-			collector.UpdateReplicasStateGauge(polled)
+			collector.UpdateReplicasStateGauge(polledStates)
 			collector.MarkPollOK(time.Now())
 		}
 	}()
 }
 
-func startHealthUpdater(ctx context.Context, wg *sync.WaitGroup, delay time.Duration) {
-	wg.Add(1)
+func startHealthUpdater(
+	parentContext context.Context,
+	waitGroup *sync.WaitGroup,
+	delay time.Duration,
+) {
+	waitGroup.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer waitGroup.Done()
 
 		ticker := time.NewTicker(healthTickInterval)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-ctx.Done():
+			case <-parentContext.Done():
 				return
 			case <-ticker.C:
 				healthy, _ := collector.HealthSnapshot(delay, time.Now())
@@ -275,39 +295,39 @@ func startHealthUpdater(ctx context.Context, wg *sync.WaitGroup, delay time.Dura
 	}()
 }
 
-func runHTTPServer(ctx context.Context, addr string, handler http.Handler) error {
-	var srv http.Server
+func runHTTPServer(parentContext context.Context, address string, handler http.Handler) error {
+	httpServer := &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
-	srv.Addr = addr
-	srv.Handler = handler
-	srv.ReadHeaderTimeout = 5 * time.Second
-	srv.ReadTimeout = 10 * time.Second
-	srv.WriteTimeout = 15 * time.Second
-	srv.IdleTimeout = 60 * time.Second
-
-	errCh := make(chan error, 1)
+	errorChannel := make(chan error, 1)
 
 	go func() {
-		errCh <- srv.ListenAndServe()
+		errorChannel <- httpServer.ListenAndServe()
 	}()
 
-	var resultErr error
+	var resultError error
 
 	select {
-	case resultErr = <-errCh:
+	case resultError = <-errorChannel:
 		// fallthrough to shutdown path
-	case <-ctx.Done():
+	case <-parentContext.Done():
 		// context canceled: proceed to shutdown
 	}
 
 	// Graceful HTTP shutdown.
-	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, httpShutdownTimeout)
+	shutdownContext, shutdownCancel := context.WithTimeout(parentContext, httpShutdownTimeout)
 	defer shutdownCancel()
 
-	shutdownErr := srv.Shutdown(shutdownCtx)
+	shutdownErr := httpServer.Shutdown(shutdownContext)
 	if shutdownErr != nil {
 		logger.L().Warn("HTTP server shutdown", "err", shutdownErr)
 	}
 
-	return resultErr
+	return resultError
 }

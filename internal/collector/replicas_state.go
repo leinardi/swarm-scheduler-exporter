@@ -18,12 +18,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Capacity hint for the per-service state map.
-const defaultStatesCapacity = 16
+const (
+	// Capacity hint for the per-service state map.
+	defaultStatesCapacity = 16
 
-// Limit for the number of service filters to attach to TaskList calls.
-// Prevents extremely large filter payloads; adjust as needed.
-const maxServicesInTaskFilter = 10000
+	// Limit for the number of service filters to attach to TaskList calls.
+	// Prevents extremely large filter payloads; adjust as needed.
+	maxServicesInTaskFilter = 10000
+)
 
 // knownTaskStates enumerates all Swarm task states we expose.
 // We iterate this list during emission to ensure exhaustive output with zeros.
@@ -48,6 +50,25 @@ var knownTaskStates = []string{
 // replicasStateGauge is the gauge vector exported at /metrics.
 var replicasStateGauge *prometheus.GaugeVec
 
+// taskCounter keeps a set of counters per Swarm task state for a given service.
+type taskCounter struct {
+	states map[string]float64
+	labels prometheus.Labels
+}
+
+// serviceCounter organizes taskCounters keyed by ServiceID (unique, avoids
+// collisions between stacks/services that share the same visible name).
+type serviceCounter map[string]taskCounter
+
+// latestKey identifies a deduplication group:
+// - replicated services → (serviceID, slot)
+// - global services     → (serviceID, nodeID).
+type latestKey struct {
+	serviceID string
+	slot      int    // for replicated; 0 for global
+	nodeID    string // for global; empty for replicated
+}
+
 // ConfigureReplicasStateGauge registers the "swarm_task_replicas_state" gauge
 // with base labels (stack, service, service_mode, state) plus any custom labels.
 func ConfigureReplicasStateGauge() {
@@ -59,8 +80,8 @@ func ConfigureReplicasStateGauge() {
 	}, getSanitizedCustomLabelNames()...)
 
 	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "task",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusTaskSubsystem,
 		Name:        "replicas_state",
 		Help:        "Number of tasks per Swarm service segmented by task state (latest per slot).",
 		ConstLabels: nil,
@@ -68,68 +89,13 @@ func ConfigureReplicasStateGauge() {
 	prometheus.MustRegister(replicasStateGauge)
 }
 
-// taskCounter keeps a set of counters per Swarm task state for a given service.
-type taskCounter struct {
-	states map[string]float64
-	labels prometheus.Labels
-}
-
-// inc increments the counter for a particular Swarm task state.
-func (tctr taskCounter) inc(state string) {
-	tctr.states[state]++
-}
-
-// serviceCounter organizes taskCounters keyed by ServiceID (unique, avoids
-// collisions between stacks/services that share the same visible name).
-type serviceCounter map[string]taskCounter
-
-// get returns the taskCounter for ServiceID, creating it if necessary.
-// labels must already contain stack/service/service_mode (+ custom labels).
-func (sctr serviceCounter) get(serviceID string, labels prometheus.Labels) taskCounter {
-	if _, ok := sctr[serviceID]; !ok {
-		sctr[serviceID] = newTaskCounter(labels)
-	}
-
-	return sctr[serviceID]
-}
-
-// newTaskCounter initializes an empty state map; we only record states that are present
-// during aggregation. Exhaustive emission (including zeros) is handled at publish-time.
-func newTaskCounter(labels map[string]string) taskCounter {
-	return taskCounter{
-		labels: labels,
-		states: make(map[string]float64, defaultStatesCapacity),
-	}
-}
-
-// latestKey identifies a deduplication group:
-// - replicated services → (serviceID, slot)
-// - global services     → (serviceID, nodeID).
-type latestKey struct {
-	serviceID string
-	slot      int    // for replicated; 0 for global
-	nodeID    string // for global; empty for replicated
-}
-
-// newerThan returns true if candidate is strictly newer than current.
-// First compare Status.Timestamp (if both non-zero), else fall back to Version.Index.
-func newerThan(candidate, current *swarm.Task) bool {
-	candidateTS := candidate.Status.Timestamp
-	currentTS := current.Status.Timestamp
-
-	// Prefer Status.Timestamp when present on both
-	if !candidateTS.IsZero() && !currentTS.IsZero() {
-		return candidateTS.After(currentTS)
-	}
-
-	// Fallback to Version.Index (monotonic increasing)
-	return candidate.Version.Index > current.Version.Index
-}
-
 // PollReplicasState lists tasks and aggregates them by state per service,
 // counting only the latest task per (service, slot) for replicated services
 // and per (service, nodeID) for global services.
-func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter, error) {
+func PollReplicasState(
+	parentContext context.Context,
+	dockerClient *client.Client,
+) (serviceCounter, error) {
 	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
 	serviceIDs := getAllServiceIDs()
 
@@ -141,12 +107,12 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 			limit = maxServicesInTaskFilter
 		}
 
-		for idx := range limit {
-			taskFilters.Add("service", serviceIDs[idx])
+		for index := range limit {
+			taskFilters.Add("service", serviceIDs[index])
 		}
 	}
 
-	tasks, listErr := cli.TaskList(ctx, types.TaskListOptions{
+	tasks, listErr := dockerClient.TaskList(parentContext, types.TaskListOptions{
 		Filters: taskFilters,
 	})
 	if listErr != nil {
@@ -156,51 +122,51 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 	// Step 1: choose the latest task per dedupe key.
 	latestByKey := make(map[latestKey]*swarm.Task)
 
-	for i := range tasks { // iterate by index to avoid copying
-		task := &tasks[i]
+	for index := range tasks { // iterate by index to avoid copying
+		task := &tasks[index]
 
 		// Ensure we have metadata cached (and skip tasks for deleted services).
-		_, labelErr := getServiceLabels(ctx, cli, task)
+		_, labelErr := getServiceLabels(parentContext, dockerClient, task)
 		if client.IsErrNotFound(labelErr) {
 			continue
 		} else if labelErr != nil {
 			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
 		}
 
-		mode, ok := getServiceModeCached(task.ServiceID)
-		if !ok {
+		mode, found := getServiceModeCached(task.ServiceID)
+		if !found {
 			// Should not happen because getServiceLabels() above populates the cache,
 			// but if it does, skip this task defensively.
 			continue
 		}
 
-		var key latestKey
-
+		var dedupeKey latestKey
 		if mode == "replicated" {
-			key = latestKey{
+			dedupeKey = latestKey{
 				serviceID: task.ServiceID,
 				slot:      task.Slot,
 				nodeID:    "",
 			}
 		} else {
 			// global services do not use slots; use NodeID instead
-			key = latestKey{
+			dedupeKey = latestKey{
 				serviceID: task.ServiceID,
 				slot:      0,
 				nodeID:    task.NodeID,
 			}
 		}
 
-		if previousTask, exists := latestByKey[key]; !exists || newerThan(task, previousTask) {
-			latestByKey[key] = task
+		if previousTask, exists := latestByKey[dedupeKey]; !exists ||
+			newerThan(task, previousTask) {
+			latestByKey[dedupeKey] = task
 		}
 	}
 
 	// Step 2: aggregate chosen tasks per serviceID into states.
-	replicas := make(serviceCounter)
+	replicasByService := make(serviceCounter)
 
 	for key, task := range latestByKey {
-		labels, labelErr := getServiceLabels(ctx, cli, task)
+		labels, labelErr := getServiceLabels(parentContext, dockerClient, task)
 		if client.IsErrNotFound(labelErr) {
 			// Service disappeared between selection and labeling; ignore.
 			continue
@@ -211,12 +177,12 @@ func PollReplicasState(ctx context.Context, cli *client.Client) (serviceCounter,
 		// Ensure label keys are Prometheus-safe (values are passed through).
 		labels = labelutil.SanitizeMetricLabels(labels)
 
-		counter := replicas.get(key.serviceID, labels)
+		counter := replicasByService.get(key.serviceID, labels)
 		counter.inc(string(task.Status.State))
-		replicas[key.serviceID] = counter
+		replicasByService[key.serviceID] = counter
 	}
 
-	return replicas, nil
+	return replicasByService, nil
 }
 
 // UpdateReplicasStateGauge writes the aggregated state counters into the
@@ -227,28 +193,67 @@ func UpdateReplicasStateGauge(counterByService serviceCounter) {
 	// Drop all previous label sets for this metric vector.
 	replicasStateGauge.Reset()
 
-	for _, taskCtr := range counterByService {
-		baseLabels := labelutil.SanitizeMetricLabels(taskCtr.labels)
+	for _, taskCounterValue := range counterByService {
+		baseLabels := labelutil.SanitizeMetricLabels(taskCounterValue.labels)
 
 		for _, state := range knownTaskStates {
 			labels := prometheus.Labels{}
-			for k, v := range baseLabels {
-				labels[k] = v
+			for keyLabel, valueLabel := range baseLabels {
+				labels[keyLabel] = valueLabel
 			}
 
 			labels["state"] = state
 
-			value := taskCtr.states[state] // zero if missing
+			value := taskCounterValue.states[state] // zero if missing
 			replicasStateGauge.With(labels).Set(value)
 		}
 	}
 }
 
+// inc increments the counter for a particular Swarm task state.
+func (counter taskCounter) inc(state string) {
+	counter.states[state]++
+}
+
+// get returns the taskCounter for ServiceID, creating it if necessary.
+// labels must already contain stack/service/service_mode (+ custom labels).
+func (byService serviceCounter) get(serviceID string, labels prometheus.Labels) taskCounter {
+	if _, ok := byService[serviceID]; !ok {
+		byService[serviceID] = newTaskCounter(labels)
+	}
+
+	return byService[serviceID]
+}
+
+// newTaskCounter initializes an empty state map; we only record states that are present
+// during aggregation. Exhaustive emission (including zeros) is handled at publish-time.
+func newTaskCounter(labels map[string]string) taskCounter {
+	return taskCounter{
+		labels: labels,
+		states: make(map[string]float64, defaultStatesCapacity),
+	}
+}
+
+// newerThan returns true if candidate is strictly newer than current.
+// First compare Status.Timestamp (if both non-zero), else fall back to Version.Index.
+func newerThan(candidate, current *swarm.Task) bool {
+	candidateTimestamp := candidate.Status.Timestamp
+	currentTimestamp := current.Status.Timestamp
+
+	// Prefer Status.Timestamp when present on both
+	if !candidateTimestamp.IsZero() && !currentTimestamp.IsZero() {
+		return candidateTimestamp.After(currentTimestamp)
+	}
+
+	// Fallback to Version.Index (monotonic increasing)
+	return candidate.Version.Index > current.Version.Index
+}
+
 // getServiceLabels returns label values for a task's parent service,
 // populating the local metadata cache if necessary.
 func getServiceLabels(
-	ctx context.Context,
-	cli *client.Client,
+	parentContext context.Context,
+	dockerClient *client.Client,
 	task *swarm.Task,
 ) (prometheus.Labels, error) {
 	serviceID := task.ServiceID
@@ -268,11 +273,15 @@ func getServiceLabels(
 	}
 
 	// Slow path: inspect and cache
-	service, _, err := cli.ServiceInspectWithRaw(ctx, serviceID, types.ServiceInspectOptions{
-		InsertDefaults: false,
-	})
-	if err != nil {
-		return map[string]string{}, fmt.Errorf("service inspect %s: %w", serviceID, err)
+	service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
+		parentContext,
+		serviceID,
+		types.ServiceInspectOptions{
+			InsertDefaults: false,
+		},
+	)
+	if inspectErr != nil {
+		return map[string]string{}, fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
 	}
 
 	metadata := buildMetadata(&service)

@@ -19,21 +19,21 @@ import (
 //
 // If includeTime is true, it prefixes: time=... level=INFO ...
 type PlainTextHandler struct {
-	out         io.Writer
-	leveler     slog.Leveler
-	includeTime bool
+	outputWriter io.Writer
+	leveler      slog.Leveler
+	includeTime  bool
 
 	// state captured by With/WithGroup
-	prefixAttrs []slog.Attr
-	groups      []string
+	prefixAttributes []slog.Attr
+	groups           []string
 
 	// single-writer lock to avoid interleaving — pointer so copies share the same lock
-	mu *sync.Mutex
+	mutex *sync.Mutex
 }
 
-func newPlainTextHandler(out io.Writer, level slog.Leveler, includeTime bool) *PlainTextHandler {
-	if out == nil {
-		out = os.Stdout
+func newPlainTextHandler(output io.Writer, level slog.Leveler, includeTime bool) *PlainTextHandler {
+	if output == nil {
+		output = os.Stdout
 	}
 
 	if level == nil {
@@ -41,62 +41,64 @@ func newPlainTextHandler(out io.Writer, level slog.Leveler, includeTime bool) *P
 	}
 
 	return &PlainTextHandler{
-		out:         out,
-		leveler:     level,
-		includeTime: includeTime,
-		mu:          &sync.Mutex{},
+		outputWriter:     output,
+		leveler:          level,
+		includeTime:      includeTime,
+		mutex:            &sync.Mutex{},
+		prefixAttributes: nil,
+		groups:           nil,
 	}
 }
 
-func (h *PlainTextHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.leveler.Level()
+func (handler *PlainTextHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= handler.leveler.Level()
 }
 
 // Handle writes a single log record in the "plain" format.
 //
 //nolint:gocritic // slog.Handler requires slog.Record by value; cannot change the signature.
-func (h *PlainTextHandler) Handle(_ context.Context, rec slog.Record) error {
-	var buf bytes.Buffer
+func (handler *PlainTextHandler) Handle(_ context.Context, record slog.Record) error {
+	var buffer bytes.Buffer
 
 	// Optional time first (same position as TextHandler)
-	if h.includeTime && !rec.Time.IsZero() {
-		buf.WriteString("time=")
-		buf.WriteString(rec.Time.Format(time.RFC3339Nano))
-		buf.WriteByte(' ')
+	if handler.includeTime && !record.Time.IsZero() {
+		buffer.WriteString("time=")
+		buffer.WriteString(record.Time.Format(time.RFC3339Nano))
+		buffer.WriteByte(' ')
 	}
 
 	// Level
-	buf.WriteString("level=")
-	buf.WriteString(levelToUpper(rec.Level))
+	buffer.WriteString("level=")
+	buffer.WriteString(levelToUpper(record.Level))
 
 	// Message as raw text, WITHOUT msg= wrapper
-	if rec.Message != "" {
-		buf.WriteByte(' ')
-		buf.WriteString(rec.Message)
+	if record.Message != "" {
+		buffer.WriteByte(' ')
+		buffer.WriteString(record.Message)
 	}
 
 	// Pre-resolved prefix attrs (from With)
-	if len(h.prefixAttrs) > 0 {
-		for i := range h.prefixAttrs {
-			writeAttrKV(&buf, qualify(h.groups, h.prefixAttrs[i]))
+	if len(handler.prefixAttributes) > 0 {
+		for index := range handler.prefixAttributes {
+			writeAttrKV(&buffer, qualify(handler.groups, handler.prefixAttributes[index]))
 		}
 	}
 
 	// Record attrs
-	if rec.NumAttrs() > 0 {
-		rec.Attrs(func(attr slog.Attr) bool {
-			writeAttrKV(&buf, qualify(h.groups, attr))
+	if record.NumAttrs() > 0 {
+		record.Attrs(func(attribute slog.Attr) bool {
+			writeAttrKV(&buffer, qualify(handler.groups, attribute))
 
 			return true
 		})
 	}
 
 	// Final newline
-	buf.WriteByte('\n')
+	buffer.WriteByte('\n')
 
-	h.mu.Lock()
-	_, writeErr := h.out.Write(buf.Bytes())
-	h.mu.Unlock()
+	handler.mutex.Lock()
+	_, writeErr := handler.outputWriter.Write(buffer.Bytes())
+	handler.mutex.Unlock()
 
 	if writeErr != nil {
 		return fmt.Errorf("plain handler write: %w", writeErr)
@@ -105,39 +107,41 @@ func (h *PlainTextHandler) Handle(_ context.Context, rec slog.Record) error {
 	return nil
 }
 
-func (h *PlainTextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	if len(attrs) == 0 {
-		return h
+func (handler *PlainTextHandler) WithAttrs(attributes []slog.Attr) slog.Handler {
+	if len(attributes) == 0 {
+		return handler
 	}
 
 	// Copy-on-write to keep original immutable
-	cp := *h // safe: mu is a pointer so lock isn't copied
-	cp.prefixAttrs = append(append([]slog.Attr(nil), h.prefixAttrs...), attrs...)
+	copyHandler := *handler // safe: mutex is a pointer so lock isn't copied
+	copyHandler.prefixAttributes = append(
+		append([]slog.Attr(nil), handler.prefixAttributes...),
+		attributes...)
 
-	return &cp
+	return &copyHandler
 }
 
-func (h *PlainTextHandler) WithGroup(name string) slog.Handler {
+func (handler *PlainTextHandler) WithGroup(name string) slog.Handler {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return h
+		return handler
 	}
 
-	cp := *h // safe: mu is a pointer so lock isn't copied
-	cp.groups = append(append([]string(nil), h.groups...), name)
+	copyHandler := *handler // safe: mutex is a pointer so lock isn't copied
+	copyHandler.groups = append(append([]string(nil), handler.groups...), name)
 
-	return &cp
+	return &copyHandler
 }
 
 // --- helpers ---
 
-func levelToUpper(levelVal slog.Level) string {
+func levelToUpper(levelValue slog.Level) string {
 	switch {
-	case levelVal <= slog.LevelDebug:
+	case levelValue <= slog.LevelDebug:
 		return "DEBUG"
-	case levelVal == slog.LevelInfo:
+	case levelValue == slog.LevelInfo:
 		return "INFO"
-	case levelVal == slog.LevelWarn:
+	case levelValue == slog.LevelWarn:
 		return "WARN"
 	default:
 		return "ERROR"
@@ -145,51 +149,51 @@ func levelToUpper(levelVal slog.Level) string {
 }
 
 // qualify applies nested group prefixes (e.g., group1.group2.key).
-func qualify(groups []string, attr slog.Attr) slog.Attr {
-	attr.Value = attr.Value.Resolve()
+func qualify(groups []string, attribute slog.Attr) slog.Attr {
+	attribute.Value = attribute.Value.Resolve()
 	if len(groups) == 0 {
-		return attr
+		return attribute
 	}
 
 	qualified := strings.Join(groups, ".")
-	if attr.Key != "" {
-		qualified += "." + attr.Key
+	if attribute.Key != "" {
+		qualified += "." + attribute.Key
 	}
 
-	return slog.Attr{Key: qualified, Value: attr.Value}
+	return slog.Attr{Key: qualified, Value: attribute.Value}
 }
 
 // writeAttrKV writes: " key=value" (note the leading space).
-func writeAttrKV(buf *bytes.Buffer, attr slog.Attr) {
+func writeAttrKV(buffer *bytes.Buffer, attribute slog.Attr) {
 	// Skip empty attrs
-	if attr.Equal(slog.Attr{}) || attr.Key == "" {
+	if attribute.Equal(slog.Attr{}) || attribute.Key == "" {
 		return
 	}
 
-	writeKV(buf, attr.Key, attr.Value.Resolve(), true /*leadingSpace*/)
+	writeKV(buffer, attribute.Key, attribute.Value.Resolve(), true /* includeLeadingSpace */)
 }
 
 // emitKVInsideBraces writes: "key=value" (NO leading space).
-func emitKVInsideBraces(buf *bytes.Buffer, attr slog.Attr) {
+func emitKVInsideBraces(buffer *bytes.Buffer, attribute slog.Attr) {
 	// Skip empty attrs
-	if attr.Equal(slog.Attr{}) || attr.Key == "" {
+	if attribute.Equal(slog.Attr{}) || attribute.Key == "" {
 		return
 	}
 
-	writeKV(buf, attr.Key, attr.Value.Resolve(), false /*leadingSpace*/)
+	writeKV(buffer, attribute.Key, attribute.Value.Resolve(), false /* includeLeadingSpace */)
 }
 
 // writeKV is the single entry point that writes a key/value pair, optionally
 // with a leading space. It handles all slog kinds, including groups.
 // This consolidates the logic used by both writeAttrKV and emitKVInsideBraces.
-func writeKV(buf *bytes.Buffer, key string, val slog.Value, leadingSpace bool) {
-	if leadingSpace {
-		buf.WriteByte(' ')
+func writeKV(buffer *bytes.Buffer, key string, value slog.Value, includeLeadingSpace bool) {
+	if includeLeadingSpace {
+		buffer.WriteByte(' ')
 	}
 
-	writeKeyEq(buf, key)
+	writeKeyEq(buffer, key)
 
-	switch val.Kind() {
+	switch value.Kind() {
 	case slog.KindString,
 		slog.KindInt64,
 		slog.KindUint64,
@@ -198,103 +202,103 @@ func writeKV(buf *bytes.Buffer, key string, val slog.Value, leadingSpace bool) {
 		slog.KindTime,
 		slog.KindDuration,
 		slog.KindAny:
-		writeScalarValue(buf, val)
+		writeScalarValue(buffer, value)
 
 	case slog.KindLogValuer:
 		// Resolve and re-emit
-		resolved := val.Resolve()
-		writeKV(buf, key, resolved, leadingSpace) // recurse on resolved kind
+		resolved := value.Resolve()
+		writeKV(buffer, key, resolved, includeLeadingSpace) // recurse on resolved kind
 
 	case slog.KindGroup:
-		groupAttrs := val.Group()
+		groupAttributes := value.Group()
 		// Empty group -> {}
-		writeGroupBraced(buf, key, groupAttrs)
+		writeGroupBraced(buffer, key, groupAttributes)
 
 	default:
 		// Future-proof fallback
-		fmt.Fprint(buf, val.Any())
+		fmt.Fprint(buffer, value.Any())
 	}
 }
 
 // writeKeyEq writes "key=" without any whitespace decisions.
-func writeKeyEq(buf *bytes.Buffer, key string) {
-	buf.WriteString(key)
-	buf.WriteByte('=')
+func writeKeyEq(buffer *bytes.Buffer, key string) {
+	buffer.WriteString(key)
+	buffer.WriteByte('=')
 }
 
 // writeScalarValue writes non-group kinds.
-func writeScalarValue(buf *bytes.Buffer, val slog.Value) {
-	switch val.Kind() {
+func writeScalarValue(buffer *bytes.Buffer, value slog.Value) {
+	switch value.Kind() {
 	case slog.KindString:
-		str := val.String()
-		if strings.ContainsAny(str, " \t") {
-			buf.WriteByte('"')
-			buf.WriteString(strings.ReplaceAll(str, `"`, `\"`))
-			buf.WriteByte('"')
+		text := value.String()
+		if strings.ContainsAny(text, " \t") {
+			buffer.WriteByte('"')
+			buffer.WriteString(strings.ReplaceAll(text, `"`, `\"`))
+			buffer.WriteByte('"')
 		} else {
-			buf.WriteString(str)
+			buffer.WriteString(text)
 		}
 	case slog.KindInt64:
-		buf.WriteString(strconv.FormatInt(val.Int64(), 10))
+		buffer.WriteString(strconv.FormatInt(value.Int64(), 10))
 	case slog.KindUint64:
-		buf.WriteString(strconv.FormatUint(val.Uint64(), 10))
+		buffer.WriteString(strconv.FormatUint(value.Uint64(), 10))
 	case slog.KindFloat64:
-		buf.WriteString(strconv.FormatFloat(val.Float64(), 'g', -1, 64))
+		buffer.WriteString(strconv.FormatFloat(value.Float64(), 'g', -1, 64))
 	case slog.KindBool:
-		if val.Bool() {
-			buf.WriteString("true")
+		if value.Bool() {
+			buffer.WriteString("true")
 		} else {
-			buf.WriteString("false")
+			buffer.WriteString("false")
 		}
 	case slog.KindTime:
-		t := val.Time()
-		if t.IsZero() {
-			buf.WriteString("0")
+		timestamp := value.Time()
+		if timestamp.IsZero() {
+			buffer.WriteString("0")
 		} else {
-			buf.WriteString(t.Format(time.RFC3339Nano))
+			buffer.WriteString(timestamp.Format(time.RFC3339Nano))
 		}
 	case slog.KindDuration:
-		buf.WriteString(val.Duration().String())
+		buffer.WriteString(value.Duration().String())
 	case slog.KindAny:
-		fmt.Fprint(buf, val.Any())
+		fmt.Fprint(buffer, value.Any())
 	case slog.KindLogValuer:
 		// Resolve and re-emit via scalar path.
-		writeScalarValue(buf, val.Resolve())
+		writeScalarValue(buffer, value.Resolve())
 	case slog.KindGroup:
 		// Groups are handled by callers; emit a compact placeholder here.
-		buf.WriteString("{}")
+		buffer.WriteString("{}")
 	default:
 		// Should not happen (callers route other kinds), keep safe:
-		fmt.Fprint(buf, val.Any())
+		fmt.Fprint(buffer, value.Any())
 	}
 }
 
 // writeGroupBraced writes group as: key={a=1 b="two"} with child keys flattened
 // under the parent key (e.g., key.a=..., key.b=...).
-func writeGroupBraced(buf *bytes.Buffer, parentKey string, groupAttrs []slog.Attr) {
+func writeGroupBraced(buffer *bytes.Buffer, parentKey string, groupAttributes []slog.Attr) {
 	// We've already written "key=" outside; now write braces content.
-	if len(groupAttrs) == 0 {
-		buf.WriteString("{}")
+	if len(groupAttributes) == 0 {
+		buffer.WriteString("{}")
 
 		return
 	}
 
-	buf.WriteByte('{')
+	buffer.WriteByte('{')
 
-	for i := range groupAttrs {
-		if i > 0 {
-			buf.WriteByte(' ')
+	for index := range groupAttributes {
+		if index > 0 {
+			buffer.WriteByte(' ')
 		}
 
-		child := groupAttrs[i]
+		child := groupAttributes[index]
 
 		qualifiedKey := parentKey
 		if child.Key != "" {
 			qualifiedKey += "." + child.Key
 		}
 
-		emitKVInsideBraces(buf, slog.Attr{Key: qualifiedKey, Value: child.Value.Resolve()})
+		emitKVInsideBraces(buffer, slog.Attr{Key: qualifiedKey, Value: child.Value.Resolve()})
 	}
 
-	buf.WriteByte('}')
+	buffer.WriteByte('}')
 }

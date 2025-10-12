@@ -13,6 +13,22 @@ import (
 // but we don't have cached labels/metadata for it (should be rare).
 var ErrNoCachedMetadata = errors.New("no cached metadata found for removed service")
 
+// customLabelDef pairs the raw service label key with its sanitized Prometheus label name.
+type customLabelDef struct {
+	raw       string
+	sanitized string
+}
+
+// serviceMetadata is immutable data we keep per service to populate metric labels.
+type serviceMetadata struct {
+	stack        string            // Docker stack name from label "com.docker.stack.namespace"
+	service      string            // Service visible name (Annotations.Name)
+	serviceMode  string            // "replicated" or "global"
+	customLabels map[string]string // key: sanitized name; value: service label value
+}
+
+// --- Package-level state (protected by locks) ---
+
 var (
 	// metadataCache stores service metadata (stack, service name, mode, custom labels)
 	// keyed by Docker ServiceID. Protected by metadataMu.
@@ -26,15 +42,20 @@ var (
 	cachedNodes []swarm.Node
 )
 
+// customLabelDefs holds the list of user-requested custom labels as raw+sanitized pairs.
+var customLabelDefs []customLabelDef
+
+// --- Nodes snapshot management ---
+
 // setCachedNodes replaces the node snapshot.
 func setCachedNodes(nodes []swarm.Node) {
 	nodesMu.Lock()
-	// copy to avoid sharing memory with the Docker client slice
+	defer nodesMu.Unlock()
+
+	// Copy to avoid sharing memory with the Docker client slice.
 	dst := make([]swarm.Node, len(nodes))
 	copy(dst, nodes)
 	cachedNodes = dst
-
-	nodesMu.Unlock()
 }
 
 // getCachedNodes returns a copy of the last cached nodes (may be nil).
@@ -52,6 +73,8 @@ func getCachedNodes() []swarm.Node {
 	return dst
 }
 
+// --- Service metadata helpers ---
+
 // getAllServiceIDs returns a stable copy of all known service IDs from the metadata cache.
 func getAllServiceIDs() []string {
 	metadataMu.RLock()
@@ -62,8 +85,8 @@ func getAllServiceIDs() []string {
 	}
 
 	ids := make([]string, 0, len(metadataCache))
-	for sid := range metadataCache {
-		ids = append(ids, sid)
+	for serviceID := range metadataCache {
+		ids = append(ids, serviceID)
 	}
 
 	return ids
@@ -76,32 +99,23 @@ func getGlobalServiceIDs() []string {
 
 	var ids []string
 
-	for sid, md := range metadataCache {
+	for serviceID, md := range metadataCache {
 		if md.serviceMode == "global" {
-			ids = append(ids, sid)
+			ids = append(ids, serviceID)
 		}
 	}
 
 	return ids
 }
 
-// customLabelDef pairs the raw service label key with its sanitized Prometheus label name.
-type customLabelDef struct {
-	raw       string
-	sanitized string
-}
-
-// customLabelDefs holds the list of user-requested custom labels as raw+sanitized pairs.
-var customLabelDefs []customLabelDef
-
 // SetCustomLabels records both the raw keys (as they appear in Swarm) and their sanitized names.
 // rawKeys and sanitizedKeys must have the same length and aligned order.
 func SetCustomLabels(rawKeys, sanitizedKeys []string) {
 	defs := make([]customLabelDef, 0, len(rawKeys))
-	for i := range rawKeys {
+	for index := range rawKeys {
 		defs = append(defs, customLabelDef{
-			raw:       rawKeys[i],
-			sanitized: sanitizedKeys[i],
+			raw:       rawKeys[index],
+			sanitized: sanitizedKeys[index],
 		})
 	}
 
@@ -111,19 +125,11 @@ func SetCustomLabels(rawKeys, sanitizedKeys []string) {
 // getSanitizedCustomLabelNames returns the sanitized label names for metric definitions.
 func getSanitizedCustomLabelNames() []string {
 	out := make([]string, 0, len(customLabelDefs))
-	for i := range customLabelDefs {
-		out = append(out, customLabelDefs[i].sanitized)
+	for index := range customLabelDefs {
+		out = append(out, customLabelDefs[index].sanitized)
 	}
 
 	return out
-}
-
-// serviceMetadata is immutable data we keep per service to populate metric labels.
-type serviceMetadata struct {
-	stack        string            // Docker stack name from label "com.docker.stack.namespace"
-	service      string            // Service visible name (Annotations.Name)
-	serviceMode  string            // "replicated" or "global"
-	customLabels map[string]string // key: sanitized name; value: service label value
 }
 
 // buildMetadata constructs serviceMetadata from a Swarm service definition.
@@ -135,17 +141,18 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 		customLabels: make(map[string]string, len(customLabelDefs)),
 	}
 
-	for i := range customLabelDefs {
-		rawKey := customLabelDefs[i].raw
-		sanitizedKey := customLabelDefs[i].sanitized
+	for index := range customLabelDefs {
+		rawKey := customLabelDefs[index].raw
+		sanitizedKey := customLabelDefs[index].sanitized
 
 		if svc.Spec.Labels != nil {
-			if val, ok := svc.Spec.Labels[rawKey]; ok {
-				metadata.customLabels[sanitizedKey] = val
+			if value, ok := svc.Spec.Labels[rawKey]; ok {
+				metadata.customLabels[sanitizedKey] = value
 
 				continue
 			}
 		}
+
 		// Ensure the label exists even when absent on the service (exhaustive emission).
 		metadata.customLabels[sanitizedKey] = ""
 	}
@@ -167,35 +174,32 @@ func serviceMode(svc *swarm.Service) string {
 
 func setServiceMetadata(serviceID string, metadata serviceMetadata) {
 	metadataMu.Lock()
+	defer metadataMu.Unlock()
 
 	metadataCache[serviceID] = metadata
-
-	metadataMu.Unlock()
 }
 
 func getServiceMetadata(serviceID string) (serviceMetadata, bool) {
 	metadataMu.RLock()
+	defer metadataMu.RUnlock()
 
 	metadata, ok := metadataCache[serviceID]
-
-	metadataMu.RUnlock()
 
 	return metadata, ok
 }
 
 func deleteServiceMetadata(serviceID string) {
 	metadataMu.Lock()
+	defer metadataMu.Unlock()
+
 	delete(metadataCache, serviceID)
-	metadataMu.Unlock()
 }
 
 func getServiceModeCached(serviceID string) (string, bool) {
 	metadataMu.RLock()
+	defer metadataMu.RUnlock()
 
 	metadata, ok := metadataCache[serviceID]
-
-	metadataMu.RUnlock()
-
 	if !ok {
 		return "", false
 	}

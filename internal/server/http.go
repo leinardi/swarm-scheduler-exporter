@@ -3,34 +3,51 @@
 package server
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// HealthFunc returns whether the exporter is healthy and, if not, a short reason.
+type HealthFunc func() (bool, string)
+
+const (
+	metricsPath = "/metrics"
+	healthzPath = "/healthz"
+
+	okBody       = "ok\n"
+	defaultCause = "unhealthy\n"
+)
+
 // NewMuxWithHealth returns an http.ServeMux with:
 //   - /metrics bound to the Prometheus exposition endpoint
 //   - /healthz returning 200 (healthy) or 503 (unhealthy) using the provided function
-func NewMuxWithHealth(isHealthy func() (bool, string)) *http.ServeMux {
+func NewMuxWithHealth(isHealthy HealthFunc) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(respWriter http.ResponseWriter, _ *http.Request) {
+	mux.Handle(metricsPath, promhttp.Handler())
+	mux.HandleFunc(healthzPath, healthHandler(isHealthy))
+
+	return mux
+}
+
+func healthHandler(isHealthy HealthFunc) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, _ *http.Request) {
+		responseWriter.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
 		ok, reason := isHealthy()
 		if ok {
-			respWriter.WriteHeader(http.StatusOK)
-			_, _ = respWriter.Write([]byte("ok\n"))
+			responseWriter.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(responseWriter, okBody)
 
 			return
 		}
 
-		respWriter.WriteHeader(http.StatusServiceUnavailable)
-
 		if reason == "" {
-			reason = "unhealthy"
+			reason = defaultCause[:len(defaultCause)-1] // write without double newline below
 		}
 
-		_, _ = respWriter.Write([]byte(reason + "\n"))
-	})
-
-	return mux
+		responseWriter.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(responseWriter, reason+"\n")
+	}
 }

@@ -3,6 +3,7 @@
 package labels
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -21,13 +22,17 @@ const (
 	highCardinalitySampleSize = 64  // length of value sample shown in the warning log
 )
 
+// ---- High-cardinality warnings (heuristic, logged once per key) ----
+
+var warnOnce sync.Map // map[string]struct{} keyed by label key
+
 // SanitizeLabelNames converts a slice of label names into Prometheus-compatible names
 // by replacing any non [A-Za-z0-9_] with '_', and ensuring the first rune is [A-Za-z_]
 // by prefixing '_' if necessary.
-func SanitizeLabelNames(orig []string) []string {
-	dst := make([]string, 0, len(orig))
-	for _, name := range orig {
-		dst = append(dst, sanitizeName(name))
+func SanitizeLabelNames(originalNames []string) []string {
+	dst := make([]string, 0, len(originalNames))
+	for _, labelName := range originalNames {
+		dst = append(dst, sanitizeName(labelName))
 	}
 
 	return dst
@@ -35,10 +40,10 @@ func SanitizeLabelNames(orig []string) []string {
 
 // SanitizeMetricLabels converts the keys of a prometheus.Labels map into
 // Prometheus-compatible names (non-matching -> '_'). Values are passed through unchanged.
-func SanitizeMetricLabels(orig prometheus.Labels) prometheus.Labels {
-	dst := make(prometheus.Labels, len(orig))
-	for name, val := range orig {
-		dst[sanitizeName(name)] = val
+func SanitizeMetricLabels(originalLabels prometheus.Labels) prometheus.Labels {
+	dst := make(prometheus.Labels, len(originalLabels))
+	for labelName, value := range originalLabels {
+		dst[sanitizeName(labelName)] = value
 	}
 
 	return dst
@@ -46,27 +51,31 @@ func SanitizeMetricLabels(orig prometheus.Labels) prometheus.Labels {
 
 // ValidateAndSanitizeLabelNames sanitizes, then validates label names,
 // enforcing reserved-prefix rules and deduplication after sanitization.
-func ValidateAndSanitizeLabelNames(orig []string) ([]string, error) {
-	if len(orig) == 0 {
+func ValidateAndSanitizeLabelNames(originalNames []string) ([]string, error) {
+	if len(originalNames) == 0 {
 		return nil, nil
 	}
 
-	sanitized := SanitizeLabelNames(orig)
-	seen := make(map[string]struct{}, len(sanitized))
+	sanitizedNames := SanitizeLabelNames(originalNames)
+	seenNames := make(map[string]struct{}, len(sanitizedNames))
 
-	for idx := range sanitized {
-		sanitizedName := sanitized[idx]
+	for index := range sanitizedNames {
+		sanitizedName := sanitizedNames[index]
 
 		// Length bound
 		if sanitizedName == "" || len(sanitizedName) > maxLabelNameLen {
-			return nil, newLabelError("invalid label name length", orig[idx], sanitizedName)
+			return nil, newLabelError(
+				"invalid label name length",
+				originalNames[index],
+				sanitizedName,
+			)
 		}
 
 		// Reserved prefix
 		if strings.HasPrefix(sanitizedName, "__") {
 			return nil, newLabelError(
 				"label name uses reserved prefix '__'",
-				orig[idx],
+				originalNames[index],
 				sanitizedName,
 			)
 		}
@@ -75,24 +84,24 @@ func ValidateAndSanitizeLabelNames(orig []string) ([]string, error) {
 		if !isValidLabelName(sanitizedName) {
 			return nil, newLabelError(
 				"label name violates Prometheus constraints",
-				orig[idx],
+				originalNames[index],
 				sanitizedName,
 			)
 		}
 
 		// Collision after sanitization
-		if _, exists := seen[sanitizedName]; exists {
+		if _, exists := seenNames[sanitizedName]; exists {
 			return nil, newLabelError(
 				"label name collides after sanitization",
-				orig[idx],
+				originalNames[index],
 				sanitizedName,
 			)
 		}
 
-		seen[sanitizedName] = struct{}{}
+		seenNames[sanitizedName] = struct{}{}
 	}
 
-	return sanitized, nil
+	return sanitizedNames, nil
 }
 
 // ValidateCustomLabelCount enforces a maximum number of custom label keys.
@@ -103,10 +112,6 @@ func ValidateCustomLabelCount(count int) error {
 
 	return nil
 }
-
-// ---- High-cardinality warnings (heuristic, logged once per key) ----
-
-var warnOnce sync.Map // map[string]struct{} keyed by label key
 
 // MaybeWarnHighCardinality logs a one-time warning if a label value looks like a UUID,
 // long hex, or similar high-cardinality token. This does not block metric emission.
@@ -132,16 +137,16 @@ func MaybeWarnHighCardinality(labelKey, labelValue string) {
 
 // ---- internal helpers ----
 
-func sanitizeName(name string) string {
-	if name == "" {
+func sanitizeName(labelName string) string {
+	if labelName == "" {
 		return "_"
 	}
 
 	// Replace any non [A-Za-z0-9_] with '_'
 	var builder strings.Builder
-	builder.Grow(len(name))
+	builder.Grow(len(labelName))
 
-	for _, runeVal := range name {
+	for _, runeVal := range labelName {
 		if runeVal == '_' || unicode.IsLetter(runeVal) || unicode.IsDigit(runeVal) {
 			// Always emit; if first char ends up invalid (digit), we prefix '_' below.
 			builder.WriteRune(runeVal)
@@ -152,26 +157,26 @@ func sanitizeName(name string) string {
 
 	out := builder.String()
 	// Ensure first char is [A-Za-z_]
-	first := rune(out[0])
-	if first != '_' && !unicode.IsLetter(first) {
+	firstRune := rune(out[0])
+	if firstRune != '_' && !unicode.IsLetter(firstRune) {
 		out = "_" + out
 	}
 
 	return out
 }
 
-func isValidLabelName(name string) bool {
-	if name == "" {
+func isValidLabelName(labelName string) bool {
+	if labelName == "" {
 		return false
 	}
 
-	first := rune(name[0])
-	if first != '_' && !unicode.IsLetter(first) {
+	firstRune := rune(labelName[0])
+	if firstRune != '_' && !unicode.IsLetter(firstRune) {
 		return false
 	}
 
-	for _, r := range name[1:] {
-		if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+	for _, runeVal := range labelName[1:] {
+		if runeVal != '_' && !unicode.IsLetter(runeVal) && !unicode.IsDigit(runeVal) {
 			return false
 		}
 	}
@@ -179,12 +184,12 @@ func isValidLabelName(name string) bool {
 	return true
 }
 
-func truncate(input string, maxLen int) string {
-	if len(input) <= maxLen {
+func truncate(input string, maxLength int) string {
+	if len(input) <= maxLength {
 		return input
 	}
 
-	return input[:maxLen]
+	return input[:maxLength]
 }
 
 // Heuristic: detects UUID-like and long-hex tokens (common high-cardinality culprits).
@@ -213,8 +218,8 @@ func isLikelyHighCardinalityValue(value string) bool {
 	return false
 }
 
-func isHexString(s string) bool {
-	for _, ch := range s {
+func isHexString(hexString string) bool {
+	for _, ch := range hexString {
 		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
 			return false
 		}
@@ -249,29 +254,13 @@ type countError struct {
 }
 
 func (e *countError) Error() string {
-	return "too many custom labels: " + itoa(e.count) + " (max " + itoa(e.maximum) + ")"
+	return "too many custom labels: " + strconv.Itoa(
+		e.count,
+	) + " (max " + strconv.Itoa(
+		e.maximum,
+	) + ")"
 }
 
 func newCountError(count, maximum int) error {
 	return &countError{count: count, maximum: maximum}
-}
-
-// tiny itoa helper to avoid pulling strconv into this package.
-func itoa(num int) string {
-	const digits = "0123456789"
-
-	if num == 0 {
-		return "0"
-	}
-
-	var buf [20]byte // enough for 64-bit ints
-
-	pos := len(buf)
-	for num > 0 {
-		pos--
-		buf[pos] = digits[num%10]
-		num /= 10
-	}
-
-	return string(buf[pos:])
 }

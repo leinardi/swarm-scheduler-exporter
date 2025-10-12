@@ -25,8 +25,8 @@ var (
 // ConfigureHealthGauges registers the health and build info metrics.
 func ConfigureHealthGauges(version, commit, date string) {
 	exporterHealthGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "exporter",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
 		Name:        "health",
 		Help:        "Exporter health status: 1=healthy, 0=unhealthy.",
 		ConstLabels: nil,
@@ -34,8 +34,8 @@ func ConfigureHealthGauges(version, commit, date string) {
 	prometheus.MustRegister(exporterHealthGauge)
 
 	buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   "swarm",
-		Subsystem:   "exporter",
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
 		Name:        "build_info",
 		Help:        "Build information for this exporter.",
 		ConstLabels: nil,
