@@ -1,0 +1,26 @@
+---
+# Disable some built-in rules
+config:
+  fenced-code-language: false
+  line-length: false
+  no-inline-html: false
+  ul-indent:
+    indent: 4
+
+# Fix any fixable errors
+fix: true
+
+# Ignore files referenced by .gitignore (only valid at root)
+gitignore: true
+
+# Disable banner message on stdout (only valid at root)
+# noBanner: true
+
+# Disable inline config comments
+# noInlineConfig: true
+
+# Disable progress on stdout (only valid at root)
+# noProgress: true
+
+# Show found files on stdout (only valid at root)
+showFound: false
