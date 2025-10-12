@@ -36,7 +36,7 @@ repos:
         files: \.(yml|yaml)$
         args: ["--write"]
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.7
+    rev: v1.7.8
     hooks:
       - id: actionlint
         name: actionlint
@@ -49,7 +49,7 @@ repos:
         args: ["-oneline", "-shellcheck", "shellcheck -S error"]
         stages: [manual]
   - repo: https://github.com/docker-compose-linter/pre-commit-dclint
-    rev: v3.0.0
+    rev: v3.1.0
     hooks:
       - id: dclint
         language_version: 22.15.0
