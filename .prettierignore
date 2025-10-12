@@ -3,4 +3,4 @@
 .idea/*
 
 # DCLint
-# deployments/docker/compose.yaml
+deployments/docker/docker-compose.yaml

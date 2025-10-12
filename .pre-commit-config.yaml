@@ -55,6 +55,10 @@ repos:
         language_version: 22.15.0
         files: ^(?:.*/)?(?:docker-)?compose\.ya?ml$
         args: [--fix]
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.14.0
+    hooks:
+      - id: hadolint
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.37.1
     hooks:

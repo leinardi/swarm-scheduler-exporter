@@ -1,0 +1,147 @@
+name: Release swarm-scheduler-exporter
+
+on:
+  workflow_dispatch:
+    inputs:
+      semver:
+        description: "Release Semantic Version (e.g. 1.2.3 or v1.2.3)"
+        required: true
+
+permissions:
+  contents: write # create tag & release, upload assets
+  packages: write # push container image to GHCR
+
+env:
+  APP_NAME: swarm-scheduler-exporter
+  IMAGE_REPO: ghcr.io/leinardi/swarm-scheduler-exporter
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Normalize version (ensure leading v)
+        id: ver
+        run: |
+          RAW="${{ github.event.inputs.semver }}"
+          if [[ "$RAW" =~ ^v ]]; then
+            VER="$RAW"
+          else
+            VER="v${RAW}"
+          fi
+          MAJOR="${VER#v}"
+          MAJOR="${MAJOR%%.*}"
+          echo "version=$VER"        >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR"        >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
+
+      - name: Create git tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.ver.outputs.version }}';
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              ref:   `refs/tags/${version}`,
+              sha:   context.sha
+            });
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Build static binaries (linux/amd64, linux/arm64)
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ steps.ver.outputs.version }}
+          COMMIT: ${{ steps.ver.outputs.short_sha }}
+          DATE: ${{ steps.ver.outputs.build_date }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # amd64
+          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+            -ldflags="-s -w -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.date=${DATE}'" \
+            -o dist/${{ env.APP_NAME }}-linux-amd64 ./cmd/${{ env.APP_NAME }}
+          # arm64
+          GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false \
+            -ldflags="-s -w -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.date=${DATE}'" \
+            -o dist/${{ env.APP_NAME }}-linux-arm64 ./cmd/${{ env.APP_NAME }}
+
+          (cd dist && sha256sum ${{ env.APP_NAME }}-* > checksums.txt)
+
+      - name: Upload build artifacts (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ steps.ver.outputs.version }}
+          path: |
+            dist/${{ env.APP_NAME }}-linux-amd64
+            dist/${{ env.APP_NAME }}-linux-arm64
+            dist/checksums.txt
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push multi-arch image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            COMMIT=${{ steps.ver.outputs.short_sha }}
+            DATE=${{ steps.ver.outputs.build_date }}
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ steps.ver.outputs.version }}
+            ${{ env.IMAGE_REPO }}:${{ steps.ver.outputs.major }}
+            ${{ env.IMAGE_REPO }}:latest
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/${{ env.APP_NAME }}-linux-amd64
+            dist/${{ env.APP_NAME }}-linux-arm64
+            dist/checksums.txt
+
+      - name: Cleanup tag on failure
+        if: ${{ failure() || cancelled() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.ver.outputs.version }}';
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                ref:   `tags/${version}`
+              });
+            } catch (e) {
+              core.warning(`Failed to delete tag ${version}: ${e.message}`);
+            }

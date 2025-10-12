@@ -1,0 +1,61 @@
+services:
+  exporter:
+    image: ghcr.io/leinardi/swarm-scheduler-exporter:latest # dclint disable-line service-image-require-explicit-tag
+
+    # Publish metrics. In Swarm this uses routing mesh unless you use host-mode elsewhere.
+    ports:
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: ingress
+    # Minimal, explicit args. Add any other flags here.
+    command: [ "-poll-delay", "10s" ]
+    restart: unless-stopped
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+    # --- Docker client configuration (PICK ONE) ---
+    # Option A (recommended for Swarm portability): use DOCKER_HOST (TCP/TLS)
+    # Commented out by default; set via .env or your secrets manager.
+    # environment:
+    # - DOCKER_HOST=tcp://docker.example.internal:2376
+    # - DOCKER_CERT_PATH=/run/certs
+    # - DOCKER_TLS_VERIFY=1
+
+    # If using Option A, mount your TLS certs (uncomment and point to a secret/volume):
+    # volumes:
+    #   - docker-certs:/run/certs:ro
+
+    # Option B: talk to local dockerd via the Unix socket
+    # NOTE: this requires the container user to be allowed to connect to the socket.
+    # For Swarm, you can either:
+    #   1) run as root (safer if socket permissions vary across nodes), or
+    #   2) add the docker.sock GID via group_add (requires consistent GID across nodes).
+    #
+    # Uncomment ONE of the blocks below if you go with the Unix socket approach:
+    #
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+    #
+    # user: "0:0"   # ← simplest cross-node fix, but drops non-root runtime
+    #
+    # OR (if GID is known & consistent across nodes):
+    # group_add:
+    #   - "999"     # ← replace with `stat -c %g /var/run/docker.sock` value
+
+    # Security/operability hardening:
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+# Volumes for TLS certs if using DOCKER_HOST + TLS (Option A)
+#volumes:
+#  docker-certs:
+#    driver: local

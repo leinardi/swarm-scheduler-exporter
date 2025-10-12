@@ -1,3 +1,27 @@
-*
+# VCS
+.git
+.gitignore
+.gitattributes
 
-!*.go
+# CI / docs / misc
+.github
+docs
+examples
+test
+tests
+*.md
+
+# Local artifacts
+dist
+coverage.out
+coverage.html
+
+# Editor/IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Node/pip cache etc.
+node_modules
+__pycache__

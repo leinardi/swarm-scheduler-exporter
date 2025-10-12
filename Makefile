@@ -142,3 +142,74 @@ install-pre-commit: check-installed-pre-commit ## Install the git pre-commit hoo
 password: ## Generate a random 99-character password (PostgreSQL-compatible charset)
 	@echo "Generating a 99-character password (PostgreSQL compatible)..."
 	LC_ALL=C tr -dc '[[:alnum:]_.+=,-]' </dev/urandom | head -c 99; echo
+
+# ==== Docker image vars ====
+IMAGE_NAME ?= swarm-scheduler-exporter
+IMAGE_TAG  ?= $(GIT_TAG)   # e.g. v0.4.0
+IMAGE_REPO ?= $(IMAGE_NAME)
+
+# Enable BuildKit for caching and smaller layers
+export DOCKER_BUILDKIT ?= 1
+
+.PHONY: docker-build
+docker-build: ## Build the Docker image locally (same versioning as Go build)
+	@echo "Building image $(IMAGE_REPO):$(IMAGE_TAG)"
+	docker build \
+		--file deployments/docker/Dockerfile \
+		--tag $(IMAGE_REPO):$(IMAGE_TAG) \
+		--build-arg VERSION=$(GIT_TAG) \
+		--build-arg COMMIT=$(GIT_COMMIT) \
+		--build-arg DATE=$(BUILD_DATE) \
+		.
+
+# ==== Docker runtime detection ====
+# Override DOCKER_SOCK to force a path: `make docker-run DOCKER_SOCK=/run/user/1000/docker.sock`
+DOCKER_SOCK ?= $(shell \
+	if [ -S "/var/run/docker.sock" ]; then \
+		echo "/var/run/docker.sock"; \
+	elif [ -S "$$HOME/.colima/default/docker.sock" ]; then \
+		echo "$$HOME/.colima/default/docker.sock"; \
+	elif [ -S "$$HOME/.docker/run/docker.sock" ]; then \
+		echo "$$HOME/.docker/run/docker.sock"; \
+	elif [ -n "$$XDG_RUNTIME_DIR" ] && [ -S "$$XDG_RUNTIME_DIR/docker.sock" ]; then \
+		echo "$$XDG_RUNTIME_DIR/docker.sock"; \
+	else \
+		echo "/var/run/docker.sock"; \
+	fi)
+
+# Cross-platform "stat" to get the socket group id:
+# - Linux: stat -c %g
+# - macOS/BSD: stat -f %g
+SOCK_GID := $(shell \
+	if [ -S "$(DOCKER_SOCK)" ]; then \
+		if stat --version >/dev/null 2>&1; then \
+			stat -c %g "$(DOCKER_SOCK)"; \
+		else \
+			stat -f %g "$(DOCKER_SOCK)"; \
+		fi; \
+	fi)
+
+.PHONY: docker-run
+docker-run: ## Run the image locally binding the Docker socket and metrics port
+	@if [ ! -S "$(DOCKER_SOCK)" ]; then \
+		echo "ERROR: Docker socket not found at '$(DOCKER_SOCK)'."; \
+		echo "       Override with: make docker-run DOCKER_SOCK=/path/to/docker.sock"; \
+		exit 1; \
+	fi
+	@if [ -z "$(SOCK_GID)" ]; then \
+		echo "ERROR: Could not determine group id for '$(DOCKER_SOCK)'."; \
+		exit 1; \
+	fi
+	@echo "Using Docker socket: $(DOCKER_SOCK) (gid=$(SOCK_GID))"
+	docker run --rm \
+		--name $(IMAGE_NAME) \
+		--network host \
+		--group-add $(SOCK_GID) \
+		-v $(DOCKER_SOCK):/var/run/docker.sock:ro \
+		$(IMAGE_REPO):$(IMAGE_TAG) \
+		-listen-addr 0.0.0.0:8888
+
+.PHONY: docker-build-latest
+docker-build-latest: ## Build and tag as :latest (in addition to version tag)
+	$(MAKE) docker-build
+	docker tag $(IMAGE_REPO):$(IMAGE_TAG) $(IMAGE_REPO):latest
