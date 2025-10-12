@@ -162,12 +162,23 @@ func ListenSwarmEvents(
 			errorChannel,
 		)
 
-		// Update the resume point for the next connection:
-		// if we processed at least one event, resume from the timestamp
-		// of the last seen event; otherwise resume from now to avoid replaying
-		// a large historical range.
+		// Reset backoff after a healthy stream that saw at least one event
 		if !lastSeenEventTime.IsZero() {
-			// Small overlap for safety; Docker events are idempotent for our usage.
+			// We processed at least one event → consider the connection healthy.
+			// Reset backoff so the next transient failure won’t be penalized.
+			if backoffDelay != backoffInitialDelay {
+				logger.L().Debug("resetting events backoff to initial after healthy stream",
+					"previous_backoff", backoffDelay,
+					"initial_backoff", backoffInitialDelay,
+				)
+			}
+
+			backoffDelay = backoffInitialDelay
+		}
+		// -------------------------------------------------------------------------------
+
+		// Update the resume point for the next connection.
+		if !lastSeenEventTime.IsZero() {
 			reconnectSince = lastSeenEventTime.Add(-500 * time.Millisecond)
 		} else {
 			reconnectSince = time.Now().Add(-500 * time.Millisecond)

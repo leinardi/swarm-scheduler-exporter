@@ -241,18 +241,11 @@ func startPoller(
 		ticker := time.NewTicker(delay)
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-parentContext.Done():
-				loggerInstance.Debug("polling loop: context canceled")
-
-				return
-			case <-ticker.C:
-			}
-
+		// Local helper to run one full poll cycle with metrics + health.
+		pollOnce := func(now time.Time) {
 			loggerInstance.Debug("polling replicas state")
 
-			startTime := time.Now()
+			startTime := now
 			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerClient)
 			collector.ObservePollDuration(time.Since(startTime))
 			collector.IncPolls()
@@ -261,17 +254,28 @@ func startPoller(
 				collector.IncPollErrors()
 				loggerInstance.Error("poll replicas state failed", "err", pollErr)
 
-				continue
+				return
 			}
 
 			collector.UpdateReplicasStateGauge(polledStates)
-
-			now := time.Now()
 			collector.MarkPollOK(now)
 
-			// Reflect health immediately; keep the periodic ticker as a backstop.
 			healthy, _ := collector.HealthSnapshot(delay, now)
 			collector.SetExporterHealth(healthy)
+		}
+
+		// --- Immediate first poll (no waiting for the first tick) ---
+		pollOnce(time.Now())
+
+		for {
+			select {
+			case <-parentContext.Done():
+				loggerInstance.Debug("polling loop: context canceled")
+
+				return
+			case <-ticker.C:
+				pollOnce(time.Now())
+			}
 		}
 	}()
 }

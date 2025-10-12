@@ -17,8 +17,8 @@ linters:
         logger:
           deny:
             # logging is allowed only by logutils.Log,
-            # - pkg: "github.com/sirupsen/logrus"
-            #   desc: logging is allowed only by logutils.Log.
+            - pkg: "github.com/sirupsen/logrus"
+              desc: logging is allowed only by logger.L.
             - pkg: "github.com/pkg/errors"
               desc: Should be replaced by standard lib errors package.
             - pkg: "github.com/instana/testify"
