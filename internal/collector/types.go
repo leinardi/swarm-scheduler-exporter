@@ -21,10 +21,11 @@ type customLabelDef struct {
 
 // serviceMetadata is immutable data we keep per service to populate metric labels.
 type serviceMetadata struct {
-	stack        string            // Docker stack name from label "com.docker.stack.namespace"
-	service      string            // Service visible name (Annotations.Name)
-	serviceMode  string            // "replicated" or "global"
-	customLabels map[string]string // key: sanitized name; value: service label value
+	stack           string            // Docker stack name from label "com.docker.stack.namespace"
+	service         string            // Service visible name (Annotations.Name)
+	serviceMode     string            // "replicated" or "global"
+	customLabels    map[string]string // key: sanitized name; value: service label value
+	desiredReplicas float64           // last computed desired replicas for this service
 }
 
 // --- Package-level state (protected by locks) ---
@@ -205,4 +206,32 @@ func getServiceModeCached(serviceID string) (string, bool) {
 	}
 
 	return metadata.serviceMode, true
+}
+
+// setServiceDesiredReplicas updates the cached desired replicas for a service.
+func setServiceDesiredReplicas(serviceID string, desired float64) {
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+
+	metadata, ok := metadataCache[serviceID]
+	if !ok {
+		// Unknown service; nothing to update.
+		return
+	}
+
+	metadata.desiredReplicas = desired
+	metadataCache[serviceID] = metadata
+}
+
+// getServiceDesiredReplicas returns the last cached desired replicas for a service.
+func getServiceDesiredReplicas(serviceID string) (float64, bool) {
+	metadataMu.RLock()
+	defer metadataMu.RUnlock()
+
+	md, ok := metadataCache[serviceID]
+	if !ok {
+		return 0, false
+	}
+
+	return md.desiredReplicas, true
 }

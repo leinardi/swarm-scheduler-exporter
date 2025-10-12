@@ -50,6 +50,12 @@ var knownTaskStates = []string{
 // replicasStateGauge is the gauge vector exported at /metrics.
 var replicasStateGauge *prometheus.GaugeVec
 
+// runningReplicasGauge exposes the current number of running tasks per service.
+var runningReplicasGauge *prometheus.GaugeVec
+
+// atDesiredGauge exposes 1 if running_replicas == desired_replicas, else 0.
+var atDesiredGauge *prometheus.GaugeVec
+
 // taskCounter keeps a set of counters per Swarm task state for a given service.
 type taskCounter struct {
 	states map[string]float64
@@ -87,6 +93,31 @@ func ConfigureReplicasStateGauge() {
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(replicasStateGauge)
+
+	// New: running replicas (no "state" label)
+	runningBase := append([]string{
+		"stack",
+		"service",
+		"service_mode",
+	}, getSanitizedCustomLabelNames()...)
+	runningReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusServiceSubsystem,
+		Name:        "running_replicas",
+		Help:        "Current number of running tasks per Swarm service (latest per slot).",
+		ConstLabels: nil,
+	}, labelutil.SanitizeLabelNames(runningBase))
+	prometheus.MustRegister(runningReplicasGauge)
+
+	// New: at_desired (0/1)
+	atDesiredGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusServiceSubsystem,
+		Name:        "at_desired",
+		Help:        "Service is at desired replicas (1) or not (0).",
+		ConstLabels: nil,
+	}, labelutil.SanitizeLabelNames(runningBase))
+	prometheus.MustRegister(atDesiredGauge)
 }
 
 // PollReplicasState lists tasks and aggregates them by state per service,
@@ -190,12 +221,21 @@ func PollReplicasState(
 // for services that disappeared are removed. For each service present in the
 // current snapshot, it emits ALL known states, setting 0 where absent.
 func UpdateReplicasStateGauge(counterByService serviceCounter) {
-	// Drop all previous label sets for this metric vector.
+	// Drop all previous label sets for these vectors.
 	replicasStateGauge.Reset()
 
-	for _, taskCounterValue := range counterByService {
+	if runningReplicasGauge != nil {
+		runningReplicasGauge.Reset()
+	}
+
+	if atDesiredGauge != nil {
+		atDesiredGauge.Reset()
+	}
+
+	for serviceID, taskCounterValue := range counterByService {
 		baseLabels := labelutil.SanitizeMetricLabels(taskCounterValue.labels)
 
+		// Emit exhaustive per-state series.
 		for _, state := range knownTaskStates {
 			labels := prometheus.Labels{}
 			for keyLabel, valueLabel := range baseLabels {
@@ -206,6 +246,27 @@ func UpdateReplicasStateGauge(counterByService serviceCounter) {
 
 			value := taskCounterValue.states[state] // zero if missing
 			replicasStateGauge.With(labels).Set(value)
+		}
+
+		if runningReplicasGauge != nil {
+			running := taskCounterValue.states[string(swarm.TaskStateRunning)]
+			runningReplicasGauge.With(baseLabels).Set(running)
+		}
+
+		if atDesiredGauge != nil {
+			desired, ok := getServiceDesiredReplicas(serviceID)
+			// If unknown desired (should be rare), treat as not at desired.
+			atDesired := 0.0
+
+			if ok {
+				// Both are floats but represent integer counts; direct equality is fine.
+				running := taskCounterValue.states[string(swarm.TaskStateRunning)]
+				if running == desired {
+					atDesired = 1.0
+				}
+			}
+
+			atDesiredGauge.With(baseLabels).Set(atDesired)
 		}
 	}
 }

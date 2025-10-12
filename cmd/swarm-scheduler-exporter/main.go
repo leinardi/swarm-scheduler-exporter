@@ -265,7 +265,13 @@ func startPoller(
 			}
 
 			collector.UpdateReplicasStateGauge(polledStates)
-			collector.MarkPollOK(time.Now())
+
+			now := time.Now()
+			collector.MarkPollOK(now)
+
+			// Reflect health immediately; keep the periodic ticker as a backstop.
+			healthy, _ := collector.HealthSnapshot(delay, now)
+			collector.SetExporterHealth(healthy)
 		}
 	}()
 }

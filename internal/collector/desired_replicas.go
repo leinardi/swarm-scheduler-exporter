@@ -476,15 +476,18 @@ func updateServiceReplicasGauge(
 	metadata serviceMetadata,
 ) {
 	if service.Spec.Mode.Replicated != nil {
-		setDesiredReplicasGauge(metadata, float64(*service.Spec.Mode.Replicated.Replicas))
+		desired := float64(*service.Spec.Mode.Replicated.Replicas)
+		setServiceDesiredReplicas(service.ID, desired)
+		setDesiredReplicasGauge(metadata, desired)
 
 		return
 	}
 
 	// Attempt to use cached nodes if available.
 	if nodes := getCachedNodes(); len(nodes) > 0 {
-		eligible := countEligibleNodesForServiceFromNodes(nodes, service)
-		setDesiredReplicasGauge(metadata, float64(eligible))
+		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
+		setServiceDesiredReplicas(service.ID, eligible)
+		setDesiredReplicasGauge(metadata, eligible)
 
 		return
 	}
@@ -493,18 +496,25 @@ func updateServiceReplicasGauge(
 	if eligibleErr != nil {
 		logger.L().
 			Warn("countEligibleNodesForService failed; falling back to counting active nodes", "err", eligibleErr)
+
 		// Fallback: count READY+active nodes ignoring constraints.
 		activeCount, fallbackErr := countActiveNodes(parentContext, dockerClient)
 		if fallbackErr != nil {
 			logger.L().Warn("countActiveNodes fallback failed", "err", fallbackErr)
-		} else {
-			setDesiredReplicasGauge(metadata, float64(activeCount))
+
+			return
 		}
+
+		desired := float64(activeCount)
+		setServiceDesiredReplicas(service.ID, desired)
+		setDesiredReplicasGauge(metadata, desired)
 
 		return
 	}
 
-	setDesiredReplicasGauge(metadata, float64(eligible))
+	desired := float64(eligible)
+	setServiceDesiredReplicas(service.ID, desired)
+	setDesiredReplicasGauge(metadata, desired)
 }
 
 // setDesiredReplicasGauge writes the gauge value with sanitized label keys.
@@ -823,8 +833,9 @@ func refreshNodesAndRecomputeGlobals(
 			continue
 		}
 
-		eligible := countEligibleNodesForServiceFromNodes(nodes, &service)
-		setDesiredReplicasGauge(metadata, float64(eligible))
+		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, &service))
+		setServiceDesiredReplicas(service.ID, eligible)
+		setDesiredReplicasGauge(metadata, eligible)
 	}
 
 	return nil
