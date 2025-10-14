@@ -35,7 +35,7 @@ services:
     # NOTE: this requires the container user to be allowed to connect to the socket.
     # For Swarm, you can either:
     #   1) run as root (safer if socket permissions vary across nodes), or
-    #   2) add the docker.sock GID via group_add (requires consistent GID across nodes).
+    #   2) add the docker.sock GID (requires consistent GID across nodes).
     #
     # Uncomment ONE of the blocks below if you go with the Unix socket approach:
     #
@@ -45,8 +45,7 @@ services:
     # user: "0:0"   # ← simplest cross-node fix, but drops non-root runtime
     #
     # OR (if GID is known & consistent across nodes):
-    # group_add:
-    #   - "999"     # ← replace with `stat -c %g /var/run/docker.sock` value
+    # user: "65532:999"     # ← replace 999 with `stat -c %g /var/run/docker.sock` value
 
     # Security/operability hardening:
     read_only: true

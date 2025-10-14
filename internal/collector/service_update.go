@@ -44,6 +44,7 @@ func ConfigureServiceUpdateMetrics() {
 		"stack",
 		"service",
 		"service_mode",
+		"display_name",
 	}, getSanitizedCustomLabelNames()...)
 
 	// info-style: one of these will be 1, the others 0 per service
@@ -104,6 +105,7 @@ func labelsForService(metadata serviceMetadata) prometheus.Labels {
 		"stack":        metadata.stack,
 		"service":      metadata.service,
 		"service_mode": metadata.serviceMode,
+		"display_name": displayName(metadata.stack, metadata.service),
 	}
 	for key, value := range metadata.customLabels {
 		// Warn once if a value looks high-cardinality.

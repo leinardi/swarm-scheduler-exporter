@@ -49,6 +49,7 @@ func ConfigureDesiredReplicasGauge() {
 		"stack",
 		"service",
 		"service_mode",
+		"display_name",
 	}, getSanitizedCustomLabelNames()...)
 
 	desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -467,6 +468,7 @@ func labelsForMetadata(metadata serviceMetadata) prometheus.Labels {
 		"stack":        metadata.stack,
 		"service":      metadata.service,
 		"service_mode": metadata.serviceMode,
+		"display_name": displayName(metadata.stack, metadata.service),
 	}
 	for key, value := range metadata.customLabels {
 		labels[key] = value
