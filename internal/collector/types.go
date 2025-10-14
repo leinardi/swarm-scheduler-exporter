@@ -260,3 +260,17 @@ func shortServiceName(stackNS, fullName string) string {
 
 	return fullName
 }
+
+// displayName returns a friendly label based on stack and service.
+// Rule: if stack == service → stack; if stack == "" → service; else "stack service".
+func displayName(stack, service string) string {
+	if stack == service {
+		return stack
+	}
+
+	if stack == "" {
+		return service
+	}
+
+	return stack + " " + service
+}
