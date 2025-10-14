@@ -64,7 +64,7 @@ var (
 		DefaultPollDelay,
 		"How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s.",
 	)
-	logFormat = flag.String("log-format", "plain", "Either json, text or plain")
+	logFormat = flag.String("log-format", "text", "Either json, text or plain")
 	// Quieter by default to reduce chatter in production.
 	logLevel = flag.String("log-level", "info", "Either debug, info, warn, error, fatal, panic")
 	logTime  = flag.Bool("log-time", false, "Include timestamp in logs")
