@@ -156,7 +156,6 @@ func run() int {
 	var workerGroup sync.WaitGroup
 	startEventListener(rootContext, &workerGroup, dockerClient)
 	startPoller(rootContext, &workerGroup, dockerClient, *pollDelay)
-	startHealthUpdater(rootContext, &workerGroup, *pollDelay)
 
 	// HTTP server with sane timeouts + graceful shutdown.
 	isHealthy := func() (bool, string) {
@@ -250,15 +249,13 @@ func startPoller(
 			collector.ObservePollDuration(time.Since(startTime))
 			collector.IncPolls()
 
-			if pollErr != nil {
+			if pollErr == nil {
+				collector.UpdateReplicasStateGauge(polledStates)
+				collector.MarkPollOK(now)
+			} else {
 				collector.IncPollErrors()
 				loggerInstance.Error("poll replicas state failed", "err", pollErr)
-
-				return
 			}
-
-			collector.UpdateReplicasStateGauge(polledStates)
-			collector.MarkPollOK(now)
 
 			healthy, _ := collector.HealthSnapshot(delay, now)
 			collector.SetExporterHealth(healthy)
@@ -275,31 +272,6 @@ func startPoller(
 				return
 			case <-ticker.C:
 				pollOnce(time.Now())
-			}
-		}
-	}()
-}
-
-func startHealthUpdater(
-	parentContext context.Context,
-	waitGroup *sync.WaitGroup,
-	delay time.Duration,
-) {
-	waitGroup.Add(1)
-
-	go func() {
-		defer waitGroup.Done()
-
-		ticker := time.NewTicker(healthTickInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-parentContext.Done():
-				return
-			case <-ticker.C:
-				healthy, _ := collector.HealthSnapshot(delay, time.Now())
-				collector.SetExporterHealth(healthy)
 			}
 		}
 	}()
