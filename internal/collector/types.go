@@ -4,6 +4,7 @@ package collector
 
 import (
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/docker/docker/api/types/swarm"
@@ -135,9 +136,17 @@ func getSanitizedCustomLabelNames() []string {
 
 // buildMetadata constructs serviceMetadata from a Swarm service definition.
 func buildMetadata(svc *swarm.Service) serviceMetadata {
+	stackNS := ""
+	if svc.Spec.Labels != nil {
+		stackNS = svc.Spec.Labels["com.docker.stack.namespace"]
+	}
+
+	visibleName := svc.Spec.Name
+	serviceName := shortServiceName(stackNS, visibleName)
+
 	metadata := serviceMetadata{
-		stack:        svc.Spec.Labels["com.docker.stack.namespace"],
-		service:      svc.Spec.Name,
+		stack:        stackNS,
+		service:      serviceName,
 		serviceMode:  serviceMode(svc),
 		customLabels: make(map[string]string, len(customLabelDefs)),
 	}
@@ -234,4 +243,20 @@ func getServiceDesiredReplicas(serviceID string) (float64, bool) {
 	}
 
 	return md.desiredReplicas, true
+}
+
+// shortServiceName returns the visible service name without the "<stack>_" prefix
+// when the stack namespace is present and the name follows the standard pattern.
+// If no stack is set or the name doesn't have the prefix, it returns the original.
+func shortServiceName(stackNS, fullName string) string {
+	if stackNS == "" {
+		return fullName
+	}
+
+	prefix := stackNS + "_"
+	if strings.HasPrefix(fullName, prefix) {
+		return strings.TrimPrefix(fullName, prefix)
+	}
+
+	return fullName
 }
