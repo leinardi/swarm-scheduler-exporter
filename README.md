@@ -48,7 +48,7 @@ All metrics live under the `swarm_` namespace.
 - `swarm_service_update_state_info{stack,service,service_mode,state}` = `1` for the *current* state, else `0`.  
   States: `updating`, `completed`, `paused`, `rollback_started`, `rollback_completed`.
 
-- `swarm_service_update_started_timestamp_seconds{...}`  
+- `swarm_service_update_started_timestamp_seconds{...}`
 - `swarm_service_update_completed_timestamp_seconds{...}`
 
 ### Cluster / node visibility
@@ -63,6 +63,28 @@ All metrics live under the `swarm_` namespace.
 - `swarm_exporter_polls_total` / `swarm_exporter_poll_errors_total`.
 - `swarm_exporter_poll_duration_seconds` (histogram).
 - `swarm_exporter_events_reconnects_total`.
+
+### Container-level (opt-in)
+
+If you also run non-Swarm workloads (e.g. plain Docker Compose or standalone containers),
+the exporter can expose **container state** metrics when started with `-containers`.
+
+- `swarm_container_state{project,stack,service,container,orchestrator,display_name,state,exit_code}`
+  Emits an **info-style one-hot series** per container across all known states.
+  Exactly one time series per container has `1`, the rest are `0`.
+
+    - `project` / `service` — from Compose labels (`com.docker.compose.*`), if present
+    - `stack` — from Swarm labels (`com.docker.stack.namespace`), if present
+    - `container` — sanitized container name
+    - `orchestrator` — `compose`, `swarm`, or `none`
+    - `display_name` — friendly name (`stack service` or `stack` if identical)
+    - `state` — one of
+      `created`, `restarting`, `running`, `removing`, `paused`, `exited`, `dead`, `healthy`, `unhealthy`, `health_starting`
+    - `exit_code` — string exit code (only when `state="exited"`, otherwise empty)
+
+> ℹ️ The exporter inspects only a **bounded subset** of containers per poll:
+> running containers with healthchecks (for health state) and exited containers (for exit code).
+> Swarm task containers are skipped unless `-containers-include-swarm` is set.
 
 ---
 
@@ -175,12 +197,26 @@ is available at:
 
 ### Flags
 
-- `-listen-addr <ip:port>` — HTTP listen address *(default `0.0.0.0:8888`)*
-- `-poll-delay <duration>` — How often to poll tasks, e.g. `10s`, `1m` *(min `1s`, default `10s`)*
-- `-label <key>` — Add a **service label key** as a Prometheus metric label (repeatable)
-  Example: `-label app.kubernetes.io/name -label team.name`
-- `-log-format <text|json|plain>` — Log format *(default `plain`)*
-- `-log-level <debug|info|warn|error>` — Minimum log level *(default `warn`)*
+```
+  -containers
+        Expose container state metrics (opt-in).
+  -containers-include-swarm
+        Include containers belonging to Swarm tasks.
+  -help
+        Display help message
+  -label value
+        Name of custom service labels to add to metrics
+  -listen-addr string
+        IP address and port to bind (default "0.0.0.0:8888")
+  -log-format string
+        Either json, text or plain (default "text")
+  -log-level string
+        Either debug, info, warn, error, fatal, panic (default "info")
+  -log-time
+        Include timestamp in logs
+  -poll-delay duration
+        How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s. (default 10s)
+```
 
 ### Environment (Docker client)
 
@@ -242,7 +278,7 @@ swarm_service_desired_replicas
 scrape_configs:
   - job_name: 'swarm-scheduler-exporter'
     static_configs:
-      - targets: [ 'swarm-manager:8888' ]
+      - targets: ['swarm-manager:8888']
 ```
 
 ---

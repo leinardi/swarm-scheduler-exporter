@@ -34,7 +34,7 @@ build: ## Build the binary into ./dist
 
 .PHONY: run
 run: ## Run the app (like go run)
-	$(GO) run -ldflags "$(LDFLAGS)" $(CMD_DIR) -log-level debug
+	$(GO) run -ldflags "$(LDFLAGS)" $(CMD_DIR) -containers -log-level debug
 
 .PHONY: clean
 clean: ## Remove build artifacts
