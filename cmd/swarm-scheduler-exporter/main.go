@@ -64,6 +64,16 @@ var (
 		DefaultPollDelay,
 		"How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s.",
 	)
+	enableContainers = flag.Bool(
+		"containers",
+		false,
+		"Expose container state metrics (opt-in).",
+	)
+	containersIncludeSwarm = flag.Bool(
+		"containers-include-swarm",
+		false,
+		"Include containers belonging to Swarm tasks.",
+	)
 	logFormat = flag.String("log-format", "text", "Either json, text or plain")
 	// Quieter by default to reduce chatter in production.
 	logLevel = flag.String("log-level", "info", "Either debug, info, warn, error, fatal, panic")
@@ -132,6 +142,14 @@ func run() int {
 	collector.ConfigureNodesByStateGauge()
 	collector.ConfigureExporterOpsMetrics()
 	collector.ConfigureServiceUpdateMetrics()
+
+	// Containers (opt-in)
+	if *enableContainers {
+		collector.EnableContainersMetrics(true, *containersIncludeSwarm)
+		collector.ConfigureContainersStateGauge()
+	} else {
+		collector.EnableContainersMetrics(false, false)
+	}
 
 	// Root context canceled on SIGINT/SIGTERM
 	rootContext, cancelRoot := signal.NotifyContext(
@@ -255,6 +273,16 @@ func startPoller(
 			} else {
 				collector.IncPollErrors()
 				loggerInstance.Error("poll replicas state failed", "err", pollErr)
+			}
+
+			// --- Containers (opt-in) ---
+			if *enableContainers {
+				containerRows, contErr := collector.PollContainersState(parentContext, dockerClient)
+				if contErr != nil {
+					loggerInstance.Warn("poll containers state failed", "err", contErr)
+				} else {
+					collector.UpdateContainersStateGauge(containerRows)
+				}
 			}
 
 			healthy, _ := collector.HealthSnapshot(delay, now)
