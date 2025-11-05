@@ -69,7 +69,7 @@ repos:
         args: ["--format", "parsable"]
         stages: [manual]
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.6.0
+    rev: v2.6.1
     hooks:
       - id: golangci-lint-config-verify
       - id: golangci-lint-fmt
