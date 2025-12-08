@@ -254,8 +254,8 @@ func shortServiceName(stackNS, fullName string) string {
 	}
 
 	prefix := stackNS + "_"
-	if strings.HasPrefix(fullName, prefix) {
-		return strings.TrimPrefix(fullName, prefix)
+	if after, ok := strings.CutPrefix(fullName, prefix); ok {
+		return after
 	}
 
 	return fullName

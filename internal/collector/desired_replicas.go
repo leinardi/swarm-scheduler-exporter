@@ -211,10 +211,10 @@ func ListenSwarmEvents(
 		}
 
 		// Exponential backoff with cap.
-		nextBackoff := time.Duration(int64(backoffDelay) * int64(backoffMultiplier))
-		if nextBackoff > backoffMaxDelay {
-			nextBackoff = backoffMaxDelay
-		}
+		nextBackoff := min(
+			time.Duration(int64(backoffDelay)*int64(backoffMultiplier)),
+			backoffMaxDelay,
+		)
 
 		backoffDelay = nextBackoff
 	}

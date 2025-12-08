@@ -216,11 +216,7 @@ func startEventListener(
 	waitGroup *sync.WaitGroup,
 	dockerClient *client.Client,
 ) {
-	waitGroup.Add(1)
-
-	go func() {
-		defer waitGroup.Done()
-
+	waitGroup.Go(func() {
 		loggerInstance := logger.L()
 
 		// Init now returns an anchor to use as the initial "since" for events.
@@ -238,7 +234,7 @@ func startEventListener(
 		if listenErr != nil && !errors.Is(listenErr, context.Canceled) {
 			loggerInstance.Error("event listener exited with error", "err", listenErr)
 		}
-	}()
+	})
 }
 
 func startPoller(
@@ -247,11 +243,7 @@ func startPoller(
 	dockerClient *client.Client,
 	delay time.Duration,
 ) {
-	waitGroup.Add(1)
-
-	go func() {
-		defer waitGroup.Done()
-
+	waitGroup.Go(func() {
 		loggerInstance := logger.L()
 		loggerInstance.Debug("start polling replicas state", "every", delay)
 
@@ -264,6 +256,7 @@ func startPoller(
 
 			startTime := now
 			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerClient)
+
 			collector.ObservePollDuration(time.Since(startTime))
 			collector.IncPolls()
 
@@ -302,7 +295,7 @@ func startPoller(
 				pollOnce(time.Now())
 			}
 		}
-	}()
+	})
 }
 
 func runHTTPServer(parentContext context.Context, address string, handler http.Handler) error {

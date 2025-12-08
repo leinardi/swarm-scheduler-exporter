@@ -69,10 +69,7 @@ func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reaso
 	// Staleness threshold: more lenient of the two
 	minWindow := 30 * time.Second
 
-	window := 3 * pollDelay
-	if window < minWindow {
-		window = minWindow
-	}
+	window := max(3*pollDelay, minWindow)
 
 	if now.Sub(lastPoll) > window {
 		return false, "last poll too old"

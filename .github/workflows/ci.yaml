@@ -40,6 +40,19 @@ jobs:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          hooks: |
+            check-merge-conflict
+            end-of-file-fixer
+            trailing-whitespace
+            check-yaml
+            check-json
+            check-toml
+            check-added-large-files
+            dclint
+            hadolint
+            golangci-lint-config-verify
+            golangci-lint-fmt
+            golangci-lint-full
 
   markdownlint:
     runs-on: ubuntu-latest
