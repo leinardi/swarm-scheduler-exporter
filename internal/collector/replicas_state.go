@@ -9,6 +9,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
@@ -135,10 +136,7 @@ func PollReplicasState(
 	taskFilters := filters.NewArgs()
 
 	if len(serviceIDs) > 0 {
-		limit := len(serviceIDs)
-		if limit > maxServicesInTaskFilter {
-			limit = maxServicesInTaskFilter
-		}
+		limit := min(len(serviceIDs), maxServicesInTaskFilter)
 
 		for index := range limit {
 			taskFilters.Add("service", serviceIDs[index])
@@ -240,9 +238,7 @@ func UpdateReplicasStateGauge(counterByService serviceCounter) {
 		// Emit exhaustive per-state series.
 		for _, state := range knownTaskStates {
 			labels := prometheus.Labels{}
-			for keyLabel, valueLabel := range baseLabels {
-				labels[keyLabel] = valueLabel
-			}
+			maps.Copy(labels, baseLabels)
 
 			labels["state"] = state
 
@@ -329,9 +325,7 @@ func getServiceLabels(
 			"service_mode": metadata.serviceMode,
 			"display_name": displayName(metadata.stack, metadata.service),
 		}
-		for key, value := range metadata.customLabels {
-			labelSet[key] = value
-		}
+		maps.Copy(labelSet, metadata.customLabels)
 
 		return labelSet, nil
 	}

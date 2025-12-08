@@ -7,6 +7,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -240,9 +241,7 @@ func UpdateContainersStateGauge(rows []prometheus.Labels) {
 			state := knownContainerStates[si]
 
 			lbls := make(prometheus.Labels, len(base)+2)
-			for k, v := range base {
-				lbls[k] = v
-			}
+			maps.Copy(lbls, base)
 
 			lbls["state"] = state
 

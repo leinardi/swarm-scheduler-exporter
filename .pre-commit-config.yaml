@@ -1,42 +1,20 @@
----
 repos:
-  - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.19.0
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
     hooks:
-      - id: markdownlint-cli2
-  - repo: local
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+  - repo: https://github.com/checkmake/checkmake.git
+    rev: 0.2.2
     hooks:
-      - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
-        language: system
-        types: [shell]
-        args: ["-e", "SC2148"]
-      - id: shellcheck
-        alias: shellcheck-diff-output
-        name: shellcheck (diff output)
-        entry: shellcheck
-        language: system
-        types: [shell]
-        args: ["-f", "diff", "-e", "SC2148"]
-        stages: [manual]
-      - id: shellcheck
-        alias: shellcheck-json-output
-        name: shellcheck (json output)
-        entry: shellcheck
-        language: system
-        types: [shell]
-        args: ["-f", "json", "-e", "SC2148"]
-        stages: [manual]
-      - id: prettier-yaml
-        name: prettier-yaml
-        entry: prettier
-        language: node
-        additional_dependencies: ["prettier@3.5.3"]
-        files: \.(yml|yaml)$
-        args: ["--write"]
+      - id: checkmake
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.8
+    rev: v1.7.9
     hooks:
       - id: actionlint
         name: actionlint
@@ -47,6 +25,50 @@ repos:
         name: actionlint (one line per one error)
         files: ^\.github/workflows/.*\.(yml|yaml)$
         args: ["-oneline", "-shellcheck", "shellcheck -S error"]
+        stages: [manual]
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.19.1
+    hooks:
+      - id: markdownlint-cli2
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+        args: ["-x"]
+      - id: shellcheck
+        alias: shellcheck-diff-output
+        name: shellcheck (diff output)
+        entry: shellcheck
+        language: system
+        types: [shell]
+        args: ["-f", "diff", "-x"]
+        stages: [manual]
+      - id: shellcheck
+        alias: shellcheck-json-output
+        name: shellcheck (json output)
+        entry: shellcheck
+        language: system
+        types: [shell]
+        args: ["-f", "json", "-x"]
+        stages: [manual]
+      - id: prettier-yaml
+        name: prettier-yaml
+        entry: prettier
+        language: node
+        additional_dependencies: ["prettier@3.7.4"]
+        files: \.(yml|yaml)$
+        args: ["--write"]
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+      - id: yamllint
+        alias: yamllint-parsable
+        name: "yamllint (parsable output)"
+        args: ["--format", "parsable"]
         stages: [manual]
   - repo: https://github.com/docker-compose-linter/pre-commit-dclint
     rev: v3.1.0
@@ -59,15 +81,6 @@ repos:
     rev: v2.14.0
     hooks:
       - id: hadolint
-  - repo: https://github.com/adrienverge/yamllint
-    rev: v1.37.1
-    hooks:
-      - id: yamllint
-      - id: yamllint
-        alias: yamllint-parsable
-        name: "yamllint (parsable output)"
-        args: ["--format", "parsable"]
-        stages: [manual]
   - repo: https://github.com/golangci/golangci-lint
     rev: v2.6.2
     hooks:

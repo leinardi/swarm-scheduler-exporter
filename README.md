@@ -29,10 +29,10 @@ All metrics live under the `swarm_` namespace.
 
 ### Service-level
 
-- `swarm_service_desired_replicas{stack,service,service_mode,...custom}`  
+- `swarm_service_desired_replicas{stack,service,service_mode,...custom}`
   Desired replicas (**replicated**: configured replicas; **global**: eligible nodes).
 
-- `swarm_task_replicas_state{stack,service,service_mode,state,...custom}`  
+- `swarm_task_replicas_state{stack,service,service_mode,state,...custom}`
   **Latest-per-slot** task count by state (always emits zeros for all known states per current service).
 
 - `swarm_service_running_replicas{stack,service,service_mode,...custom}`
@@ -45,7 +45,7 @@ All metrics live under the `swarm_` namespace.
 
 ### Service update/rollback (info-style)
 
-- `swarm_service_update_state_info{stack,service,service_mode,state}` = `1` for the *current* state, else `0`.  
+- `swarm_service_update_state_info{stack,service,service_mode,state}` = `1` for the *current* state, else `0`.
   States: `updating`, `completed`, `paused`, `rollback_started`, `rollback_completed`.
 
 - `swarm_service_update_started_timestamp_seconds{...}`
@@ -53,7 +53,7 @@ All metrics live under the `swarm_` namespace.
 
 ### Cluster / node visibility
 
-- `swarm_cluster_nodes_by_state{role,availability,status}`  
+- `swarm_cluster_nodes_by_state{role,availability,status}`
   Count of nodes by manager/worker, active/pause/drain, and ready/down/… .
 
 ### Exporter self-metrics

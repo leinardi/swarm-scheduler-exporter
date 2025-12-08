@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"maps"
 	"sync"
 
 	"github.com/docker/docker/api/types/swarm"
@@ -197,9 +198,7 @@ func ClearServiceUpdateMetrics(metadata serviceMetadata) {
 // cloneLabelsWithState returns a copy of baseLabels with the "state" label set.
 func cloneLabelsWithState(baseLabels prometheus.Labels, state string) prometheus.Labels {
 	labels := make(prometheus.Labels, len(baseLabels)+1)
-	for key, value := range baseLabels {
-		labels[key] = value
-	}
+	maps.Copy(labels, baseLabels)
 
 	labels["state"] = state
 
