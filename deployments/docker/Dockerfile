@@ -20,10 +20,13 @@ ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
 
-# Reproducible static build
+# Buildx provides these automatically for multi-arch builds
+ARG TARGETOS
+ARG TARGETARCH
+
 ENV CGO_ENABLED=0 \
-	GOOS=linux \
-	GOARCH=amd64
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH}
 
 WORKDIR /src
 RUN --mount=type=cache,target=/var/cache/apk \
@@ -56,7 +59,7 @@ FROM gcr.io/distroless/static:nonroot
 # hadolint ignore=DL3050
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.description="Prometheus exporter for Docker Swarm services/tasks" \
-	org.opencontainers.image.source="https://example.com/your/repo" \
+	org.opencontainers.image.source="https://github.com/leinardi/swarm-scheduler-exporter" \
 	org.opencontainers.image.licenses="Apache-2.0"
 
 # Copy the binary and CA bundle
