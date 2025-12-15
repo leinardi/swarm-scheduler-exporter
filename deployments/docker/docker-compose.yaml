@@ -8,8 +8,10 @@ services:
         published: 8888
         protocol: tcp
         mode: ingress
+
     # Minimal, explicit args. Add any other flags here.
     command: [ "-poll-delay", "10s" ]
+
     restart: unless-stopped
 
     deploy:
