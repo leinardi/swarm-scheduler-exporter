@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
@@ -99,7 +99,7 @@ func InitDesiredReplicasGauge(
 	initialSinceAnchor := time.Now()
 
 	// Seed service gauges
-	services, serviceListErr := dockerClient.ServiceList(parentContext, types.ServiceListOptions{
+	services, serviceListErr := dockerClient.ServiceList(parentContext, swarm.ServiceListOptions{
 		Filters: filters.Args{},
 		Status:  false,
 	})
@@ -110,7 +110,7 @@ func InitDesiredReplicasGauge(
 	// Also seed nodes snapshot and nodes-by-state metric
 	nodes, nodeListErr := dockerClient.NodeList(
 		parentContext,
-		types.NodeListOptions{Filters: filters.Args{}},
+		swarm.NodeListOptions{Filters: filters.Args{}},
 	)
 	if nodeListErr != nil {
 		return time.Time{}, fmt.Errorf("node list: %w", nodeListErr)
@@ -447,7 +447,7 @@ func processEvent(
 	service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
 		parentContext,
 		serviceID,
-		types.ServiceInspectOptions{
+		swarm.ServiceInspectOptions{
 			InsertDefaults: false,
 		},
 	)
@@ -567,7 +567,7 @@ func setDesiredReplicasGauge(metadata serviceMetadata, value float64) {
 func countActiveNodes(parentContext context.Context, dockerClient *client.Client) (int, error) {
 	nodes, listErr := dockerClient.NodeList(
 		parentContext,
-		types.NodeListOptions{Filters: filters.Args{}},
+		swarm.NodeListOptions{Filters: filters.Args{}},
 	)
 	if listErr != nil {
 		return 0, fmt.Errorf("node list: %w", listErr)
@@ -594,7 +594,7 @@ func countEligibleNodesForService(
 ) (int, error) {
 	nodes, listErr := dockerClient.NodeList(
 		parentContext,
-		types.NodeListOptions{Filters: filters.Args{}},
+		swarm.NodeListOptions{Filters: filters.Args{}},
 	)
 	if listErr != nil {
 		return 0, fmt.Errorf("node list: %w", listErr)
@@ -827,7 +827,7 @@ func refreshNodesAndRecomputeGlobals(
 ) error {
 	nodes, listErr := dockerClient.NodeList(
 		parentContext,
-		types.NodeListOptions{Filters: filters.Args{}},
+		swarm.NodeListOptions{Filters: filters.Args{}},
 	)
 	if listErr != nil {
 		return fmt.Errorf("node list: %w", listErr)
@@ -849,13 +849,13 @@ func refreshNodesAndRecomputeGlobals(
 		service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
 			parentContext,
 			serviceID,
-			types.ServiceInspectOptions{
+			swarm.ServiceInspectOptions{
 				InsertDefaults: false,
 			},
 		)
 		if inspectErr != nil {
 			// If service disappeared during the window, skip.
-			if client.IsErrNotFound(inspectErr) {
+			if errdefs.IsNotFound(inspectErr) {
 				continue
 			}
 
