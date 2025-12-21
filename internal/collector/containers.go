@@ -36,7 +36,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
@@ -397,7 +396,7 @@ func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row)
 }
 
 // applyHealthOverlay overlays a health state if the container has a healthcheck.
-func applyHealthOverlay(rowRef *row, inspected types.ContainerJSON) {
+func applyHealthOverlay(rowRef *row, inspected container.InspectResponse) {
 	if inspected.Config != nil &&
 		inspected.Config.Healthcheck != nil &&
 		inspected.State != nil &&
@@ -422,7 +421,7 @@ func applyHealthOverlay(rowRef *row, inspected types.ContainerJSON) {
 }
 
 // applyExitCode annotates the exit code for exited containers.
-func applyExitCode(rowRef *row, inspected types.ContainerJSON) {
+func applyExitCode(rowRef *row, inspected container.InspectResponse) {
 	rowRef.labels["state"] = rowRef.state
 
 	if inspected.State == nil {

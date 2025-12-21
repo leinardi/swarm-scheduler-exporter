@@ -35,7 +35,7 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/docker/docker/api/types"
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
@@ -167,7 +167,7 @@ func PollReplicasState(
 		}
 	}
 
-	tasks, listErr := dockerClient.TaskList(parentContext, types.TaskListOptions{
+	tasks, listErr := dockerClient.TaskList(parentContext, swarm.TaskListOptions{
 		Filters: taskFilters,
 	})
 	if listErr != nil {
@@ -182,7 +182,7 @@ func PollReplicasState(
 
 		// Ensure we have metadata cached (and skip tasks for deleted services).
 		_, labelErr := getServiceLabels(parentContext, dockerClient, task)
-		if client.IsErrNotFound(labelErr) {
+		if errdefs.IsNotFound(labelErr) {
 			continue
 		} else if labelErr != nil {
 			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
@@ -222,7 +222,7 @@ func PollReplicasState(
 
 	for key, task := range latestByKey {
 		labels, labelErr := getServiceLabels(parentContext, dockerClient, task)
-		if client.IsErrNotFound(labelErr) {
+		if errdefs.IsNotFound(labelErr) {
 			// Service disappeared between selection and labeling; ignore.
 			continue
 		} else if labelErr != nil {
@@ -358,7 +358,7 @@ func getServiceLabels(
 	service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
 		parentContext,
 		serviceID,
-		types.ServiceInspectOptions{
+		swarm.ServiceInspectOptions{
 			InsertDefaults: false,
 		},
 	)

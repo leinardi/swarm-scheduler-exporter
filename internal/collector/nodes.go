@@ -28,7 +28,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
@@ -51,7 +50,7 @@ func ConfigureNodesByStateGauge() {
 
 // UpdateNodesByState refreshes the nodes list from Docker and updates the gauge.
 func UpdateNodesByState(ctx context.Context, cli *client.Client) error {
-	nodes, listErr := cli.NodeList(ctx, types.NodeListOptions{Filters: filters.Args{}})
+	nodes, listErr := cli.NodeList(ctx, swarm.NodeListOptions{Filters: filters.Args{}})
 	if listErr != nil {
 		return fmt.Errorf("node list: %w", listErr)
 	}
