@@ -3,7 +3,7 @@
 ########################
 # deps: cache modules
 ########################
-FROM golang:1.25-alpine AS deps
+FROM golang:1.25.5-alpine AS deps
 WORKDIR /src
 RUN --mount=type=cache,target=/var/cache/apk \
 	apk add --no-cache ca-certificates git
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 ########################
 # build: compile static binary
 ########################
-FROM golang:1.25-alpine AS build
+FROM golang:1.25.5-alpine AS build
 ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
@@ -45,7 +45,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 ########################
 # certs: minimal CA bundle
 ########################
-FROM alpine:3.20 AS certs
+FROM alpine:3.23.2 AS certs
 RUN --mount=type=cache,target=/var/cache/apk \
 	apk add --no-cache ca-certificates
 # leave at /etc/ssl/certs/ca-certificates.crt
@@ -55,7 +55,6 @@ RUN --mount=type=cache,target=/var/cache/apk \
 ########################
 FROM gcr.io/distroless/static:nonroot
 
-# Optional but useful OCI labels (edit as needed)
 # hadolint ignore=DL3050
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.description="Prometheus exporter for Docker Swarm services/tasks" \

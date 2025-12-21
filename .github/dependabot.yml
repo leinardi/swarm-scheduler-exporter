@@ -1,29 +1,39 @@
 version: 2
 updates:
-  # Keep GitHub Actions used in this repo up to date
+  - package-ecosystem: "docker"
+    directory: "/deployments/docker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "ci"
+      - "dependencies"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     labels:
-      - "dependencies"
       - "ci"
+      - "dependencies"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
     open-pull-requests-limit: 5
-
-  # If you add a Node-based action with package.json, uncomment:
-  # - package-ecosystem: "npm"
-  #   directory: "/"
-  #   schedule:
-  #     interval: "weekly"
-  #   labels:
-  #     - "dependencies"
-  #     - "ci"
-
-  # If you add Python tooling with requirements/pyproject, uncomment:
-  # - package-ecosystem: "pip"
-  #   directory: "/"
-  #   schedule:
-  #     interval: "weekly"
-  #   labels:
-  #     - "dependencies"
-  #     - "ci"
+    labels:
+      - "ci"
+      - "dependencies"
+    groups:
+      go-modules:
+        patterns:
+          - "*"
