@@ -318,8 +318,19 @@ func newTaskCounter(labels map[string]string) taskCounter {
 }
 
 // newerThan returns true if candidate is strictly newer than current.
-// First compare Status.Timestamp (if both non-zero), else fall back to Version.Index.
+// Prefer task CreatedAt (creation time) so "latest per slot" reflects the newest task
+// attempt rather than the most recently updated status (which can be a late Shutdown).
+// Fall back to Status.Timestamp, then Version.Index as a last resort.
 func newerThan(candidate, current *swarm.Task) bool {
+	// 1) Task creation time (stable across status updates).
+	if candidate.CreatedAt.After(current.CreatedAt) {
+		return true
+	}
+	if candidate.CreatedAt.Before(current.CreatedAt) {
+		return false
+	}
+
+	// 2) Status timestamp (best-effort if creation time is missing/equal).
 	candidateTimestamp := candidate.Status.Timestamp
 	currentTimestamp := current.Status.Timestamp
 
@@ -328,7 +339,7 @@ func newerThan(candidate, current *swarm.Task) bool {
 		return candidateTimestamp.After(currentTimestamp)
 	}
 
-	// Fallback to Version.Index (monotonic increasing)
+	// 3) Fallback to Version.Index (monotonic increasing for a task object)
 	return candidate.Version.Index > current.Version.Index
 }
 
