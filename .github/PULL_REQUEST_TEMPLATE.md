@@ -7,17 +7,13 @@ Any HTML comment will be stripped when the markdown is rendered, so you don't ne
 
 <!-- Short description of what this PR does. -->
 
----
-
 ## Pull request checklist
 
-- [ ] I am targeting the `main` branch
+- [ ] I am targeting the `master` branch
 - [ ] I have **rebased** this branch on top of the destination branch
 - [ ] I have executed `make check` locally *before creating the commit* and it has run successfully
 - [ ] I have performed a self-review of my own code
 - [ ] There are no `WIP` commits in this PR
-
----
 
 ## Type of changes
 
