@@ -3,7 +3,7 @@
 ########################
 # deps: cache modules
 ########################
-FROM golang:1.25.5-alpine AS deps
+FROM golang:1.25.6-alpine AS deps
 WORKDIR /src
 RUN --mount=type=cache,target=/var/cache/apk \
 	apk add --no-cache ca-certificates git
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 ########################
 # build: compile static binary
 ########################
-FROM golang:1.25.5-alpine AS build
+FROM golang:1.25.6-alpine AS build
 ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
@@ -45,7 +45,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 ########################
 # certs: minimal CA bundle
 ########################
-FROM alpine:3.23.2 AS certs
+FROM alpine:3.23.3 AS certs
 RUN --mount=type=cache,target=/var/cache/apk \
 	apk add --no-cache ca-certificates
 # leave at /etc/ssl/certs/ca-certificates.crt
