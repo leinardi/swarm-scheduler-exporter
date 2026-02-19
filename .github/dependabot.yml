@@ -1,27 +1,35 @@
 version: 2
+enable-beta-ecosystems: true # Required for the pre-commit ecosystem
+
 updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci"]
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci"]
+    groups:
+      pre-commit-hooks:
+        patterns:
+          - "*"
+
   - package-ecosystem: "docker"
     directory: "/deployments/docker"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-    labels:
-      - "ci"
-      - "dependencies"
+    labels: ["dependencies", "ci"]
     groups:
       docker-base-images:
-        patterns:
-          - "*"
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "ci"
-      - "dependencies"
-    groups:
-      github-actions:
         patterns:
           - "*"
 
@@ -30,9 +38,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-    labels:
-      - "ci"
-      - "dependencies"
+    labels: ["dependencies", "ci"]
     groups:
       go-modules:
         patterns:
