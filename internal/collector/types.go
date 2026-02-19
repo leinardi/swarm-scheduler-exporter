@@ -210,6 +210,11 @@ func setServiceMetadata(serviceID string, metadata serviceMetadata) {
 	metadataMu.Lock()
 	defer metadataMu.Unlock()
 
+	if prev, ok := metadataCache[serviceID]; ok {
+		// Preserve cached desired replicas across metadata refreshes.
+		metadata.desiredReplicas = prev.desiredReplicas
+	}
+
 	metadataCache[serviceID] = metadata
 }
 

@@ -34,12 +34,14 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -80,6 +82,8 @@ var runningReplicasGauge *prometheus.GaugeVec
 
 // atDesiredGauge exposes 1 if running_replicas == desired_replicas, else 0.
 var atDesiredGauge *prometheus.GaugeVec
+
+var atDesiredLogState sync.Map // map[string]string (serviceID -> "running|desired")
 
 // taskCounter keeps a set of counters per Swarm task state for a given service.
 type taskCounter struct {
@@ -185,7 +189,11 @@ func PollReplicasState(
 		if errdefs.IsNotFound(labelErr) {
 			continue
 		} else if labelErr != nil {
-			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
+			return serviceCounter{}, fmt.Errorf(
+				"labels for service %s: %w",
+				task.ServiceID,
+				labelErr,
+			)
 		}
 
 		mode, found := getServiceModeCached(task.ServiceID)
@@ -226,7 +234,11 @@ func PollReplicasState(
 			// Service disappeared between selection and labeling; ignore.
 			continue
 		} else if labelErr != nil {
-			return serviceCounter{}, fmt.Errorf("labels for service %s: %w", task.ServiceID, labelErr)
+			return serviceCounter{}, fmt.Errorf(
+				"labels for service %s: %w",
+				task.ServiceID,
+				labelErr,
+			)
 		}
 
 		// Ensure label keys are Prometheus-safe (values are passed through).
@@ -275,22 +287,66 @@ func UpdateReplicasStateGauge(counterByService serviceCounter) {
 			runningReplicasGauge.With(baseLabels).Set(running)
 		}
 
-		if atDesiredGauge != nil {
-			desired, ok := getServiceDesiredReplicas(serviceID)
-			// If unknown desired (should be rare), treat as not at desired.
-			atDesired := 0.0
-
-			if ok {
-				// Both are floats but represent integer counts; direct equality is fine.
-				running := taskCounterValue.states[string(swarm.TaskStateRunning)]
-				if running == desired {
-					atDesired = 1.0
-				}
-			}
-
-			atDesiredGauge.With(baseLabels).Set(atDesired)
-		}
+		setAtDesiredForService(serviceID, baseLabels, taskCounterValue)
 	}
+}
+
+func setAtDesiredForService(
+	serviceID string,
+	baseLabels prometheus.Labels,
+	taskCounterValue taskCounter,
+) {
+	if atDesiredGauge == nil {
+		return
+	}
+
+	running := taskCounterValue.states[string(swarm.TaskStateRunning)]
+
+	desired, foundDesired := getServiceDesiredReplicas(serviceID)
+	if !foundDesired {
+		logger.L().Warn("desired replicas missing from cache",
+			"service_id", serviceID,
+			"stack", baseLabels["stack"],
+			"service", baseLabels["service"],
+			"mode", baseLabels["service_mode"],
+			"running", running,
+		)
+
+		atDesiredGauge.With(baseLabels).Set(0)
+
+		return
+	}
+
+	atDesired := 0.0
+	if running == desired {
+		atDesired = 1.0
+	} else {
+		logAtDesiredMismatchOncePerChange(serviceID, baseLabels, running, desired)
+	}
+
+	atDesiredGauge.With(baseLabels).Set(atDesired)
+}
+
+func logAtDesiredMismatchOncePerChange(
+	serviceID string,
+	baseLabels prometheus.Labels,
+	running, desired float64,
+) {
+	key := fmt.Sprintf("%.0f|%.0f", running, desired)
+
+	prev, loaded := atDesiredLogState.LoadOrStore(serviceID, key)
+	if loaded && prev == key {
+		return // same situation as last time -> no log
+	}
+
+	logger.L().Debug("at_desired mismatch",
+		"service_id", serviceID,
+		"stack", baseLabels["stack"],
+		"service", baseLabels["service"],
+		"mode", baseLabels["service_mode"],
+		"running", running,
+		"desired", desired,
+	)
 }
 
 // inc increments the counter for a particular Swarm task state.
@@ -326,6 +382,7 @@ func newerThan(candidate, current *swarm.Task) bool {
 	if candidate.CreatedAt.After(current.CreatedAt) {
 		return true
 	}
+
 	if candidate.CreatedAt.Before(current.CreatedAt) {
 		return false
 	}
