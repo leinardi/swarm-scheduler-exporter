@@ -111,8 +111,11 @@ var (
 // writing to an explicit writer and by setting the flag package's output.
 func usage() {
 	outWriter := os.Stdout
-	_, _ = fmt.Fprintf(outWriter, "Usage of %s:\n", os.Args[0])
 	flag.CommandLine.SetOutput(outWriter)
+
+	// Avoid printing os.Args[0] to satisfy gosec's taint rule (G705).
+	_, _ = fmt.Fprintln(outWriter, "Usage:")
+
 	flag.PrintDefaults()
 }
 
@@ -276,8 +279,6 @@ func startPoller(
 
 		// Local helper to run one full poll cycle with metrics + health.
 		pollOnce := func(now time.Time) {
-			loggerInstance.Debug("polling replicas state")
-
 			startTime := now
 			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerClient)
 

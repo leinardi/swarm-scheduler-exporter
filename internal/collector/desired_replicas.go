@@ -205,8 +205,6 @@ func ListenSwarmEvents(
 		// Update the resume point for the next connection.
 		if !lastSeenEventTime.IsZero() {
 			reconnectSince = lastSeenEventTime.Add(-500 * time.Millisecond)
-		} else {
-			reconnectSince = time.Now().Add(-500 * time.Millisecond)
 		}
 
 		if runErr == nil {
@@ -438,6 +436,8 @@ func processEvent(
 		_ = desiredReplicasGauge.Delete(labelsForMetadata(metadata))
 		ClearServiceUpdateMetrics(metadata)
 		deleteServiceMetadata(serviceID)
+
+		atDesiredLogState.Delete(serviceID)
 
 		return nil
 	default:
