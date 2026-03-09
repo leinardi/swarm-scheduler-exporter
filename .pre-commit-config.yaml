@@ -82,7 +82,7 @@ repos:
     hooks:
       - id: hadolint
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.10.1
+    rev: v2.11.2
     hooks:
       - id: golangci-lint-config-verify
       - id: golangci-lint-fmt
