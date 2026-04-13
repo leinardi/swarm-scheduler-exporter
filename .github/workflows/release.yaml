@@ -43,7 +43,7 @@ jobs:
           echo "build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
 
       - name: Create git tag
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const version = '${{ steps.ver.outputs.version }}';
@@ -120,7 +120,7 @@ jobs:
             ${{ env.IMAGE_REPO }}:latest
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.version }}
           generate_release_notes: true
@@ -132,7 +132,7 @@ jobs:
 
       - name: Cleanup tag on failure
         if: ${{ failure() || cancelled() }}
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const version = '${{ steps.ver.outputs.version }}';
