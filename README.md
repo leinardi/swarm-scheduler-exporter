@@ -5,9 +5,9 @@ Fork of (and huge thanks to) **[akerouanton/swarm-tasks-exporter](https://github
 
 ## 💡 What is “Swarm Scheduler Exporter”?
 
-**Swarm Scheduler Exporter** surfaces what Docker Swarm’s **scheduler** is doing right now, and *why*. It reports **desired replicas** (including accurate
-eligibility for `global` services), **live task state** per service (latest per slot), **service update/rollback** state + timestamps, **cluster node**
-availability, and now **SLO-friendly service readiness** signals.
+**Swarm Scheduler Exporter** surfaces what Docker Swarm’s **scheduler** is doing right now, and *why*. It reports **desired replicas** (including
+accurate eligibility for `global` services), **live task state** per service (latest per slot), **service update/rollback** state + timestamps,
+**cluster node** availability, and now **SLO-friendly service readiness** signals.
 
 ## 📦 What This Exporter Does
 
@@ -19,7 +19,8 @@ availability, and now **SLO-friendly service readiness** signals.
 
 ## 🪶 Resource usage
 
-Swarm Scheduler Exporter is designed to be lightweight. In typical Docker deployments it can sit around **~25 MiB RAM** when idle (exact usage depends on
+Swarm Scheduler Exporter is designed to be lightweight. In typical Docker deployments it can sit around **~25 MiB RAM** when idle (exact usage depends
+on
 platform, Go version, and container runtime settings).
 
 ## 📊 Metrics
@@ -44,6 +45,11 @@ All metrics live under the `swarm_` namespace.
   Number of replicas that can currently be scheduled given node availability and placement constraints.
   **Replicated**: `min(configured_replicas, eligible_nodes)` — drops to `0` when the only eligible node for a constrained service is offline.
   **Global**: equal to `desired_replicas` (eligible-node count).
+  **One-shot / cronjob services** (`RestartPolicy.Condition == "none"`): always `0`, since the scheduler is not expected to keep tasks running for
+  them. This silences false positives for swarm-cronjob–managed services that idle at `running=0` between runs.
+  Architecture matching for `Placement.Platforms` normalizes kernel-style names (`x86_64`, `aarch64`, `armv7l`, `i686`, …) to Docker manifest names (
+  `amd64`, `arm64`, `arm`, `386`, …) on both sides of the comparison, so a manager that reports `x86_64` correctly matches a service requiring
+  `amd64`.
   Prefer this over `desired_replicas` in alert expressions to suppress false positives when a pinned node is down:
 
   ```promql
@@ -334,7 +340,7 @@ Prometheus Alert rule:
 scrape_configs:
   - job_name: 'swarm-scheduler-exporter'
     static_configs:
-      - targets: [ 'swarm-manager:8888' ]
+      - targets: ['swarm-manager:8888']
 ```
 
 ## 🔐 Security & Permissions

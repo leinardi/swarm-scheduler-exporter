@@ -66,6 +66,15 @@ const (
 	backoffMultiplier   = 2                      // multiplier for exponential backoff
 )
 
+const (
+	arch386     = "386"
+	archAARCH64 = "aarch64"
+	archAMD64   = "amd64"
+	archARM     = "arm"
+	archARM64   = "arm64"
+	archX8664   = "x86_64"
+)
+
 // Capacity hint for the node attribute map; avoids magic numbers.
 const defaultNodeAttrCapacity = 32
 
@@ -598,7 +607,15 @@ func setDesiredReplicasGauge(metadata *serviceMetadata, value float64) {
 }
 
 // setSchedulableReplicasGauge writes the schedulable replicas gauge value.
+// Services with RestartPolicy.Condition=="none" (one-shot/cronjob) are forced
+// to 0 because the scheduler is not expected to keep tasks running for them
+// — using the raw placement-eligibility value would produce constant
+// false-positive alerts of the form running_replicas < schedulable_replicas.
 func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
+	if metadata.restartConditionNone {
+		value = 0
+	}
+
 	schedulableReplicasGauge.With(labelsForMetadata(metadata)).Set(value)
 }
 
@@ -734,23 +751,40 @@ func isNodeSchedulable(node *swarm.Node) bool {
 	return true
 }
 
+// normalizeArch maps common kernel-style architecture names (as reported by
+// Docker nodes via uname -m) to the Docker manifest convention used in service
+// placement Platforms (GOARCH names). Without this, a manager whose node
+// reports "x86_64" never matches a required platform of "amd64".
+func normalizeArch(arch string) string {
+	switch strings.ToLower(arch) {
+	case archX8664, "x86-64", archAMD64:
+		return archAMD64
+	case archAARCH64, archARM64:
+		return archARM64
+	case "i386", "i686", arch386:
+		return arch386
+	case "armv7l", "armv7", "armhf", archARM:
+		return archARM
+	case "ppc64le":
+		return "ppc64le"
+	case "s390x":
+		return "s390x"
+	case "riscv64":
+		return "riscv64"
+	default:
+		return strings.ToLower(arch)
+	}
+}
+
 // platformMatches returns true if node.Description.Platform matches any required platform.
 func platformMatches(node *swarm.Node, required []swarm.Platform) bool {
-	nodeOS := ""
-	nodeArch := ""
-
-	if node.Description.Platform.OS != "" {
-		nodeOS = strings.ToLower(node.Description.Platform.OS)
-	}
-
-	if node.Description.Platform.Architecture != "" {
-		nodeArch = strings.ToLower(node.Description.Platform.Architecture)
-	}
+	nodeOS := strings.ToLower(node.Description.Platform.OS)
+	nodeArch := normalizeArch(node.Description.Platform.Architecture)
 
 	for index := range required {
 		requiredPlatform := &required[index]
 		requiredOS := strings.ToLower(requiredPlatform.OS)
-		requiredArch := strings.ToLower(requiredPlatform.Architecture)
+		requiredArch := normalizeArch(requiredPlatform.Architecture)
 
 		osOK := (requiredOS == "" || requiredOS == nodeOS)
 		archOK := (requiredArch == "" || requiredArch == nodeArch)
@@ -843,7 +877,7 @@ func nodeAttributes(node *swarm.Node) map[string]string {
 	}
 
 	if node.Description.Platform.Architecture != "" {
-		attributes["node.platform.arch"] = strings.ToLower(node.Description.Platform.Architecture)
+		attributes["node.platform.arch"] = normalizeArch(node.Description.Platform.Architecture)
 	}
 
 	// Node labels

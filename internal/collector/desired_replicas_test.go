@@ -160,6 +160,43 @@ func TestPlatformMatches(t *testing.T) {
 	}
 }
 
+// TestPlatformMatchesArchNormalization verifies that kernel-style architecture
+// names (as reported by Docker via uname -m) match Docker manifest names
+// (GOARCH) used in service Spec.TaskTemplate.Placement.Platforms.
+func TestPlatformMatchesArchNormalization(t *testing.T) {
+	cases := []struct {
+		name     string
+		nodeArch string
+		reqArch  string
+		want     bool
+	}{
+		{"x86_64 node matches amd64 platform", "x86_64", "amd64", true},
+		{"amd64 node matches x86_64 platform", "amd64", "x86_64", true},
+		{"aarch64 node matches arm64 platform", "aarch64", "arm64", true},
+		{"arm64 node matches aarch64 platform", "arm64", "aarch64", true},
+		{"i686 node matches 386 platform", "i686", "386", true},
+		{"armv7l node matches arm platform", "armv7l", "arm", true},
+		{"x86_64 node does NOT match arm64", "x86_64", "arm64", false},
+		{"aarch64 node does NOT match amd64", "aarch64", "amd64", false},
+	}
+	for _, tc := range cases {
+		node := swarm.Node{
+			Description: swarm.NodeDescription{
+				Hostname: "n",
+				Platform: swarm.Platform{OS: "linux", Architecture: tc.nodeArch},
+			},
+			Status: swarm.NodeStatus{State: swarm.NodeStateReady},
+			Spec:   swarm.NodeSpec{Availability: swarm.NodeAvailabilityActive},
+		}
+
+		got := platformMatches(&node, []swarm.Platform{{OS: "linux", Architecture: tc.reqArch}})
+		if got != tc.want {
+			t.Errorf("[%s] platformMatches(%s vs %s) = %v, want %v",
+				tc.name, tc.nodeArch, tc.reqArch, got, tc.want)
+		}
+	}
+}
+
 func TestConstraintsMatch(t *testing.T) {
 	node := swarm.Node{
 		ID: "abc123",

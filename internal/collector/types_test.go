@@ -189,6 +189,39 @@ func TestBuildMetadata_PlacementCopied(t *testing.T) {
 	}
 }
 
+func TestBuildMetadata_RestartConditionNone(t *testing.T) {
+	resetCollectorState(t)
+
+	n := uint64(1)
+	svc := &swarm.Service{
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{Name: "oneshot"},
+			Mode: swarm.ServiceMode{
+				Replicated: &swarm.ReplicatedService{Replicas: &n},
+			},
+			TaskTemplate: swarm.TaskSpec{
+				RestartPolicy: &swarm.RestartPolicy{
+					Condition: swarm.RestartPolicyConditionNone,
+				},
+			},
+		},
+	}
+
+	if md := buildMetadata(svc); !md.restartConditionNone {
+		t.Errorf("restartConditionNone = false, want true for condition=none")
+	}
+
+	svc.Spec.TaskTemplate.RestartPolicy.Condition = swarm.RestartPolicyConditionAny
+	if md := buildMetadata(svc); md.restartConditionNone {
+		t.Errorf("restartConditionNone = true, want false for condition=any")
+	}
+
+	svc.Spec.TaskTemplate.RestartPolicy = nil
+	if md := buildMetadata(svc); md.restartConditionNone {
+		t.Errorf("restartConditionNone = true, want false for nil RestartPolicy")
+	}
+}
+
 func TestBuildMetadata_CustomLabels(t *testing.T) {
 	resetCollectorState(t)
 	SetCustomLabels([]string{"team", "tier"}, []string{"team", "tier"})
