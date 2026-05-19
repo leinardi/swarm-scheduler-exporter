@@ -46,14 +46,15 @@ type customLabelDef struct {
 
 // serviceMetadata is immutable data we keep per service to populate metric labels.
 type serviceMetadata struct {
-	stack              string            // Docker stack name from label "com.docker.stack.namespace"
-	service            string            // Service visible name (Annotations.Name)
-	serviceMode        string            // "replicated" or "global"
-	customLabels       map[string]string // key: sanitized name; value: service label value
-	desiredReplicas    float64           // last computed desired replicas for this service
-	configuredReplicas float64           // replicated: configured replica count (from Spec)
-	constraints        []string          // placement constraint expressions (e.g. "node.hostname == pollux")
-	platforms          []swarm.Platform  // placement platform requirements
+	stack                string            // Docker stack name from label "com.docker.stack.namespace"
+	service              string            // Service visible name (Annotations.Name)
+	serviceMode          string            // "replicated" or "global"
+	customLabels         map[string]string // key: sanitized name; value: service label value
+	desiredReplicas      float64           // last computed desired replicas for this service
+	configuredReplicas   float64           // replicated: configured replica count (from Spec)
+	constraints          []string          // placement constraint expressions (e.g. "node.hostname == pollux")
+	platforms            []swarm.Platform  // placement platform requirements
+	restartConditionNone bool              // true when RestartPolicy.Condition=="none" (one-shot/cronjob services)
 }
 
 // --- Package-level state (protected by locks) ---
@@ -128,7 +129,8 @@ func getGlobalServiceIDs() []string {
 
 	var ids []string
 
-	for serviceID, md := range metadataCache {
+	for serviceID := range metadataCache {
+		md := metadataCache[serviceID]
 		if md.serviceMode == "global" {
 			ids = append(ids, serviceID)
 		}
@@ -145,7 +147,8 @@ func getReplicatedServiceMetadata() []serviceMetadata {
 
 	var out []serviceMetadata
 
-	for _, md := range metadataCache {
+	for serviceID := range metadataCache {
+		md := metadataCache[serviceID]
 		if md.serviceMode == serviceModeReplicated {
 			out = append(out, md)
 		}
@@ -211,6 +214,11 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 			copy(ps, svc.Spec.TaskTemplate.Placement.Platforms)
 			metadata.platforms = ps
 		}
+	}
+
+	if svc.Spec.TaskTemplate.RestartPolicy != nil &&
+		svc.Spec.TaskTemplate.RestartPolicy.Condition == swarm.RestartPolicyConditionNone {
+		metadata.restartConditionNone = true
 	}
 
 	for index := range customLabelDefs {
