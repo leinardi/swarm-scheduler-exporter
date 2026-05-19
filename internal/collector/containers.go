@@ -37,7 +37,6 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -48,20 +47,27 @@ import (
 var knownContainerStates = []string{
 	"created",
 	"restarting",
-	"running",
+	containerStateRunning,
 	"removing",
 	"paused",
-	"exited",
+	containerStateExited,
 	"dead",
 	// Health overlay (when running and healthcheck present)
 	containerStateHealthy,
 	containerStateUnhealthy,
-	"health_starting",
+	containerStateHealthStarting,
 }
 
 const (
-	containerStateHealthy   = "healthy"
-	containerStateUnhealthy = "unhealthy"
+	containerStateRunning        = "running"
+	containerStateExited         = "exited"
+	containerStateHealthStarting = "health_starting"
+	containerStateHealthy        = "healthy"
+	containerStateUnhealthy      = "unhealthy"
+
+	orchestratorCompose = "compose"
+	orchestratorSwarm   = "swarm"
+	orchestratorNone    = "none"
 
 	// Cap the number of container inspects per poll to bound overhead.
 	// We only inspect running+healthcheck (to read health) and exited (to read exit code).
@@ -156,7 +162,7 @@ func EnableContainersMetrics(enable, includeSwarm bool) {
 //   - exited              → exit_code
 func PollContainersState(
 	parentCtx context.Context,
-	cli *client.Client,
+	cli DockerAPI,
 ) ([]prometheus.Labels, error) {
 	if !containersEnabled {
 		return nil, nil
@@ -216,11 +222,11 @@ func PollContainersState(
 		need := needNone
 
 		switch cnt.State {
-		case "running":
+		case containerStateRunning:
 			// Only inspect running containers that *might* have a healthcheck.
 			// We don’t know healthcheck presence from the list; inspect to confirm.
 			need = needHealth
-		case "exited":
+		case containerStateExited:
 			// Capture the exit code.
 			need = needExit
 		default:
@@ -296,15 +302,15 @@ func classifyOrchestrator(lbls map[string]string) (project, service, stack, orch
 
 	switch {
 	case project != "":
-		orchestrator = "compose"
+		orchestrator = orchestratorCompose
 	case swarmSvc != "":
-		orchestrator = "swarm"
+		orchestrator = orchestratorSwarm
 
 		if service == "" {
 			service = shortServiceName(stack, swarmSvc)
 		}
 	default:
-		orchestrator = "none"
+		orchestrator = orchestratorNone
 		// Best effort: some plain containers still carry labels like "org.opencontainers.image.title".
 	}
 
@@ -343,7 +349,7 @@ func displayNameForContainer(group, service, containerName string) string {
 // NOTE: we always ensure 'state' and 'exit_code' labels are set on each row:
 //   - 'state' is either the base docker state or a health overlay
 //   - 'exit_code' is "" unless state == "exited"
-func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row) {
+func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 	inspected := 0
 
 	for rowIdx := range rows {
@@ -414,7 +420,7 @@ func applyHealthOverlay(rowRef *row, inspected container.InspectResponse) {
 
 			return
 		case "starting":
-			rowRef.labels[labelState] = "health_starting"
+			rowRef.labels[labelState] = containerStateHealthStarting
 
 			return
 		}
@@ -431,7 +437,7 @@ func applyExitCode(rowRef *row, inspected container.InspectResponse) {
 		return
 	}
 
-	if !strings.EqualFold(rowRef.state, "exited") {
+	if !strings.EqualFold(rowRef.state, containerStateExited) {
 		return
 	}
 

@@ -39,7 +39,6 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -156,7 +155,7 @@ func ConfigureReplicasStateGauge() {
 // and per (service, nodeID) for global services.
 func PollReplicasState(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 ) (serviceCounter, error) {
 	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
 	serviceIDs := getAllServiceIDs()
@@ -404,7 +403,7 @@ func newerThan(candidate, current *swarm.Task) bool {
 // populating the local metadata cache if necessary.
 func getServiceLabels(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	task *swarm.Task,
 ) (prometheus.Labels, error) {
 	serviceID := task.ServiceID

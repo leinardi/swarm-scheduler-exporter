@@ -42,7 +42,6 @@ import (
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -109,7 +108,7 @@ func ConfigureDesiredReplicasGauge() {
 // which should be used as the initial "Since" value when starting the events stream.
 func InitDesiredReplicasGauge(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 ) (time.Time, error) {
 	// Capture an anchor *before* we read the world, so any concurrent changes
 	// during seeding will still be caught by the event stream started with this "since".
@@ -164,7 +163,7 @@ func InitDesiredReplicasGauge(
 // are missed between the initial seeding and the first stream connection.
 func ListenSwarmEvents(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	initialSince time.Time,
 ) error {
 	filterArgs := filters.NewArgs()
@@ -268,7 +267,7 @@ func ListenSwarmEvents(
 // (and therefore eligible for processing).
 func runEventPump(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	eventChannel <-chan events.Message,
 	errorChannel <-chan error,
 ) (time.Time, error) {
@@ -358,7 +357,7 @@ dispatchLoop:
 // startEventWorkers launches a fixed-size pool consuming from jobs.
 func startEventWorkers(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	jobsChannel <-chan events.Message,
 	workerCount int,
 	workerGroup *sync.WaitGroup,
@@ -372,7 +371,7 @@ func startEventWorkers(
 func workerLoop(
 	workerID int,
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	jobsChannel <-chan events.Message,
 	workerGroup *sync.WaitGroup,
 ) {
@@ -399,7 +398,7 @@ func workerLoop(
 func processEventMessage(
 	workerID int,
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	eventMsg *events.Message,
 ) {
 	defer func() {
@@ -426,7 +425,7 @@ func processEventMessage(
 // all other actions trigger a fresh inspect to update the cache and gauge.
 func processEvent(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	evt *events.Message,
 ) error {
 	if evt.Type == "node" {
@@ -531,7 +530,7 @@ func labelsForMetadata(metadata *serviceMetadata) prometheus.Labels {
 // For global services, both desired and schedulable equal the eligible-node count.
 func updateServiceReplicasGauge(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	service *swarm.Service,
 	metadata *serviceMetadata,
 ) {
@@ -608,7 +607,7 @@ func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
 //
 
 // countActiveNodes returns the number of nodes that are READY and Availability=active.
-func countActiveNodes(parentContext context.Context, dockerClient *client.Client) (int, error) {
+func countActiveNodes(parentContext context.Context, dockerClient DockerAPI) (int, error) {
 	nodes, listErr := dockerClient.NodeList(
 		parentContext,
 		swarm.NodeListOptions{Filters: filters.Args{}},
@@ -633,7 +632,7 @@ func countActiveNodes(parentContext context.Context, dockerClient *client.Client
 // would place tasks, based on node schedulability + placement constraints + platforms.
 func countEligibleNodesForService(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	service *swarm.Service,
 ) (int, error) {
 	nodes, listErr := dockerClient.NodeList(
@@ -867,7 +866,7 @@ func nodeAttributes(node *swarm.Node) map[string]string {
 // It avoids a full metric Reset or ServiceList.
 func refreshNodesAndRecomputeGlobals(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 ) error {
 	nodes, listErr := dockerClient.NodeList(
 		parentContext,

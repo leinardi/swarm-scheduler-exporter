@@ -83,14 +83,14 @@ func ValidateAndSanitizeLabelNames(originalNames []string) ([]string, error) {
 	sanitizedNames := SanitizeLabelNames(originalNames)
 	seenNames := make(map[string]struct{}, len(sanitizedNames))
 
-	for index := range sanitizedNames {
-		sanitizedName := sanitizedNames[index]
+	for index, sanitizedName := range sanitizedNames {
+		origName := originalNames[index] //nolint:gosec // G602: parallel slices — same length by construction
 
 		// Length bound
 		if sanitizedName == "" || len(sanitizedName) > maxLabelNameLen {
 			return nil, newLabelError(
 				"invalid label name length",
-				originalNames[index],
+				origName,
 				sanitizedName,
 			)
 		}
@@ -99,7 +99,7 @@ func ValidateAndSanitizeLabelNames(originalNames []string) ([]string, error) {
 		if strings.HasPrefix(sanitizedName, "__") {
 			return nil, newLabelError(
 				"label name uses reserved prefix '__'",
-				originalNames[index],
+				origName,
 				sanitizedName,
 			)
 		}
@@ -108,7 +108,7 @@ func ValidateAndSanitizeLabelNames(originalNames []string) ([]string, error) {
 		if !isValidLabelName(sanitizedName) {
 			return nil, newLabelError(
 				"label name violates Prometheus constraints",
-				originalNames[index],
+				origName,
 				sanitizedName,
 			)
 		}
@@ -117,7 +117,7 @@ func ValidateAndSanitizeLabelNames(originalNames []string) ([]string, error) {
 		if _, exists := seenNames[sanitizedName]; exists {
 			return nil, newLabelError(
 				"label name collides after sanitization",
-				originalNames[index],
+				origName,
 				sanitizedName,
 			)
 		}

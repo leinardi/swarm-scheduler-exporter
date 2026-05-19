@@ -30,8 +30,13 @@ import (
 
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
 	"github.com/prometheus/client_golang/prometheus"
+)
+
+const (
+	labelNodeRole         = "role"
+	labelNodeAvailability = "availability"
+	labelNodeStatus       = "status"
 )
 
 var nodesByStateGauge *prometheus.GaugeVec
@@ -44,12 +49,12 @@ func ConfigureNodesByStateGauge() {
 		Name:        "nodes_by_state",
 		Help:        "Number of Swarm nodes grouped by role, availability, and status.",
 		ConstLabels: nil,
-	}, []string{"role", "availability", "status"})
+	}, []string{labelNodeRole, labelNodeAvailability, labelNodeStatus})
 	prometheus.MustRegister(nodesByStateGauge)
 }
 
 // UpdateNodesByState refreshes the nodes list from Docker and updates the gauge.
-func UpdateNodesByState(ctx context.Context, cli *client.Client) error {
+func UpdateNodesByState(ctx context.Context, cli DockerAPI) error {
 	nodes, listErr := cli.NodeList(ctx, swarm.NodeListOptions{Filters: filters.Args{}})
 	if listErr != nil {
 		return fmt.Errorf("node list: %w", listErr)
@@ -86,9 +91,9 @@ func UpdateNodesByStateFromSlice(nodes []swarm.Node) {
 	// Write out the series
 	for k, v := range counts {
 		nodesByStateGauge.With(prometheus.Labels{
-			"role":         k.role,
-			"availability": k.availability,
-			"status":       k.status,
+			labelNodeRole:         k.role,
+			labelNodeAvailability: k.availability,
+			labelNodeStatus:       k.status,
 		}).Set(v)
 	}
 }
