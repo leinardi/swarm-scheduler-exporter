@@ -90,9 +90,6 @@ jobs:
             dist/${{ env.APP_NAME }}-linux-arm64
             dist/checksums.txt
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
