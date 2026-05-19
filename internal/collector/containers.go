@@ -37,7 +37,6 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -48,18 +47,28 @@ import (
 var knownContainerStates = []string{
 	"created",
 	"restarting",
-	"running",
+	containerStateRunning,
 	"removing",
 	"paused",
-	"exited",
+	containerStateExited,
 	"dead",
 	// Health overlay (when running and healthcheck present)
-	"healthy",
-	"unhealthy",
-	"health_starting",
+	containerStateHealthy,
+	containerStateUnhealthy,
+	containerStateHealthStarting,
 }
 
 const (
+	containerStateRunning        = "running"
+	containerStateExited         = "exited"
+	containerStateHealthStarting = "health_starting"
+	containerStateHealthy        = "healthy"
+	containerStateUnhealthy      = "unhealthy"
+
+	orchestratorCompose = "compose"
+	orchestratorSwarm   = "swarm"
+	orchestratorNone    = "none"
+
 	// Cap the number of container inspects per poll to bound overhead.
 	// We only inspect running+healthcheck (to read health) and exited (to read exit code).
 	containersInspectCapDefault = 300
@@ -121,19 +130,19 @@ func ConfigureContainersStateGauge() {
 
 	baseLabels := []string{
 		"project",
-		"stack",
-		"service",
-		"container",
+		labelStack,
+		labelService,
+		labelContainer,
 		"orchestrator",
-		"display_name",
-		"state",
+		labelDisplayName,
+		labelState,
 		"exit_code",
 	}
 
 	containersStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   prometheusNamespace,
-		Subsystem:   "container",
-		Name:        "state",
+		Subsystem:   labelContainer,
+		Name:        labelState,
 		Help:        "Container state info (exactly one state=1 per container). Includes exit_code for exited.",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
@@ -153,7 +162,7 @@ func EnableContainersMetrics(enable, includeSwarm bool) {
 //   - exited              → exit_code
 func PollContainersState(
 	parentCtx context.Context,
-	cli *client.Client,
+	cli DockerAPI,
 ) ([]prometheus.Labels, error) {
 	if !containersEnabled {
 		return nil, nil
@@ -200,12 +209,12 @@ func PollContainersState(
 		friendly := displayNameForContainer(group, service, containerName)
 
 		base := prometheus.Labels{
-			"project":      project,
-			"stack":        stack,
-			"service":      service,
-			"container":    containerName,
-			"orchestrator": orchestrator,
-			"display_name": friendly,
+			"project":        project,
+			labelStack:       stack,
+			labelService:     service,
+			labelContainer:   containerName,
+			"orchestrator":   orchestrator,
+			labelDisplayName: friendly,
 			// 'state' and 'exit_code' are added during enrichment/emission
 		}
 
@@ -213,11 +222,11 @@ func PollContainersState(
 		need := needNone
 
 		switch cnt.State {
-		case "running":
+		case containerStateRunning:
 			// Only inspect running containers that *might* have a healthcheck.
 			// We don’t know healthcheck presence from the list; inspect to confirm.
 			need = needHealth
-		case "exited":
+		case containerStateExited:
 			// Capture the exit code.
 			need = needExit
 		default:
@@ -266,14 +275,14 @@ func UpdateContainersStateGauge(rows []prometheus.Labels) {
 			lbls := make(prometheus.Labels, len(base)+2)
 			maps.Copy(lbls, base)
 
-			lbls["state"] = state
+			lbls[labelState] = state
 
 			// exit_code must exist (even when empty) to keep label cardinality constant.
 			exit := base["exit_code"]
 			lbls["exit_code"] = exit
 
 			value := 0.0
-			if base["state"] == state {
+			if base[labelState] == state {
 				value = 1.0
 			}
 
@@ -293,15 +302,15 @@ func classifyOrchestrator(lbls map[string]string) (project, service, stack, orch
 
 	switch {
 	case project != "":
-		orchestrator = "compose"
+		orchestrator = orchestratorCompose
 	case swarmSvc != "":
-		orchestrator = "swarm"
+		orchestrator = orchestratorSwarm
 
 		if service == "" {
 			service = shortServiceName(stack, swarmSvc)
 		}
 	default:
-		orchestrator = "none"
+		orchestrator = orchestratorNone
 		// Best effort: some plain containers still carry labels like "org.opencontainers.image.title".
 	}
 
@@ -340,7 +349,7 @@ func displayNameForContainer(group, service, containerName string) string {
 // NOTE: we always ensure 'state' and 'exit_code' labels are set on each row:
 //   - 'state' is either the base docker state or a health overlay
 //   - 'exit_code' is "" unless state == "exited"
-func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row) {
+func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 	inspected := 0
 
 	for rowIdx := range rows {
@@ -349,7 +358,7 @@ func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row)
 
 		// If no enrichment is needed, use base state and continue.
 		if rows[rowIdx].need == needNone {
-			rows[rowIdx].labels["state"] = rows[rowIdx].state
+			rows[rowIdx].labels[labelState] = rows[rowIdx].state
 
 			continue
 		}
@@ -360,7 +369,7 @@ func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row)
 				"cap", containersInspectCap,
 			)
 
-			rows[rowIdx].labels["state"] = rows[rowIdx].state
+			rows[rowIdx].labels[labelState] = rows[rowIdx].state
 
 			continue
 		}
@@ -375,7 +384,7 @@ func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row)
 			logger.L().Warn("container inspect failed; using base state",
 				"container_id", rows[rowIdx].id, "err", inspectErr,
 			)
-			rows[rowIdx].labels["state"] = rows[rowIdx].state
+			rows[rowIdx].labels[labelState] = rows[rowIdx].state
 
 			continue
 		}
@@ -390,7 +399,7 @@ func enrichContainers(parentCtx context.Context, cli *client.Client, rows []row)
 			applyExitCode(&rows[rowIdx], inspectedJSON)
 		case needNone:
 			// No enrichment; keep the base docker state.
-			rows[rowIdx].labels["state"] = rows[rowIdx].state
+			rows[rowIdx].labels[labelState] = rows[rowIdx].state
 		}
 	}
 }
@@ -402,33 +411,33 @@ func applyHealthOverlay(rowRef *row, inspected container.InspectResponse) {
 		inspected.State != nil &&
 		inspected.State.Health != nil {
 		switch strings.ToLower(strings.TrimSpace(inspected.State.Health.Status)) {
-		case "healthy":
-			rowRef.labels["state"] = "healthy"
+		case containerStateHealthy:
+			rowRef.labels[labelState] = containerStateHealthy
 
 			return
-		case "unhealthy":
-			rowRef.labels["state"] = "unhealthy"
+		case containerStateUnhealthy:
+			rowRef.labels[labelState] = containerStateUnhealthy
 
 			return
 		case "starting":
-			rowRef.labels["state"] = "health_starting"
+			rowRef.labels[labelState] = containerStateHealthStarting
 
 			return
 		}
 	}
 	// No healthcheck or unknown status → keep base.
-	rowRef.labels["state"] = rowRef.state
+	rowRef.labels[labelState] = rowRef.state
 }
 
 // applyExitCode annotates the exit code for exited containers.
 func applyExitCode(rowRef *row, inspected container.InspectResponse) {
-	rowRef.labels["state"] = rowRef.state
+	rowRef.labels[labelState] = rowRef.state
 
 	if inspected.State == nil {
 		return
 	}
 
-	if !strings.EqualFold(rowRef.state, "exited") {
+	if !strings.EqualFold(rowRef.state, containerStateExited) {
 		return
 	}
 

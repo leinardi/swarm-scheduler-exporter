@@ -24,26 +24,28 @@
 
 package collector
 
-// Centralized Prometheus namespace/subsystem identifiers used across collectors.
-// Keep these unexported unless an external package needs them.
+import (
+	"context"
 
-const (
-	// Global namespace for all metrics in this project.
-	prometheusNamespace = "swarm"
-
-	// Subsystems per functional area.
-	prometheusExporterSubsystem = "exporter"
-	prometheusServiceSubsystem  = "service"
-	prometheusTaskSubsystem     = "task"
-	prometheusClusterSubsystem  = "cluster"
-
-	labelContainer   = "container"
-	labelDisplayName = "display_name"
-	labelService     = "service"
-	labelServiceMode = "service_mode"
-	labelStack       = "stack"
-	labelState       = "state"
-
-	serviceModeReplicated = "replicated"
-	serviceModeGlobal     = "global"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/swarm"
 )
+
+// DockerAPI is the subset of docker/docker client.Client used by this package.
+// Accepting an interface (rather than the concrete *client.Client) allows tests
+// to inject a fake without requiring a running Docker daemon.
+// *client.Client satisfies this interface — no adapter is needed.
+type DockerAPI interface {
+	NodeList(ctx context.Context, opts swarm.NodeListOptions) ([]swarm.Node, error)
+	ServiceList(ctx context.Context, opts swarm.ServiceListOptions) ([]swarm.Service, error)
+	ServiceInspectWithRaw(
+		ctx context.Context,
+		serviceID string,
+		opts swarm.ServiceInspectOptions,
+	) (swarm.Service, []byte, error)
+	TaskList(ctx context.Context, opts swarm.TaskListOptions) ([]swarm.Task, error)
+	ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error)
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	Events(ctx context.Context, opts events.ListOptions) (<-chan events.Message, <-chan error)
+}

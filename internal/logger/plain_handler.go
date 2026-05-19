@@ -37,6 +37,13 @@ import (
 	"time"
 )
 
+const (
+	levelDebug = "DEBUG"
+	levelInfo  = "INFO"
+	levelWarn  = "WARN"
+	levelError = "ERROR"
+)
+
 // PlainTextHandler writes lines like:
 //
 //	level=INFO hello world k=v foo=bar
@@ -162,13 +169,13 @@ func (handler *PlainTextHandler) WithGroup(name string) slog.Handler {
 func levelToUpper(levelValue slog.Level) string {
 	switch {
 	case levelValue <= slog.LevelDebug:
-		return "DEBUG"
+		return levelDebug
 	case levelValue == slog.LevelInfo:
-		return "INFO"
+		return levelInfo
 	case levelValue == slog.LevelWarn:
-		return "WARN"
+		return levelWarn
 	default:
-		return "ERROR"
+		return levelError
 	}
 }
 

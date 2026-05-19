@@ -39,7 +39,6 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/client"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
@@ -108,11 +107,11 @@ type latestKey struct {
 // with base labels (stack, service, service_mode, state) plus any custom labels.
 func ConfigureReplicasStateGauge() {
 	baseLabels := append([]string{
-		"stack",
-		"service",
-		"service_mode",
-		"display_name",
-		"state",
+		labelStack,
+		labelService,
+		labelServiceMode,
+		labelDisplayName,
+		labelState,
 	}, getSanitizedCustomLabelNames()...)
 
 	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -126,10 +125,10 @@ func ConfigureReplicasStateGauge() {
 
 	// New: running replicas (no "state" label)
 	runningBase := append([]string{
-		"stack",
-		"service",
-		"service_mode",
-		"display_name",
+		labelStack,
+		labelService,
+		labelServiceMode,
+		labelDisplayName,
 	}, getSanitizedCustomLabelNames()...)
 	runningReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   prometheusNamespace,
@@ -156,7 +155,7 @@ func ConfigureReplicasStateGauge() {
 // and per (service, nodeID) for global services.
 func PollReplicasState(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 ) (serviceCounter, error) {
 	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
 	serviceIDs := getAllServiceIDs()
@@ -204,7 +203,7 @@ func PollReplicasState(
 		}
 
 		var dedupeKey latestKey
-		if mode == "replicated" {
+		if mode == serviceModeReplicated {
 			dedupeKey = latestKey{
 				serviceID: task.ServiceID,
 				slot:      task.Slot,
@@ -276,7 +275,7 @@ func UpdateReplicasStateGauge(counterByService serviceCounter) {
 			labels := prometheus.Labels{}
 			maps.Copy(labels, baseLabels)
 
-			labels["state"] = state
+			labels[labelState] = state
 
 			value := taskCounterValue.states[state] // zero if missing
 			replicasStateGauge.With(labels).Set(value)
@@ -306,9 +305,9 @@ func setAtDesiredForService(
 	if !foundDesired {
 		logger.L().Warn("desired replicas missing from cache",
 			"service_id", serviceID,
-			"stack", baseLabels["stack"],
-			"service", baseLabels["service"],
-			"mode", baseLabels["service_mode"],
+			labelStack, baseLabels[labelStack],
+			labelService, baseLabels[labelService],
+			"mode", baseLabels[labelServiceMode],
 			"running", running,
 		)
 
@@ -341,9 +340,9 @@ func logAtDesiredMismatchOncePerChange(
 
 	logger.L().Debug("at_desired mismatch",
 		"service_id", serviceID,
-		"stack", baseLabels["stack"],
-		"service", baseLabels["service"],
-		"mode", baseLabels["service_mode"],
+		labelStack, baseLabels[labelStack],
+		labelService, baseLabels[labelService],
+		"mode", baseLabels[labelServiceMode],
 		"running", running,
 		"desired", desired,
 	)
@@ -404,7 +403,7 @@ func newerThan(candidate, current *swarm.Task) bool {
 // populating the local metadata cache if necessary.
 func getServiceLabels(
 	parentContext context.Context,
-	dockerClient *client.Client,
+	dockerClient DockerAPI,
 	task *swarm.Task,
 ) (prometheus.Labels, error) {
 	serviceID := task.ServiceID
@@ -412,10 +411,10 @@ func getServiceLabels(
 	// Fast path: metadata present
 	if metadata, ok := getServiceMetadata(serviceID); ok {
 		labelSet := prometheus.Labels{
-			"stack":        metadata.stack,
-			"service":      metadata.service,
-			"service_mode": metadata.serviceMode,
-			"display_name": displayName(metadata.stack, metadata.service),
+			labelStack:       metadata.stack,
+			labelService:     metadata.service,
+			labelServiceMode: metadata.serviceMode,
+			labelDisplayName: displayName(metadata.stack, metadata.service),
 		}
 		maps.Copy(labelSet, metadata.customLabels)
 
@@ -435,13 +434,13 @@ func getServiceLabels(
 	}
 
 	metadata := buildMetadata(&service)
-	setServiceMetadata(serviceID, metadata)
+	setServiceMetadata(serviceID, &metadata)
 
 	labelSet := prometheus.Labels{
-		"stack":        metadata.stack,
-		"service":      metadata.service,
-		"service_mode": metadata.serviceMode,
-		"display_name": displayName(metadata.stack, metadata.service),
+		labelStack:       metadata.stack,
+		labelService:     metadata.service,
+		labelServiceMode: metadata.serviceMode,
+		labelDisplayName: displayName(metadata.stack, metadata.service),
 	}
 	for key, value := range metadata.customLabels {
 		labelSet[key] = value
