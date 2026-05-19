@@ -36,4 +36,14 @@ const (
 	prometheusServiceSubsystem  = "service"
 	prometheusTaskSubsystem     = "task"
 	prometheusClusterSubsystem  = "cluster"
+
+	labelContainer   = "container"
+	labelDisplayName = "display_name"
+	labelService     = "service"
+	labelServiceMode = "service_mode"
+	labelStack       = "stack"
+	labelState       = "state"
+
+	serviceModeReplicated = "replicated"
+	serviceModeGlobal     = "global"
 )

@@ -38,8 +38,8 @@ const (
 
 var (
 	// UnixNano timestamps (0 means "never").
-	lastPollSuccessUnixNano   int64
-	lastEventsConnectUnixNano int64
+	lastPollSuccessUnixNano   atomic.Int64
+	lastEventsConnectUnixNano atomic.Int64
 
 	// Prometheus health metrics.
 	exporterHealthGauge prometheus.Gauge
@@ -72,12 +72,12 @@ func ConfigureHealthGauges(version, commit, date string) {
 
 // MarkPollOK records the time of the latest successful replicas-state publish.
 func MarkPollOK(now time.Time) {
-	atomic.StoreInt64(&lastPollSuccessUnixNano, now.UnixNano())
+	lastPollSuccessUnixNano.Store(now.UnixNano())
 }
 
 // MarkEventsConnected records the time at which the event stream connected (or reconnected).
 func MarkEventsConnected(now time.Time) {
-	atomic.StoreInt64(&lastEventsConnectUnixNano, now.UnixNano())
+	lastEventsConnectUnixNano.Store(now.UnixNano())
 }
 
 // HealthSnapshot returns whether the exporter is healthy and a human reason.
@@ -85,7 +85,7 @@ func MarkEventsConnected(now time.Time) {
 //   - we have at least one successful poll, and
 //   - that poll is not older than max(3*pollDelay, 30s).
 func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reason string) {
-	lastPoll := time.Unix(0, atomic.LoadInt64(&lastPollSuccessUnixNano))
+	lastPoll := time.Unix(0, lastPollSuccessUnixNano.Load())
 	if lastPoll.IsZero() {
 		return false, "no successful poll yet"
 	}

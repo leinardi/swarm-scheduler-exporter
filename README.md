@@ -40,6 +40,16 @@ All metrics live under the `swarm_` namespace.
 - `swarm_service_at_desired{stack,service,service_mode,...custom}`
   `1` if `running_replicas == desired_replicas`, else `0`. Useful for dead-simple SLOs and alerting.
 
+- `swarm_service_schedulable_replicas{stack,service,service_mode,...custom}`
+  Number of replicas that can currently be scheduled given node availability and placement constraints.
+  **Replicated**: `min(configured_replicas, eligible_nodes)` — drops to `0` when the only eligible node for a constrained service is offline.
+  **Global**: equal to `desired_replicas` (eligible-node count).
+  Prefer this over `desired_replicas` in alert expressions to suppress false positives when a pinned node is down:
+
+  ```promql
+  swarm_service_running_replicas < on(stack,service,service_mode,display_name) swarm_service_schedulable_replicas
+  ```
+
 > ℹ️ **Global services with 0 eligible nodes:** `desired_replicas=0`, `running_replicas` usually `0` ⇒ `at_desired=1`.
 
 ### Service update/rollback (info-style)

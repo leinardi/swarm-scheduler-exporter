@@ -66,16 +66,16 @@ var serviceUpdateMetricsInitWarnOnce sync.Once
 // ConfigureServiceUpdateMetrics registers the update-state and timestamp metrics.
 func ConfigureServiceUpdateMetrics() {
 	baseLabels := append([]string{
-		"stack",
-		"service",
-		"service_mode",
-		"display_name",
+		labelStack,
+		labelService,
+		labelServiceMode,
+		labelDisplayName,
 	}, getSanitizedCustomLabelNames()...)
 
 	// info-style: one of these will be 1, the others 0 per service
 	stateLabels := make([]string, 0, len(baseLabels)+1)
 	stateLabels = append(stateLabels, baseLabels...)
-	stateLabels = append(stateLabels, "state")
+	stateLabels = append(stateLabels, labelState)
 
 	serviceUpdateStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace:   prometheusNamespace,
@@ -125,12 +125,12 @@ func updateStateFromSwarm(state swarm.UpdateState) string {
 }
 
 // labelsForService builds the sanitized label set for a service from cached metadata.
-func labelsForService(metadata serviceMetadata) prometheus.Labels {
+func labelsForService(metadata *serviceMetadata) prometheus.Labels {
 	baseLabels := prometheus.Labels{
-		"stack":        metadata.stack,
-		"service":      metadata.service,
-		"service_mode": metadata.serviceMode,
-		"display_name": displayName(metadata.stack, metadata.service),
+		labelStack:       metadata.stack,
+		labelService:     metadata.service,
+		labelServiceMode: metadata.serviceMode,
+		labelDisplayName: displayName(metadata.stack, metadata.service),
 	}
 	for key, value := range metadata.customLabels {
 		// Warn once if a value looks high-cardinality.
@@ -142,7 +142,7 @@ func labelsForService(metadata serviceMetadata) prometheus.Labels {
 }
 
 // UpdateServiceUpdateMetricsForService emits the info-style state and timestamps for one service.
-func UpdateServiceUpdateMetricsForService(service *swarm.Service, metadata serviceMetadata) {
+func UpdateServiceUpdateMetricsForService(service *swarm.Service, metadata *serviceMetadata) {
 	if serviceUpdateStateGauge == nil || serviceUpdateStartedTimestamp == nil ||
 		serviceUpdateCompletedTimestamp == nil {
 		serviceUpdateMetricsInitWarnOnce.Do(func() {
@@ -195,7 +195,7 @@ func UpdateServiceUpdateMetricsForService(service *swarm.Service, metadata servi
 }
 
 // ClearServiceUpdateMetrics deletes all series for a removed service.
-func ClearServiceUpdateMetrics(metadata serviceMetadata) {
+func ClearServiceUpdateMetrics(metadata *serviceMetadata) {
 	if serviceUpdateStateGauge == nil || serviceUpdateStartedTimestamp == nil ||
 		serviceUpdateCompletedTimestamp == nil {
 		serviceUpdateMetricsInitWarnOnce.Do(func() {
@@ -224,7 +224,7 @@ func cloneLabelsWithState(baseLabels prometheus.Labels, state string) prometheus
 	labels := make(prometheus.Labels, len(baseLabels)+1)
 	maps.Copy(labels, baseLabels)
 
-	labels["state"] = state
+	labels[labelState] = state
 
 	return labels
 }

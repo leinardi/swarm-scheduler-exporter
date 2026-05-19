@@ -51,6 +51,12 @@ import (
 // desiredReplicasGauge is the gauge vector exported at /metrics.
 var desiredReplicasGauge *prometheus.GaugeVec
 
+// schedulableReplicasGauge tracks the number of replicas that can actually be
+// scheduled right now given current node availability and placement constraints.
+// For replicated services it equals min(configured, eligible_nodes).
+// For global services it equals the eligible-node count (same as desired_replicas).
+var schedulableReplicasGauge *prometheus.GaugeVec
+
 // Event stream / worker pool configuration.
 // These defaults keep memory bounded and provide good throughput.
 const (
@@ -66,14 +72,15 @@ const defaultNodeAttrCapacity = 32
 
 var ErrEventsStreamClosed = errors.New("events stream closed")
 
-// ConfigureDesiredReplicasGauge registers the "swarm_service_desired_replicas" gauge
-// with base labels (stack, service, service_mode) plus any user-specified custom labels.
+// ConfigureDesiredReplicasGauge registers the "swarm_service_desired_replicas" and
+// "swarm_service_schedulable_replicas" gauges with base labels (stack, service,
+// service_mode, display_name) plus any user-specified custom labels.
 func ConfigureDesiredReplicasGauge() {
 	baseLabels := append([]string{
-		"stack",
-		"service",
-		"service_mode",
-		"display_name",
+		labelStack,
+		labelService,
+		labelServiceMode,
+		labelDisplayName,
 	}, getSanitizedCustomLabelNames()...)
 
 	desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -84,6 +91,16 @@ func ConfigureDesiredReplicasGauge() {
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(desiredReplicasGauge)
+
+	schedulableReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: prometheusNamespace,
+		Subsystem: prometheusServiceSubsystem,
+		Name:      "schedulable_replicas",
+		Help: "Number of replicas that can currently be scheduled given node availability and placement constraints " +
+			"(replicated: min(configured, eligible_nodes); global: eligible nodes).",
+		ConstLabels: nil,
+	}, labelutil.SanitizeLabelNames(baseLabels))
+	prometheus.MustRegister(schedulableReplicasGauge)
 }
 
 // InitDesiredReplicasGauge seeds the gauge with current desired replica counts
@@ -119,19 +136,22 @@ func InitDesiredReplicasGauge(
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes)
 
-	// Reset service desired replicas vector so removed services are dropped.
+	// Reset service replica vectors so removed services are dropped.
 	desiredReplicasGauge.Reset()
+	schedulableReplicasGauge.Reset()
 
 	for index := range services { // avoid copying large struct
 		service := &services[index]
-		setServiceMetadata(service.ID, buildMetadata(service))
+		builtMetadata := buildMetadata(service)
+		setServiceMetadata(service.ID, &builtMetadata)
+		metadata := mustGetServiceMetadata(service.ID)
 		updateServiceReplicasGauge(
 			parentContext,
 			dockerClient,
 			service,
-			mustGetServiceMetadata(service.ID),
+			&metadata,
 		)
-		UpdateServiceUpdateMetricsForService(service, mustGetServiceMetadata(service.ID))
+		UpdateServiceUpdateMetricsForService(service, &metadata)
 	}
 
 	return initialSinceAnchor, nil
@@ -433,8 +453,9 @@ func processEvent(
 			return ErrNoCachedMetadata
 		}
 		// Delete the series entirely to avoid stale zero-valued metrics.
-		_ = desiredReplicasGauge.Delete(labelsForMetadata(metadata))
-		ClearServiceUpdateMetrics(metadata)
+		_ = desiredReplicasGauge.Delete(labelsForMetadata(&metadata))
+		_ = schedulableReplicasGauge.Delete(labelsForMetadata(&metadata))
+		ClearServiceUpdateMetrics(&metadata)
 		deleteServiceMetadata(serviceID)
 
 		atDesiredLogState.Delete(serviceID)
@@ -455,14 +476,16 @@ func processEvent(
 		return fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
 	}
 
-	setServiceMetadata(serviceID, buildMetadata(&service))
+	builtMetadata := buildMetadata(&service)
+	setServiceMetadata(serviceID, &builtMetadata)
+	metadata := mustGetServiceMetadata(serviceID)
 	updateServiceReplicasGauge(
 		parentContext,
 		dockerClient,
 		&service,
-		mustGetServiceMetadata(serviceID),
+		&metadata,
 	)
-	UpdateServiceUpdateMetricsForService(&service, mustGetServiceMetadata(serviceID))
+	UpdateServiceUpdateMetricsForService(&service, &metadata)
 
 	return nil
 }
@@ -487,12 +510,12 @@ func mustGetServiceMetadata(serviceID string) serviceMetadata {
 }
 
 // labelsForMetadata builds a sanitized label set (same keys used for With/Delete).
-func labelsForMetadata(metadata serviceMetadata) prometheus.Labels {
+func labelsForMetadata(metadata *serviceMetadata) prometheus.Labels {
 	labels := prometheus.Labels{
-		"stack":        metadata.stack,
-		"service":      metadata.service,
-		"service_mode": metadata.serviceMode,
-		"display_name": displayName(metadata.stack, metadata.service),
+		labelStack:       metadata.stack,
+		labelService:     metadata.service,
+		labelServiceMode: metadata.serviceMode,
+		labelDisplayName: displayName(metadata.stack, metadata.service),
 	}
 	for key, value := range metadata.customLabels {
 		labels[key] = value
@@ -503,28 +526,42 @@ func labelsForMetadata(metadata serviceMetadata) prometheus.Labels {
 	return labelutil.SanitizeMetricLabels(labels)
 }
 
-// updateServiceReplicasGauge sets the per-service desired replicas value
-// based on the service mode and configured replica count.
-// For global services, it counts eligible nodes using placement constraints.
+// updateServiceReplicasGauge sets the per-service desired and schedulable replica values.
+// For replicated services, desired = configured replicas, schedulable = min(configured, eligible_nodes).
+// For global services, both desired and schedulable equal the eligible-node count.
 func updateServiceReplicasGauge(
 	parentContext context.Context,
 	dockerClient *client.Client,
 	service *swarm.Service,
-	metadata serviceMetadata,
+	metadata *serviceMetadata,
 ) {
 	if service.Spec.Mode.Replicated != nil {
 		desired := float64(*service.Spec.Mode.Replicated.Replicas)
 		setServiceDesiredReplicas(service.ID, desired)
 		setDesiredReplicasGauge(metadata, desired)
 
+		// Compute schedulable: min(desired, eligible nodes given constraints+availability).
+		// Fall back to desired when no node snapshot is available (startup race).
+		schedulable := desired
+
+		if nodes := getCachedNodes(); len(nodes) > 0 {
+			eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
+			schedulable = min(desired, eligible)
+		}
+
+		setSchedulableReplicasGauge(metadata, schedulable)
+
 		return
 	}
+
+	// Global service: both desired and schedulable equal the eligible-node count.
 
 	// Attempt to use cached nodes if available.
 	if nodes := getCachedNodes(); len(nodes) > 0 {
 		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
 		setServiceDesiredReplicas(service.ID, eligible)
 		setDesiredReplicasGauge(metadata, eligible)
+		setSchedulableReplicasGauge(metadata, eligible)
 
 		return
 	}
@@ -545,6 +582,7 @@ func updateServiceReplicasGauge(
 		desired := float64(activeCount)
 		setServiceDesiredReplicas(service.ID, desired)
 		setDesiredReplicasGauge(metadata, desired)
+		setSchedulableReplicasGauge(metadata, desired)
 
 		return
 	}
@@ -552,11 +590,17 @@ func updateServiceReplicasGauge(
 	desired := float64(eligible)
 	setServiceDesiredReplicas(service.ID, desired)
 	setDesiredReplicasGauge(metadata, desired)
+	setSchedulableReplicasGauge(metadata, desired)
 }
 
 // setDesiredReplicasGauge writes the gauge value with sanitized label keys.
-func setDesiredReplicasGauge(metadata serviceMetadata, value float64) {
+func setDesiredReplicasGauge(metadata *serviceMetadata, value float64) {
 	desiredReplicasGauge.With(labelsForMetadata(metadata)).Set(value)
+}
+
+// setSchedulableReplicasGauge writes the schedulable replicas gauge value.
+func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
+	schedulableReplicasGauge.With(labelsForMetadata(metadata)).Set(value)
 }
 
 //
@@ -837,11 +881,6 @@ func refreshNodesAndRecomputeGlobals(
 	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
 
 	globalIDs := getGlobalServiceIDs()
-	if len(globalIDs) == 0 {
-		return nil
-	}
-
-	// Recompute desired replicas only for global services using the snapshot.
 	for index := range globalIDs {
 		serviceID := globalIDs[index]
 
@@ -872,7 +911,27 @@ func refreshNodesAndRecomputeGlobals(
 
 		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, &service))
 		setServiceDesiredReplicas(service.ID, eligible)
-		setDesiredReplicasGauge(metadata, eligible)
+		setDesiredReplicasGauge(&metadata, eligible)
+		setSchedulableReplicasGauge(&metadata, eligible) // same as desired for globals
+	}
+
+	// Recompute schedulable_replicas for replicated services using cached constraints.
+	// This keeps the gauge accurate when a constrained node changes availability.
+	replicatedMetadata := getReplicatedServiceMetadata()
+	for index := range replicatedMetadata {
+		metadata := replicatedMetadata[index]
+
+		stub := &swarm.Service{}
+		if len(metadata.constraints) > 0 || len(metadata.platforms) > 0 {
+			stub.Spec.TaskTemplate.Placement = &swarm.Placement{
+				Constraints: metadata.constraints,
+				Platforms:   metadata.platforms,
+			}
+		}
+
+		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, stub))
+		schedulable := min(metadata.configuredReplicas, eligible)
+		setSchedulableReplicasGauge(&metadata, schedulable)
 	}
 
 	return nil

@@ -46,11 +46,14 @@ type customLabelDef struct {
 
 // serviceMetadata is immutable data we keep per service to populate metric labels.
 type serviceMetadata struct {
-	stack           string            // Docker stack name from label "com.docker.stack.namespace"
-	service         string            // Service visible name (Annotations.Name)
-	serviceMode     string            // "replicated" or "global"
-	customLabels    map[string]string // key: sanitized name; value: service label value
-	desiredReplicas float64           // last computed desired replicas for this service
+	stack              string            // Docker stack name from label "com.docker.stack.namespace"
+	service            string            // Service visible name (Annotations.Name)
+	serviceMode        string            // "replicated" or "global"
+	customLabels       map[string]string // key: sanitized name; value: service label value
+	desiredReplicas    float64           // last computed desired replicas for this service
+	configuredReplicas float64           // replicated: configured replica count (from Spec)
+	constraints        []string          // placement constraint expressions (e.g. "node.hostname == pollux")
+	platforms          []swarm.Platform  // placement platform requirements
 }
 
 // --- Package-level state (protected by locks) ---
@@ -134,6 +137,23 @@ func getGlobalServiceIDs() []string {
 	return ids
 }
 
+// getReplicatedServiceMetadata returns a point-in-time copy of all replicated
+// services' scheduling-relevant metadata for use without holding the lock.
+func getReplicatedServiceMetadata() []serviceMetadata {
+	metadataMu.RLock()
+	defer metadataMu.RUnlock()
+
+	var out []serviceMetadata
+
+	for _, md := range metadataCache {
+		if md.serviceMode == serviceModeReplicated {
+			out = append(out, md)
+		}
+	}
+
+	return out
+}
+
 // SetCustomLabels records both the raw keys (as they appear in Swarm) and their sanitized names.
 // rawKeys and sanitizedKeys must have the same length and aligned order.
 func SetCustomLabels(rawKeys, sanitizedKeys []string) {
@@ -175,6 +195,24 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 		customLabels: make(map[string]string, len(customLabelDefs)),
 	}
 
+	if svc.Spec.Mode.Replicated != nil {
+		metadata.configuredReplicas = float64(*svc.Spec.Mode.Replicated.Replicas)
+	}
+
+	if svc.Spec.TaskTemplate.Placement != nil {
+		if len(svc.Spec.TaskTemplate.Placement.Constraints) > 0 {
+			cs := make([]string, len(svc.Spec.TaskTemplate.Placement.Constraints))
+			copy(cs, svc.Spec.TaskTemplate.Placement.Constraints)
+			metadata.constraints = cs
+		}
+
+		if len(svc.Spec.TaskTemplate.Placement.Platforms) > 0 {
+			ps := make([]swarm.Platform, len(svc.Spec.TaskTemplate.Placement.Platforms))
+			copy(ps, svc.Spec.TaskTemplate.Placement.Platforms)
+			metadata.platforms = ps
+		}
+	}
+
 	for index := range customLabelDefs {
 		rawKey := customLabelDefs[index].raw
 		sanitizedKey := customLabelDefs[index].sanitized
@@ -198,15 +236,15 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 // This simplifies downstream label handling and Prometheus group-bys.
 func serviceMode(svc *swarm.Service) string {
 	if svc.Spec.Mode.Replicated != nil {
-		return "replicated"
+		return serviceModeReplicated
 	}
 
-	return "global"
+	return serviceModeGlobal
 }
 
 // --- Synchronized accessors for metadataCache ---
 
-func setServiceMetadata(serviceID string, metadata serviceMetadata) {
+func setServiceMetadata(serviceID string, metadata *serviceMetadata) {
 	metadataMu.Lock()
 	defer metadataMu.Unlock()
 
@@ -215,7 +253,7 @@ func setServiceMetadata(serviceID string, metadata serviceMetadata) {
 		metadata.desiredReplicas = prev.desiredReplicas
 	}
 
-	metadataCache[serviceID] = metadata
+	metadataCache[serviceID] = *metadata
 }
 
 func getServiceMetadata(serviceID string) (serviceMetadata, bool) {
