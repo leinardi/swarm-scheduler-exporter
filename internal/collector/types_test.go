@@ -51,13 +51,12 @@ func resetCollectorState(t *testing.T) {
 	customLabelDefs = nil
 }
 
-func uint64Ptr(v uint64) *uint64 { return &v }
-
 func TestServiceMode(t *testing.T) {
+	n := uint64(3)
 	replicated := &swarm.Service{
 		Spec: swarm.ServiceSpec{
 			Mode: swarm.ServiceMode{
-				Replicated: &swarm.ReplicatedService{Replicas: uint64Ptr(3)},
+				Replicated: &swarm.ReplicatedService{Replicas: &n},
 			},
 		},
 	}

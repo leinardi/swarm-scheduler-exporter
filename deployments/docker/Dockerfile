@@ -3,10 +3,10 @@
 ########################
 # deps: cache modules
 ########################
-FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS deps
+FROM --platform=$BUILDPLATFORM dhi.io/golang:1-alpine3.23-dev AS deps
 WORKDIR /src
 RUN --mount=type=cache,target=/var/cache/apk \
-	apk add --no-cache ca-certificates git
+	apk add --no-cache git
 COPY go.mod go.sum ./
 # Use a named cache so we can reuse it in the build stage (no COPY needed)
 RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 ########################
 # build: compile static binary
 ########################
-FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS build
+FROM --platform=$BUILDPLATFORM dhi.io/golang:1-alpine3.23-dev AS build
 ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
@@ -29,8 +29,6 @@ ENV CGO_ENABLED=0 \
     GOARCH=${TARGETARCH}
 
 WORKDIR /src
-RUN --mount=type=cache,target=/var/cache/apk \
-	apk add --no-cache ca-certificates
 
 # Bring in source
 COPY . .
@@ -43,17 +41,10 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 		-o /out/swarm-scheduler-exporter ./cmd/swarm-scheduler-exporter
 
 ########################
-# certs: minimal CA bundle
+# runtime: dhi.io hardened static base (distroless-style, no shell).
+# The exporter binary is CGO_ENABLED=0 so no libc is required.
 ########################
-FROM --platform=$BUILDPLATFORM alpine:3.23.4 AS certs
-RUN --mount=type=cache,target=/var/cache/apk \
-	apk add --no-cache ca-certificates
-# leave at /etc/ssl/certs/ca-certificates.crt
-
-########################
-# runtime: distroless static nonroot
-########################
-FROM gcr.io/distroless/static:nonroot
+FROM dhi.io/static:20250419
 
 # hadolint ignore=DL3050
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
@@ -61,15 +52,12 @@ LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.source="https://github.com/leinardi/swarm-scheduler-exporter" \
 	org.opencontainers.image.licenses="Apache-2.0"
 
-# Copy the binary and CA bundle
+# Copy the binary
 COPY --from=build /out/swarm-scheduler-exporter /usr/local/bin/swarm-scheduler-exporter
-COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# Run as non-root (UID/GID 65532 in distroless)
-USER nonroot:nonroot
+# dhi.io/static defaults to a non-root user; the exporter does not need root.
 
-# Document the metrics port (no EXPOSE required for security, but okay to include)
+# Document the metrics port
 EXPOSE 8888
 
-# Distroless has no shell; use absolute path
 ENTRYPOINT ["/usr/local/bin/swarm-scheduler-exporter"]
