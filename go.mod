@@ -1,6 +1,6 @@
 module github.com/leinardi/swarm-scheduler-exporter
 
-go 1.25.2
+go 1.26
 
 require (
 	github.com/containerd/errdefs v1.0.0
