@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run actionlint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-actionlint-reviewdog@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@v1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run pre-commit hooks + reviewdog diff
-        uses: leinardi/gha-pre-commit-hooks-reviewdog@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@v1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -64,7 +64,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run markdownlint-cli2 via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-markdownlint-cli2-reviewdog@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@v1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -80,7 +80,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run shellcheck via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-shellcheck-reviewdog@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@v1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -96,7 +96,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run yamllint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-yamllint-reviewdog@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@v1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
