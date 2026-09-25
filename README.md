@@ -375,7 +375,8 @@ scrape_configs:
 
 ## 🤝 Contributing
 
-Issues and PRs are welcome! Please run linters and keep changes modular:
+Issues and PRs are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for the hook setup and the commit-message rules. Please run
+linters and keep changes modular:
 
 - `pre-commit run`
 - Keep labels/metrics backward-considerate unless the change is clearly an improvement
