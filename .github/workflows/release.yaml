@@ -1,73 +1,338 @@
 name: Release swarm-scheduler-exporter
 
+# One dispatch resolves the version, verifies, builds the binaries and the
+# image, tags, publishes the image and the GitHub release, and moves the
+# `latest` pointers.
+#
+# The order of the release job is deliberate: everything that can fail does so
+# before the tag exists, because tags in this repository are immutable ("Immutable
+# tags" ruleset: no update, no deletion, no bypass) and cannot be cleaned up after
+# a failure. Everything after the tag push reuses what is already published only
+# once it is proven to be this run's, and never replaces it, so a re-run with the
+# same explicit version finishes a failed publish. docs/release.md is the prose
+# version of this, with the recovery procedure.
 on:
   workflow_dispatch:
     inputs:
-      semver:
-        description: "Release Semantic Version (e.g. 1.2.3 or v1.2.3)"
-        required: true
+      # Left empty, the version comes from the Conventional Commits since the last
+      # tag. An explicit one is checked for shape and for being higher than every
+      # released version, and is how a recovery re-run names the version it failed
+      # on.
+      version:
+        description: "Version, e.g. 1.2.0 or v1.2.0 (empty: derive from the commits)"
+        required: false
+      # Resolves the version, verifies, builds the binaries and the image, and
+      # stops there: no tag is pushed and nothing is published.
+      dry_run:
+        description: "Dry run: build everything, stop before the tag is pushed"
+        type: boolean
+        default: false
+
+# One release at a time, and never cancelled. Two dispatches in flight together
+# would each check "higher than every released version" against the same latest
+# tag, both pass, and then publish in whatever order they happened to finish - a
+# lower version landing last would take `latest` with it. A second dispatch waits
+# for the first instead of racing it, and a run that has started is never killed
+# part-way through publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
-  contents: write # create tag & release, upload assets
-  packages: write # push container image to GHCR
-  id-token: write # cosign keyless signing via GitHub OIDC
-  attestations: write # provenance attestation upload
+  contents: read
 
 env:
+  # Pinned by hand: dependabot does not track a `go install` argument.
+  SVU_VERSION: v3.4.1
+  # The one definition of a release tag: vMAJOR.MINOR.PATCH, strict SemVer core
+  # with no leading zeros, no pre-release and no build metadata. Every lookup
+  # below filters the full tag list through this with grep -E, never through a
+  # glob: `v[0-9]*.[0-9]*.[0-9]*` also matches v1.2.3-rc.1, v1.2.3+meta and
+  # v1foo.2bar.3baz, any of which could otherwise become the current version or
+  # break version resolution, and a leading-zero tag like v01.2.3 would be a
+  # permanent malformed release.
+  RELEASE_TAG_REGEX: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
   APP_NAME: swarm-scheduler-exporter
   IMAGE_REPO: ghcr.io/leinardi/swarm-scheduler-exporter
+  # The workflow every published artifact must come from. The guard job makes
+  # every run of this file a run on refs/heads/master, so the keyless cosign
+  # identity a sign in this run produces is exactly SIGNER_IDENTITY, and a
+  # signature or an attestation from any other workflow or branch does not count.
+  SIGNER_WORKFLOW: leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml
+  SIGNER_IDENTITY: https://github.com/leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml@refs/heads/master
+  SIGNER_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
-  release:
+  # workflow_dispatch lets the caller pick any branch, and the release job holds
+  # contents: write, packages: write and an OIDC identity. Dispatched from a side
+  # branch it would tag that branch's tree and publish it as a release and as the
+  # image. This fails rather than skips, so such a run is red and not a green
+  # no-op, and every other job waits on it.
+  #
+  # The ruleset cannot express this: tag protection stops a tag moving, not a tag
+  # being created from the wrong commit. The second line of defence is the
+  # `release` environment, whose deployment branch rule is configured by hand -
+  # docs/release.md.
+  guard:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
 
     steps:
-      - name: Check out full history
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Normalize version (ensure leading v)
-        id: ver
+      - name: Refuse to release anything but master
+        env:
+          REF: ${{ github.ref }}
         run: |
-          RAW="${{ github.event.inputs.semver }}"
-          if [[ "$RAW" =~ ^v ]]; then
-            VER="$RAW"
-          else
-            VER="v${RAW}"
+          set -euo pipefail
+          if [ "$REF" != "refs/heads/master" ]; then
+            echo "A release runs from master only (got $REF). Nothing was tagged or published." >&2
+            exit 1
           fi
-          MAJOR="${VER#v}"
-          MAJOR="${MAJOR%%.*}"
-          echo "version=$VER"        >> "$GITHUB_OUTPUT"
-          echo "major=$MAJOR"        >> "$GITHUB_OUTPUT"
-          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
 
-      - name: Create git tag
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const version = '${{ steps.ver.outputs.version }}';
-            await github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              ref:   `refs/tags/${version}`,
-              sha:   context.sha
-            });
+  # The verify jobs are repeated from ci.yaml rather than referenced, so that a
+  # release never depends on which pull request last ran CI. All of them take Go
+  # from go.mod, the toolchain the release job builds with, so the scan and the
+  # tests describe the binary that ships.
+  test:
+    needs: guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26"
+          go-version-file: go.mod
           cache: true
+
+      - name: Vet
+        run: make go-vet
+
+      - name: Run the test suite
+        run: go test -race ./...
+
+  audit:
+    needs: guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # govulncheck. Pinning the scanner does not pin what it knows: the
+      # vulnerability database is fetched at run time.
+      - name: Audit Go dependencies
+        run: make audit-deps
+
+  release:
+    needs:
+      - guard
+      - test
+      - audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Created on first run with no protection rules, which changes nothing by
+    # itself. Add a deployment branch rule limiting it to `master`, and required
+    # reviewers if a release should need a second pair of eyes - docs/release.md.
+    environment: release
+    permissions:
+      contents: write # push the tag, create the release, upload assets
+      packages: write # push the image to GHCR
+      id-token: write # cosign keyless signing and provenance via GitHub OIDC
+      attestations: write # provenance attestation upload
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # svu reads the tags and the commits since the last one.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # From go.mod, not a floating "1.26": the shipped binary is built with the
+      # toolchain the audit job scanned, and a recovery re-run rebuilds with the
+      # same one, which is what makes its binaries byte-identical.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install svu
+        run: go install "github.com/caarlos0/svu/v3@${SVU_VERSION}"
+
+      - name: Resolve the version to release
+        id: version
+        env:
+          RAW: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Only strict vX.Y.Z tags are releases (RELEASE_TAG_REGEX). `latest`,
+          # `v1`, pre-releases and malformed tags are not, so every lookup below
+          # filters the full tag list through the regex rather than taking "the
+          # nearest tag". Prints the highest release tag in its input, or nothing.
+          highest_release() {
+            { grep -E "$RELEASE_TAG_REGEX" || true; } | sort -V | tail -n1
+          }
+          # Whether the release tag $1 sits on HEAD.
+          on_head() {
+            git tag --points-at HEAD | { grep -E "$RELEASE_TAG_REGEX" || true; } | grep -qxF "$1"
+          }
+
+          if [ -n "$RAW" ]; then
+            VERSION="v${RAW#v}"
+            if ! [[ "$VERSION" =~ $RELEASE_TAG_REGEX ]]; then
+              echo "Version must be X.Y.Z or vX.Y.Z with no leading zeros, no pre-release and no build metadata (got '$RAW')" >&2
+              exit 1
+            fi
+            EXPLICIT=true
+          else
+            # svu is given the exact tag to count from, never a glob. It matches
+            # --tag.pattern with a glob library against every tag, so a pattern
+            # would let a stray tag like v1.9.0-rc.1 become the current version.
+            # A strict tag holds only `v`, digits and dots, so as a glob it
+            # matches that one tag literally, and svu counts the commits since
+            # exactly that tag.
+            CURRENT=$(git tag --merged HEAD | highest_release)
+            if [ -z "$CURRENT" ]; then
+              echo "No vX.Y.Z release tag is reachable from this commit, so there is nothing to derive a version from. Re-run with an explicit version." >&2
+              exit 1
+            fi
+            VERSION=$(svu next --tag.pattern "$CURRENT")
+            if ! [[ "$VERSION" =~ $RELEASE_TAG_REGEX ]]; then
+              echo "svu derived '$VERSION' from $CURRENT, which is not a vX.Y.Z release tag." >&2
+              exit 1
+            fi
+            # svu prints the current version unchanged, and exits 0, when no
+            # feat/fix/breaking commit exists since the last tag. That is not a
+            # release: say so rather than tagging the same tree twice - unless
+            # that tag is on HEAD itself. Then this is "Re-run failed jobs" on a
+            # run that derived its version and pushed the tag before failing, and
+            # it must be able to finish what that run started.
+            if [ "$VERSION" = "$CURRENT" ] && ! on_head "$VERSION"; then
+              echo "No feat/fix or breaking-change commit since ${CURRENT}, so there is nothing to bump. Re-run with an explicit version to force one." >&2
+              exit 1
+            fi
+            EXPLICIT=false
+          fi
+
+          # A recovery re-run is this exact version already sitting on HEAD -
+          # nothing wider. Treating "HEAD carries some tag" as recovery would
+          # misread a release cut from a commit that is already tagged with the
+          # previous version.
+          RECOVERY=false
+          if on_head "$VERSION"; then
+            RECOVERY=true
+          fi
+
+          # The previous release, for the summary. On a recovery the tag being
+          # released is on HEAD already, so looking from HEAD would answer with
+          # that tag. HEAD^ does not exist on a root commit, hence the fallback.
+          if [ "$RECOVERY" = "true" ]; then
+            PREVIOUS=$({ git tag --merged "HEAD^" 2>/dev/null || true; } | highest_release)
+          else
+            PREVIOUS=$(git tag --merged HEAD | highest_release)
+          fi
+
+          # A version must be higher than every version already released.
+          # Without this, an explicit v0.9.9 typed after v0.10.0 would create a
+          # lower immutable tag. The one exception is the recovery re-run, which
+          # reuses the version it failed on.
+          LATEST=$(git tag --list | highest_release)
+          if [ -n "$LATEST" ]; then
+            if [ "$VERSION" = "$LATEST" ]; then
+              if [ "$RECOVERY" != "true" ]; then
+                echo "$VERSION is already released and does not point at this commit. Release a higher version." >&2
+                exit 1
+              fi
+              echo "Re-running the release of $VERSION, which already points at this commit."
+            elif [ "$RECOVERY" != "true" ]; then
+              HIGHEST=$(printf '%s\n%s\n' "$VERSION" "$LATEST" | sort -V | tail -n1)
+              if [ "$HIGHEST" != "$VERSION" ]; then
+                echo "$VERSION is lower than the latest release $LATEST. Tags here are immutable, so only a higher version may be published." >&2
+                exit 1
+              fi
+            else
+              echo "Re-running the release of $VERSION, which already points at this commit; $LATEST has been released since, so $VERSION will not become latest."
+            fi
+          fi
+
+          MAJOR="${VERSION#v}"
+          MAJOR="${MAJOR%%.*}"
+          # Everything stamped into an artifact comes from the commit, never from
+          # the clock or the clone, so a recovery re-run rebuilds the same bytes.
+          # A fixed-length prefix rather than `git rev-parse --short`, whose
+          # length grows with the repository.
+          SHORT_SHA=$(git rev-parse HEAD | cut -c1-7)
+          BUILD_DATE=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+
+          echo "Resolved $VERSION (previous: ${PREVIOUS:-none}, explicit: $EXPLICIT, recovery: $RECOVERY)"
+          # Outputs, not exports: an exported variable does not survive into the
+          # next step.
+          {
+            echo "version=$VERSION"
+            echo "previous=$PREVIOUS"
+            echo "explicit=$EXPLICIT"
+            echo "recovery=$RECOVERY"
+            echo "major=$MAJOR"
+            echo "short_sha=$SHORT_SHA"
+            echo "build_date=$BUILD_DATE"
+            echo "source_date_epoch=$SOURCE_DATE_EPOCH"
+          } >> "$GITHUB_OUTPUT"
+
+      # A tag that already exists is either a re-run recovering a failed publish
+      # - it points at this commit, and the run continues without pushing it
+      # again - or a different commit, which nothing here may overwrite: tags in
+      # this repository are immutable, on purpose.
+      - name: Check the tag
+        id: tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          HEAD_SHA=$(git rev-parse HEAD)
+          REMOTE=$(git ls-remote origin "refs/tags/$VERSION^{}" "refs/tags/$VERSION" | head -n1 | awk '{print $1}')
+
+          if [ -n "$REMOTE" ]; then
+            PEELED=$(git ls-remote origin "refs/tags/$VERSION^{}" | awk '{print $1}')
+            POINTS_AT="${PEELED:-$REMOTE}"
+            if [ "$POINTS_AT" != "$HEAD_SHA" ]; then
+              echo "$VERSION already exists and points at $POINTS_AT, not at $HEAD_SHA. Tags here are immutable: release a new version instead." >&2
+              exit 1
+            fi
+            echo "$VERSION already exists on this commit: recovering a failed publish."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            LOCAL=$(git rev-list -n1 "$VERSION")
+            if [ "$LOCAL" != "$HEAD_SHA" ]; then
+              echo "The local tag $VERSION points at $LOCAL, not at $HEAD_SHA." >&2
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$VERSION" -m "swarm-scheduler-exporter $VERSION"
+          fi
 
       - name: Build static binaries (linux/amd64, linux/arm64)
         env:
           CGO_ENABLED: "0"
-          VERSION: ${{ steps.ver.outputs.version }}
-          COMMIT: ${{ steps.ver.outputs.short_sha }}
-          DATE: ${{ steps.ver.outputs.build_date }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.short_sha }}
+          DATE: ${{ steps.version.outputs.build_date }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -82,90 +347,428 @@ jobs:
 
           (cd dist && sha256sum ${{ env.APP_NAME }}-* > checksums.txt)
 
+      # The run attempt is part of the name: "Re-run failed jobs" re-runs this
+      # job inside the same workflow run, and upload-artifact refuses to
+      # overwrite an artifact the first attempt already uploaded, which would
+      # fail the re-run before its recovery publishing starts.
       - name: Upload build artifacts (for debugging)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: binaries-${{ steps.ver.outputs.version }}
+          name: binaries-${{ steps.version.outputs.version }}-${{ github.run_attempt }}
           path: |
             dist/${{ env.APP_NAME }}-linux-amd64
             dist/${{ env.APP_NAME }}-linux-arm64
             dist/checksums.txt
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # The deps and build stages pull dhi.io/golang.
       - name: Log in to Docker Hardened Images (dhi.io)
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: dhi.io
           username: ${{ vars.DHI_USERNAME }}
           password: ${{ secrets.DHI_TOKEN }}
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push multi-arch image to GHCR
-        id: push
-        uses: docker/build-push-action@v7
+      # The whole multi-arch image, built and thrown away. A Dockerfile or
+      # base-image failure stops the run here, before the tag exists, and the
+      # publishing build below reuses this one from the cache.
+      - name: Build the image, publish nothing
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: deployments/docker/Dockerfile
-          push: true
+          push: false
           platforms: linux/amd64,linux/arm64
           provenance: mode=max
           sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
-            VERSION=${{ steps.ver.outputs.version }}
-            COMMIT=${{ steps.ver.outputs.short_sha }}
-            DATE=${{ steps.ver.outputs.build_date }}
-          tags: |
-            ${{ env.IMAGE_REPO }}:${{ steps.ver.outputs.version }}
-            ${{ env.IMAGE_REPO }}:${{ steps.ver.outputs.major }}
-            ${{ env.IMAGE_REPO }}:latest
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.short_sha }}
+            DATE=${{ steps.version.outputs.build_date }}
+            SOURCE_DATE_EPOCH=${{ steps.version.outputs.source_date_epoch }}
+
+      - name: Report what a real run would publish
+        if: inputs.dry_run
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+          EXPLICIT: ${{ steps.version.outputs.explicit }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Dry run: $VERSION"
+            echo
+            echo "Previous tag: ${PREVIOUS:-none}. Explicit version: $EXPLICIT."
+            echo
+            echo "No tag was created and nothing was published. The image was built for linux/amd64 and linux/arm64 and discarded."
+            echo
+            echo '## Artifacts'
+            echo
+            echo '```text'
+            ls -1 dist
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Per attempt, like the binaries above, so a re-run dry run does not
+      # collide with the first attempt's upload.
+      - name: Upload the unpublished artifacts for inspection
+        if: inputs.dry_run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dry-run-${{ steps.version.outputs.version }}-${{ github.run_attempt }}
+          path: dist
+
+      # The last look before the point of no return. Concurrency serializes the
+      # workflow, but a tag can also arrive from outside it, and the check in the
+      # version step ran before several minutes of building. This asks the
+      # remote, not the local clone, and it asks now.
+      - name: Gate the tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          EXISTS: ${{ steps.tag.outputs.exists }}
+        run: |
+          set -euo pipefail
+
+          # Its own assignment, so a failed ls-remote stops the step under
+          # set -e instead of reading as "no tags"; only grep finding no release
+          # tag is allowed to come back empty.
+          REMOTE_TAGS=$(git ls-remote --tags --refs origin)
+          HIGHEST_REMOTE=$(awk -F/ '{print $NF}' <<<"$REMOTE_TAGS" \
+            | { grep -E "$RELEASE_TAG_REGEX" || true; } \
+            | sort -V \
+            | tail -n1)
+
+          if [ -z "$HIGHEST_REMOTE" ] || [ "$HIGHEST_REMOTE" = "$VERSION" ]; then
+            exit 0
+          fi
+          HIGHEST=$(printf '%s\n%s\n' "$VERSION" "$HIGHEST_REMOTE" | sort -V | tail -n1)
+          if [ "$HIGHEST" = "$VERSION" ]; then
+            exit 0
+          fi
+
+          # A recovery's tag is already on this commit and its artifacts are
+          # legitimate; it finishes, and simply does not become latest.
+          if [ "$EXISTS" = "true" ]; then
+            echo "::notice::$HIGHEST_REMOTE is higher than $VERSION. Finishing the recovery of $VERSION, which will not become latest."
+            exit 0
+          fi
+
+          echo "$HIGHEST_REMOTE was published while this run was building, so $VERSION would be a lower immutable tag. Nothing was pushed; release a higher version." >&2
+          exit 1
+
+      # The point of no return. Everything after it reuses a published artifact
+      # only once it is proven to be this run's and never replaces one, so a
+      # re-run with the same explicit version finishes a failed publish.
+      - name: Push the tag
+        if: ${{ !inputs.dry_run && steps.tag.outputs.exists != 'true' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: git push origin "$VERSION"
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        if: ${{ !inputs.dry_run }}
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
 
-      - name: Sign image with cosign (keyless via GitHub OIDC)
+      # A version tag on GHCR is either absent, or must be proven to be this
+      # commit's, built by this workflow. Only "not found" counts as absent: an
+      # authentication or network error must never be read as "free to push",
+      # because the tag would then be overwritten.
+      - name: Check the published image
+        id: image
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cosign sign --yes \
-            ${{ env.IMAGE_REPO }}@${{ steps.push.outputs.digest }}
+          set -euo pipefail
+
+          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" --format '{{json .Manifest}}' 2>&1); then
+            DIGEST=$(jq -r '.digest' <<<"$OUT")
+          elif grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
+            echo "$IMAGE_REPO:$VERSION does not exist yet."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
+            exit 1
+          fi
+
+          # Verified by digest, not by tag, so what is checked is what is reused.
+          if ! gh attestation verify "oci://$IMAGE_REPO@$DIGEST" \
+            --repo leinardi/swarm-scheduler-exporter \
+            --signer-workflow "$SIGNER_WORKFLOW" \
+            --source-ref refs/heads/master \
+            --source-digest "$GITHUB_SHA"; then
+            echo "$IMAGE_REPO:$VERSION ($DIGEST) exists but carries no provenance from $SIGNER_WORKFLOW for commit $GITHUB_SHA. A tag this workflow did not produce is holding the version. Nothing more was published, and the tag was not touched: the version needs a human - docs/release.md." >&2
+            exit 1
+          fi
+
+          echo "$IMAGE_REPO:$VERSION is $DIGEST, attested by this workflow for this commit: reusing it."
+          {
+            echo "exists=true"
+            echo "digest=$DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+      # Pushed by digest with no tag at all: a version tag is only ever added once
+      # the digest has been attested and signed, so an untagged digest left by a
+      # failed run is inert.
+      - name: Push the image by digest
+        id: push
+        if: ${{ !inputs.dry_run && steps.image.outputs.exists != 'true' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          # push=true inside `outputs` instead of the `push` input: `push` adds a
+          # second, tagged registry exporter.
+          outputs: type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.short_sha }}
+            DATE=${{ steps.version.outputs.build_date }}
+            SOURCE_DATE_EPOCH=${{ steps.version.outputs.source_date_epoch }}
 
       - name: Attest image provenance
-        uses: actions/attest-build-provenance@v4
+        if: ${{ !inputs.dry_run && steps.image.outputs.exists != 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_REPO }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/${{ env.APP_NAME }}-linux-amd64
-            dist/${{ env.APP_NAME }}-linux-arm64
-            dist/checksums.txt
+      # A fresh digest is signed unconditionally. A reused one is signed only when
+      # it lacks this workflow's own keyless signature: any other signature, from
+      # another workflow or a laptop, does not count.
+      - name: Sign the image with cosign (keyless via GitHub OIDC)
+        id: sign
+        if: ${{ !inputs.dry_run }}
+        env:
+          EXISTS: ${{ steps.image.outputs.exists }}
+          DIGEST: ${{ steps.image.outputs.digest || steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ "$EXISTS" = "true" ] && cosign verify \
+            --certificate-identity "$SIGNER_IDENTITY" \
+            --certificate-oidc-issuer "$SIGNER_ISSUER" \
+            "$IMAGE_REPO@$DIGEST" >/dev/null; then
+            echo "$IMAGE_REPO@$DIGEST already carries this workflow's signature."
+          else
+            cosign sign --yes "$IMAGE_REPO@$DIGEST"
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
-      - name: Cleanup tag on failure
-        if: ${{ failure() || cancelled() }}
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const version = '${{ steps.ver.outputs.version }}';
-            try {
-              await github.rest.git.deleteRef({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                ref:   `tags/${version}`
-              });
-            } catch (e) {
-              core.warning(`Failed to delete tag ${version}: ${e.message}`);
-            }
+      - name: Tag the image with the version
+        if: ${{ !inputs.dry_run && steps.image.outputs.exists != 'true' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.sign.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Checked again right before tagging: a version tag that appeared since
+          # the check above is never overwritten.
+          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" 2>&1); then
+            echo "$IMAGE_REPO:$VERSION appeared while this run was publishing. It was not overwritten: re-run to verify it, or hand it to a human - docs/release.md." >&2
+            exit 1
+          elif ! grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
+            echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
+            exit 1
+          fi
+          docker buildx imagetools create -t "$IMAGE_REPO:$VERSION" "$IMAGE_REPO@$DIGEST"
+
+      # Every expected asset is rebuilt locally above, reproducibly (-trimpath,
+      # the Go version from go.mod, a commit-derived date), so a published one can
+      # be checked byte for byte. Present and matching: kept. Present and
+      # different: the run fails. Missing: uploaded, never with --clobber. An
+      # asset nobody expects fails the run too. The release stays a draft until
+      # the latest checks below.
+      - name: Draft the GitHub release and reconcile its assets
+        id: assets
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          EXPECTED=("${APP_NAME}-linux-amd64" "${APP_NAME}-linux-arm64" "checksums.txt")
+
+          if ! OUT=$(gh release view "$VERSION" --json isDraft 2>&1); then
+            if ! grep -qi 'release not found' <<<"$OUT"; then
+              echo "Could not tell whether the release $VERSION exists: $OUT" >&2
+              exit 1
+            fi
+            gh release create "$VERSION" --verify-tag --draft --generate-notes --title "$VERSION"
+          fi
+
+          # Read into a variable first: a failure inside a process substitution
+          # would be swallowed, and an empty list would read as "nothing published".
+          NAMES=$(gh release view "$VERSION" --json assets --jq '.assets[].name')
+          PUBLISHED=()
+          if [ -n "$NAMES" ]; then
+            mapfile -t PUBLISHED <<<"$NAMES"
+          fi
+
+          for name in "${PUBLISHED[@]}"; do
+            if ! printf '%s\n' "${EXPECTED[@]}" | grep -qxF "$name"; then
+              echo "The release $VERSION carries an unexpected asset '$name'. Nothing was changed; it needs a human." >&2
+              exit 1
+            fi
+          done
+
+          published() { printf '%s\n' "${PUBLISHED[@]}" | grep -qxF "$1"; }
+          local_sum() { sha256sum "$1" | awk '{print $1}'; }
+
+          DOWNLOADS=$(mktemp -d)
+          if published checksums.txt; then
+            gh release download "$VERSION" --pattern checksums.txt --dir "$DOWNLOADS"
+          fi
+
+          VERIFIED=()
+          UPLOADED=()
+          for name in "${EXPECTED[@]}"; do
+            if published "$name"; then
+              if [ "$name" != "checksums.txt" ]; then
+                gh release download "$VERSION" --pattern "$name" --dir "$DOWNLOADS"
+              fi
+              REMOTE_SUM=$(local_sum "$DOWNLOADS/$name")
+              LOCAL_SUM=$(local_sum "dist/$name")
+              if [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
+                echo "The published $name ($REMOTE_SUM) differs from this commit's build ($LOCAL_SUM). Nothing was replaced; it needs a human." >&2
+                exit 1
+              fi
+              if [ "$name" != "checksums.txt" ] && [ -f "$DOWNLOADS/checksums.txt" ]; then
+                LISTED=$(awk -v n="$name" '$2 == n {print $1}' "$DOWNLOADS/checksums.txt")
+                if [ "$LISTED" != "$REMOTE_SUM" ]; then
+                  echo "The published $name ($REMOTE_SUM) does not match the published checksums.txt (${LISTED:-absent}). Nothing was replaced; it needs a human." >&2
+                  exit 1
+                fi
+              fi
+              VERIFIED+=("$name")
+            else
+              gh release upload "$VERSION" "dist/$name"
+              UPLOADED+=("$name")
+            fi
+          done
+
+          {
+            echo "verified=${VERIFIED[*]}"
+            echo "uploaded=${UPLOADED[*]}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The moving pointers go last, each after its own fresh look at the remote:
+      # a version that is no longer the highest does not take them. Best-effort,
+      # not atomic - docs/release.md.
+      - name: Move the image major and latest tags
+        id: pointers
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MAJOR: ${{ steps.version.outputs.major }}
+          DIGEST: ${{ steps.sign.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Its own assignment, so a failed ls-remote stops the step under
+          # set -e instead of reading as "no tags"; only grep finding no release
+          # tag is allowed to come back empty.
+          REMOTE_TAGS=$(git ls-remote --tags --refs origin)
+          HIGHEST_REMOTE=$(awk -F/ '{print $NF}' <<<"$REMOTE_TAGS" \
+            | { grep -E "$RELEASE_TAG_REGEX" || true; } \
+            | sort -V \
+            | tail -n1)
+          if [ "$HIGHEST_REMOTE" != "$VERSION" ]; then
+            echo "::notice::$HIGHEST_REMOTE is higher than $VERSION, so :$MAJOR and :latest were left where they are."
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          docker buildx imagetools create -t "$IMAGE_REPO:$MAJOR" -t "$IMAGE_REPO:latest" "$IMAGE_REPO@$DIGEST"
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub release
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Its own assignment, so a failed ls-remote stops the step under
+          # set -e instead of reading as "no tags"; only grep finding no release
+          # tag is allowed to come back empty.
+          REMOTE_TAGS=$(git ls-remote --tags --refs origin)
+          HIGHEST_REMOTE=$(awk -F/ '{print $NF}' <<<"$REMOTE_TAGS" \
+            | { grep -E "$RELEASE_TAG_REGEX" || true; } \
+            | sort -V \
+            | tail -n1)
+          LATEST=false
+          if [ "$HIGHEST_REMOTE" = "$VERSION" ]; then
+            LATEST=true
+          fi
+          gh release edit "$VERSION" --draft=false --latest="$LATEST"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+
+      # GHCR tags and GitHub releases cannot be moved together atomically, so a
+      # tag created outside this workflow between the two moves above can leave
+      # them disagreeing. Nothing is moved back: this run cannot know that the
+      # other version's image exists or is trustworthy. It says so instead.
+      - name: Check that the pointers agree
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MAJOR: ${{ steps.version.outputs.major }}
+          MOVED: ${{ steps.pointers.outputs.moved }}
+        run: |
+          set -euo pipefail
+          # Its own assignment, so a failed ls-remote stops the step under
+          # set -e instead of reading as "no tags"; only grep finding no release
+          # tag is allowed to come back empty.
+          REMOTE_TAGS=$(git ls-remote --tags --refs origin)
+          HIGHEST_REMOTE=$(awk -F/ '{print $NF}' <<<"$REMOTE_TAGS" \
+            | { grep -E "$RELEASE_TAG_REGEX" || true; } \
+            | sort -V \
+            | tail -n1)
+          if [ "$MOVED" = "true" ] && [ "$HIGHEST_REMOTE" != "$VERSION" ]; then
+            echo "::warning::$HIGHEST_REMOTE was tagged while $VERSION was publishing. The image :latest and :$MAJOR may point at $VERSION while GitHub marks another release Latest. Fix: re-dispatch $HIGHEST_REMOTE, whose own late checks repoint them; if that tag was created outside this workflow and has no image, retag by hand as docs/release.md describes."
+          fi
+
+      - name: Summarize the release
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+          RECOVERY: ${{ steps.tag.outputs.exists }}
+          IMAGE_REUSED: ${{ steps.image.outputs.exists }}
+          DIGEST: ${{ steps.sign.outputs.digest }}
+          MOVED: ${{ steps.pointers.outputs.moved }}
+          LATEST: ${{ steps.publish.outputs.latest }}
+          VERIFIED: ${{ steps.assets.outputs.verified }}
+          UPLOADED: ${{ steps.assets.outputs.uploaded }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Released $VERSION"
+            echo
+            echo "Previous tag: ${PREVIOUS:-none}. Recovery: $RECOVERY."
+            echo
+            echo "- [Release](https://github.com/leinardi/swarm-scheduler-exporter/releases/tag/$VERSION) - marked latest: $LATEST"
+            echo "- [Image](https://github.com/leinardi/swarm-scheduler-exporter/pkgs/container/swarm-scheduler-exporter): \`$IMAGE_REPO:$VERSION\` (\`$DIGEST\`) - reused: $IMAGE_REUSED, :latest moved: $MOVED"
+            echo "- Assets uploaded: ${UPLOADED:-none}"
+            echo "- Assets verified by sha256: ${VERIFIED:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
