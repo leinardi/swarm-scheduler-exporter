@@ -32,6 +32,22 @@ linters:
               desc: Should be replaced by standard lib errors package.
             - pkg: "github.com/instana/testify"
               desc: It's a fork of github.com/stretchr/testify.
+        # The trailing slash is load-bearing: depguard matches a deny entry as a plain string
+        # prefix, so without it the entries would also deny github.com/moby/term, moby/sys/* and
+        # moby/docker-image-spec, which are not the SDK.
+        docker-sdk-boundary:
+          deny:
+            - pkg: "github.com/docker/docker/"
+              desc: >-
+                Docker SDK access only in internal/collector (through the DockerAPI interface) and
+                cmd/swarm-scheduler-exporter — keeps the exporter's Docker surface read-only.
+            - pkg: "github.com/moby/moby/"
+              desc: >-
+                Docker SDK access only in internal/collector (through the DockerAPI interface) and
+                cmd/swarm-scheduler-exporter — keeps the exporter's Docker surface read-only.
+          files:
+            - "!**/internal/collector/**.go"
+            - "!**/cmd/swarm-scheduler-exporter/**.go"
     dupl:
       threshold: 100
     funlen:

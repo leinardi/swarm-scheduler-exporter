@@ -278,6 +278,7 @@ tags.
 | `github.com/sirupsen/logrus` (rule `logger`; allowed only in `internal/logger`) | `github.com/leinardi/swarm-scheduler-exporter/internal/logger` (`logger.L()`, backed by `log/slog`) |
 | `github.com/pkg/errors` (rule `forbidden-forks`) | stdlib `errors` + `fmt.Errorf(...%w...)` |
 | `github.com/instana/testify` (rule `forbidden-forks`) | `github.com/stretchr/testify` |
+| `github.com/docker/docker/…` and `github.com/moby/moby/…` outside `internal/collector` and `cmd/swarm-scheduler-exporter` (rule `docker-sdk-boundary`) | go through the `DockerAPI` interface in `internal/collector` — this boundary is half of what keeps the exporter read-only against Docker; a new method on `DockerAPI` must only read |
 
 ---
 

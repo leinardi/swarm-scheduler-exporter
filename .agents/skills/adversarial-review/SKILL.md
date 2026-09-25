@@ -75,9 +75,10 @@ through it. So the read-only property rests entirely on the code:
   inspect and events calls (`NodeList`, `ServiceList`, `ServiceInspectWithRaw`, `TaskList`,
   `ContainerList`, `ContainerInspect`, `Events`), and through which all collector code reaches
   Docker;
-- keeping Docker SDK imports (`github.com/docker/docker/…`, `github.com/moby/moby/…`) inside
-  `internal/collector` and `cmd/swarm-scheduler-exporter`. An SDK import anywhere else is a
-  finding.
+- the depguard rule `docker-sdk-boundary` in `.golangci.yaml`, which denies Docker SDK imports
+  (`github.com/docker/docker/…`, `github.com/moby/moby/…`) outside `internal/collector` and
+  `cmd/swarm-scheduler-exporter`. An SDK import anywhere else is a finding, and so is a diff
+  that widens the rule's allowed trees, removes a deny entry or drops a trailing slash.
 
 Blockers:
 
