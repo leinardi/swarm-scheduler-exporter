@@ -151,7 +151,8 @@ this run's**, never because something with the right name exists.
 - **The signature.** An existing signature counts only when it matches this workflow's identity and issuer:
   `cosign verify --certificate-identity https://github.com/leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml@refs/heads/master --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
   A reused digest without such a signature is signed by the run; any other signature, from another workflow or a laptop, does not
-  count.
+  count. The workflow signs with cosign v3, which stores the signature as a Sigstore bundle in an OCI 1.1 referring artifact, so
+  verifying it by hand needs cosign v3, or v2.6 or later with `--new-bundle-format`.
 - **The release assets.** The release is created as a draft if it does not exist. Each expected asset (the two binaries and
   `checksums.txt`) is inventoried one by one: a present asset is downloaded and compared by sha256 with this run's build, and with
   the published `checksums.txt` when that is present, and a mismatch fails the run; a missing asset is uploaded, never with

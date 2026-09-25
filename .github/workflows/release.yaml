@@ -478,9 +478,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: git push origin "$VERSION"
 
+      # Installs cosign v3, which stores the signature as a Sigstore bundle in an
+      # OCI 1.1 referring artifact rather than a `.sig` tag. Signing and the
+      # recovery check below both use this same cosign, so they agree; a
+      # consumer needs cosign v3, or v2.6+ with --new-bundle-format, to verify.
       - name: Install cosign
         if: ${{ !inputs.dry_run }}
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       # A version tag on GHCR is either absent, or must be proven to be this
       # commit's, built by this workflow. Only "not found" counts as absent: an
