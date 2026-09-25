@@ -31,8 +31,9 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -594,8 +595,8 @@ type connectSignalingDocker struct {
 
 func (d *connectSignalingDocker) Events(
 	ctx context.Context,
-	options events.ListOptions,
-) (msgCh <-chan events.Message, errCh <-chan error) {
+	options client.EventsListOptions,
+) client.EventsResult {
 	d.connected <- struct{}{}
 
 	return d.fakeDocker.Events(ctx, options)
@@ -648,5 +649,61 @@ func TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted(t *testing.T) {
 
 	if extra := len(dockerClient.connected); extra != 0 {
 		t.Errorf("event stream reconnected %d time(s) after cancellation", extra)
+	}
+}
+
+// errClosedBody stands in for the error a canceled event stream can end with instead of
+// context.Canceled (the response body is closed under the decoder).
+var errClosedBody = errors.New("read on closed response body")
+
+func TestDispatchEvents_CancelledStreamErrorReportsCancellation(t *testing.T) {
+	// Once the context is canceled, both select cases in dispatchEvents are ready and Go picks
+	// one at random; repeating makes the stream-error branch run with near certainty.
+	const attempts = 64
+
+	for range attempts {
+		parentContext, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		errorChannel := make(chan error, 1)
+		errorChannel <- errClosedBody
+
+		var lastSeen time.Time
+
+		err := dispatchEvents(
+			parentContext,
+			make(chan events.Message, 1),
+			make(chan events.Message),
+			errorChannel,
+			&lastSeen,
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want a context.Canceled wrap", err)
+		}
+	}
+}
+
+func TestDispatchEvents_CancelledStreamCloseReportsCancellation(t *testing.T) {
+	const attempts = 64
+
+	for range attempts {
+		parentContext, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		eventChannel := make(chan events.Message)
+		close(eventChannel)
+
+		var lastSeen time.Time
+
+		err := dispatchEvents(
+			parentContext,
+			make(chan events.Message, 1),
+			eventChannel,
+			make(chan error),
+			&lastSeen,
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want a context.Canceled wrap", err)
+		}
 	}
 }

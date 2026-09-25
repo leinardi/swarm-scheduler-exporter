@@ -39,9 +39,9 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
@@ -125,22 +125,29 @@ func InitDesiredReplicasGauge(
 	initialSinceAnchor := time.Now()
 
 	// Seed service gauges
-	services, serviceListErr := dockerClient.ServiceList(parentContext, swarm.ServiceListOptions{
-		Filters: filters.Args{},
-		Status:  false,
-	})
+	serviceListResult, serviceListErr := dockerClient.ServiceList(
+		parentContext,
+		client.ServiceListOptions{
+			Filters: nil,
+			Status:  false,
+		},
+	)
 	if serviceListErr != nil {
 		return time.Time{}, fmt.Errorf("service list: %w", serviceListErr)
 	}
 
+	services := serviceListResult.Items
+
 	// Also seed nodes snapshot and nodes-by-state metric
-	nodes, nodeListErr := dockerClient.NodeList(
+	nodeListResult, nodeListErr := dockerClient.NodeList(
 		parentContext,
-		swarm.NodeListOptions{Filters: filters.Args{}},
+		client.NodeListOptions{Filters: nil},
 	)
 	if nodeListErr != nil {
 		return time.Time{}, fmt.Errorf("node list: %w", nodeListErr)
 	}
+
+	nodes := nodeListResult.Items
 
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes)
@@ -178,9 +185,7 @@ func ListenSwarmEvents(
 	dockerClient DockerAPI,
 	initialSince time.Time,
 ) error {
-	filterArgs := filters.NewArgs()
-	filterArgs.Add("type", "service")
-	filterArgs.Add("type", "node")
+	filterArgs := make(client.Filters).Add("type", "service", "node")
 
 	// Exponential backoff for reconnects.
 	backoffDelay := backoffInitialDelay
@@ -195,7 +200,7 @@ func ListenSwarmEvents(
 		default:
 		}
 
-		eventChannel, errorChannel := dockerClient.Events(parentContext, events.ListOptions{
+		eventsResult := dockerClient.Events(parentContext, client.EventsListOptions{
 			Since:   reconnectSince.Format(time.RFC3339), // include events since our last anchor
 			Filters: filterArgs,
 			Until:   "",
@@ -214,8 +219,8 @@ func ListenSwarmEvents(
 		lastSeenEventTime, runErr := runEventPump(
 			parentContext,
 			dockerClient,
-			eventChannel,
-			errorChannel,
+			eventsResult.Messages,
+			eventsResult.Err,
 		)
 
 		// Reset backoff after a healthy stream that saw at least one event
@@ -332,6 +337,14 @@ dispatchLoop:
 			break dispatchLoop
 
 		case streamErr := <-errorChannel:
+			// A canceled stream can end with a closed-body error instead of context.Canceled:
+			// report the cancellation, so shutdown is not taken for a stream failure.
+			if parentContext.Err() != nil {
+				dispatcherErr = fmt.Errorf("event pump context canceled: %w", parentContext.Err())
+
+				break dispatchLoop
+			}
+
 			// Stream error—trigger reconnect at the caller.
 			dispatcherErr = fmt.Errorf("events stream error: %w", streamErr)
 
@@ -339,6 +352,12 @@ dispatchLoop:
 
 		case eventMessage, ok := <-eventChannel:
 			if !ok {
+				if parentContext.Err() != nil {
+					dispatcherErr = fmt.Errorf("event pump context canceled: %w", parentContext.Err())
+
+					break dispatchLoop
+				}
+
 				// Channel closed by Docker client—treat as EOF and reconnect.
 				dispatcherErr = fmt.Errorf("events stream closed: %w", ErrEventsStreamClosed)
 
@@ -477,16 +496,18 @@ func processEvent(
 		// treat other service actions as update
 	}
 
-	service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
+	inspectResult, inspectErr := dockerClient.ServiceInspect(
 		parentContext,
 		serviceID,
-		swarm.ServiceInspectOptions{
+		client.ServiceInspectOptions{
 			InsertDefaults: false,
 		},
 	)
 	if inspectErr != nil {
 		return fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
 	}
+
+	service := inspectResult.Service
 
 	builtMetadata := buildMetadata(&service)
 	setServiceMetadata(serviceID, &builtMetadata)
@@ -629,14 +650,15 @@ func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
 
 // countActiveNodes returns the number of nodes that are READY and Availability=active.
 func countActiveNodes(parentContext context.Context, dockerClient DockerAPI) (int, error) {
-	nodes, listErr := dockerClient.NodeList(
+	listResult, listErr := dockerClient.NodeList(
 		parentContext,
-		swarm.NodeListOptions{Filters: filters.Args{}},
+		client.NodeListOptions{Filters: nil},
 	)
 	if listErr != nil {
 		return 0, fmt.Errorf("node list: %w", listErr)
 	}
 
+	nodes := listResult.Items
 	activeCount := 0
 
 	for index := range nodes {
@@ -656,13 +678,15 @@ func countEligibleNodesForService(
 	dockerClient DockerAPI,
 	service *swarm.Service,
 ) (int, error) {
-	nodes, listErr := dockerClient.NodeList(
+	listResult, listErr := dockerClient.NodeList(
 		parentContext,
-		swarm.NodeListOptions{Filters: filters.Args{}},
+		client.NodeListOptions{Filters: nil},
 	)
 	if listErr != nil {
 		return 0, fmt.Errorf("node list: %w", listErr)
 	}
+
+	nodes := listResult.Items
 
 	// Precompute constraint predicates
 	var constraints []string
@@ -906,13 +930,15 @@ func refreshNodesAndRecomputeGlobals(
 	parentContext context.Context,
 	dockerClient DockerAPI,
 ) error {
-	nodes, listErr := dockerClient.NodeList(
+	listResult, listErr := dockerClient.NodeList(
 		parentContext,
-		swarm.NodeListOptions{Filters: filters.Args{}},
+		client.NodeListOptions{Filters: nil},
 	)
 	if listErr != nil {
 		return fmt.Errorf("node list: %w", listErr)
 	}
+
+	nodes := listResult.Items
 
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
@@ -922,10 +948,10 @@ func refreshNodesAndRecomputeGlobals(
 		serviceID := globalIDs[index]
 
 		// We need the current service spec to properly evaluate constraints/platforms.
-		service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
+		inspectResult, inspectErr := dockerClient.ServiceInspect(
 			parentContext,
 			serviceID,
-			swarm.ServiceInspectOptions{
+			client.ServiceInspectOptions{
 				InsertDefaults: false,
 			},
 		)
@@ -946,7 +972,8 @@ func refreshNodesAndRecomputeGlobals(
 			continue
 		}
 
-		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, &service))
+		service := &inspectResult.Service
+		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
 		setServiceDesiredReplicas(service.ID, eligible)
 		setDesiredReplicasGauge(&metadata, eligible)
 		setSchedulableReplicasGauge(&metadata, eligible) // same as desired for globals

@@ -38,7 +38,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 
 	"github.com/leinardi/swarm-scheduler-exporter/internal/collector"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
@@ -187,8 +188,9 @@ func run() int {
 	)
 	defer cancelRoot()
 
-	// Docker client is configured from environment variables (DOCKER_HOST, etc.).
-	dockerClient, newClientErr := client.NewClientWithOpts(client.FromEnv)
+	// Docker client is configured from environment variables (DOCKER_HOST, DOCKER_API_VERSION,
+	// etc.). API version negotiation is lazy: it happens on the first request.
+	dockerClient, newClientErr := client.New(client.FromEnv)
 	if newClientErr != nil {
 		loggerInstance.Error("docker client init failed", "err", newClientErr)
 
@@ -196,7 +198,12 @@ func run() int {
 	}
 	defer dockerClient.Close()
 
-	dockerClient.NegotiateAPIVersion(rootContext)
+	versionErr := validateClientAPIVersion(dockerClient)
+	if versionErr != nil {
+		loggerInstance.Error("unsupported Docker API version", "err", versionErr)
+
+		return 1
+	}
 
 	// WaitGroup to wait for goroutines (event listener + poller + health updater).
 	var workerGroup sync.WaitGroup
@@ -222,6 +229,31 @@ func run() int {
 }
 
 // --- helpers to reduce main() complexity ---
+
+// ErrUnsupportedAPIVersion is returned when DOCKER_API_VERSION pins a version outside the range
+// the Docker client supports.
+var ErrUnsupportedAPIVersion = errors.New("unsupported Docker API version")
+
+// validateClientAPIVersion refuses an API version outside client.MinAPIVersion..client.MaxAPIVersion.
+// Without DOCKER_API_VERSION the client starts at its maximum and negotiates down on the first
+// request (refusing a daemon below the minimum there); with it, the pinned version is used as is
+// and no negotiation happens, so a pin outside the range would otherwise only surface as request
+// failures.
+func validateClientAPIVersion(dockerClient *client.Client) error {
+	apiVersion := dockerClient.ClientVersion()
+	if versions.LessThan(apiVersion, client.MinAPIVersion) ||
+		versions.GreaterThan(apiVersion, client.MaxAPIVersion) {
+		return fmt.Errorf(
+			"%w %s (DOCKER_API_VERSION): supported range is %s to %s",
+			ErrUnsupportedAPIVersion,
+			apiVersion,
+			client.MinAPIVersion,
+			client.MaxAPIVersion,
+		)
+	}
+
+	return nil
+}
 
 func validateAndSetCustomLabels(rawKeys []string) error {
 	countErr := labelutil.ValidateCustomLabelCount(len(rawKeys))

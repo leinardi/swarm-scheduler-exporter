@@ -1,23 +1,23 @@
 {
-  "Id": "c-plain",
+  "Id": "c-compose-worker",
   "Created": "2026-09-15T10:00:00.000000000Z",
   "Path": "/entrypoint",
   "Args": [],
   "State": {
-    "Status": "running",
-    "Running": true,
+    "Status": "exited",
+    "Running": false,
     "Paused": false,
     "Restarting": false,
-    "OOMKilled": false,
+    "OOMKilled": true,
     "Dead": false,
-    "Pid": 1234,
-    "ExitCode": 0,
+    "Pid": 0,
+    "ExitCode": 137,
     "Error": "",
     "StartedAt": "2026-09-20T08:00:00.000000000Z",
     "FinishedAt": "0001-01-01T00:00:00Z"
   },
   "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "Name": "/toolbox",
+  "Name": "/shop-worker-1",
   "RestartCount": 0,
   "Driver": "overlay2",
   "Platform": "linux",
@@ -26,32 +26,17 @@
   },
   "Mounts": [],
   "Config": {
-    "Hostname": "c-plain",
+    "Hostname": "c-compose-wo",
     "Image": "example/app:1",
     "Labels": {},
     "Env": [
       "PATH=/usr/bin"
-    ],
-    "OnBuild": null
+    ]
   },
   "NetworkSettings": {
-    "Bridge": "",
-    "SandboxID": "sb-c-plain",
-    "HairpinMode": false,
-    "LinkLocalIPv6Address": "",
-    "LinkLocalIPv6PrefixLen": 0,
+    "SandboxID": "sb-c-compose-worker",
+    "SandboxKey": "/var/run/docker/netns/c-compose-worker",
     "Ports": {},
-    "SandboxKey": "/var/run/docker/netns/c-plain",
-    "SecondaryIPAddresses": null,
-    "SecondaryIPv6Addresses": null,
-    "EndpointID": "",
-    "Gateway": "",
-    "GlobalIPv6Address": "",
-    "GlobalIPv6PrefixLen": 0,
-    "IPAddress": "",
-    "IPPrefixLen": 0,
-    "IPv6Gateway": "",
-    "MacAddress": "",
     "Networks": {}
   }
 }

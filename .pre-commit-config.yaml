@@ -61,6 +61,21 @@ repos:
         additional_dependencies: ["prettier@3.7.4"]
         files: \.(yml|yaml)$
         args: ["--write"]
+      # Dependency-change check, and nothing more. It runs the same make target `make audit-deps`
+      # runs -- the full source-aware govulncheck scan over every package -- but only when the
+      # dependency files themselves change, which is what limits it: it catches a bad upgrade at
+      # the moment it is made, and nothing else. It does not catch a CVE disclosed against a
+      # dependency nobody touched since, and it never fires on a .go change, so new code reaching
+      # an already-vulnerable API goes unseen here. Widening the trigger is not the fix: it would
+      # put a network scan on every Go commit. `make audit-deps` is the deliberate run, and the
+      # go-vulncheck CI job runs it on every pull request.
+      - id: audit-deps-go
+        name: go dependency audit
+        entry: make audit-deps-go
+        language: system
+        pass_filenames: false
+        require_serial: true
+        files: ^go\.(mod|sum)$
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:

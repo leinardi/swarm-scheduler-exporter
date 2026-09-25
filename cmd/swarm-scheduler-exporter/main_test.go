@@ -28,6 +28,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/moby/moby/client"
+
 	"github.com/leinardi/swarm-scheduler-exporter/internal/collector"
 )
 
@@ -115,5 +117,52 @@ func TestValidateAndSetCustomLabels_Empty(t *testing.T) {
 	err := validateAndSetCustomLabels(nil)
 	if err != nil {
 		t.Fatalf("unexpected error for nil input: %v", err)
+	}
+}
+
+// Not parallel: t.Setenv changes the process environment client.FromEnv reads.
+func TestValidateClientAPIVersion(t *testing.T) {
+	cases := []struct {
+		name       string
+		apiVersion string // DOCKER_API_VERSION; "" means unset
+		wantErr    bool
+	}{
+		{name: "unset negotiates from the client maximum", apiVersion: "", wantErr: false},
+		{name: "below the minimum", apiVersion: "1.39", wantErr: true},
+		{name: "the minimum", apiVersion: "1.40", wantErr: false},
+		{name: "the maximum", apiVersion: "1.56", wantErr: false},
+		{name: "above the maximum", apiVersion: "1.57", wantErr: true},
+		{name: "v prefix", apiVersion: "v1.44", wantErr: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Keep the rest of the client environment hermetic.
+			t.Setenv("DOCKER_HOST", "")
+			t.Setenv("DOCKER_TLS_VERIFY", "")
+			t.Setenv("DOCKER_CERT_PATH", "")
+			t.Setenv("DOCKER_API_VERSION", tc.apiVersion)
+
+			dockerClient, newErr := client.New(client.FromEnv)
+			if newErr != nil {
+				t.Fatalf("client.New: %v", newErr)
+			}
+
+			t.Cleanup(func() { _ = dockerClient.Close() })
+
+			err := validateClientAPIVersion(dockerClient)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf(
+					"validateClientAPIVersion(%q) = %v, want error: %v",
+					tc.apiVersion,
+					err,
+					tc.wantErr,
+				)
+			}
+
+			if tc.wantErr && !errors.Is(err, ErrUnsupportedAPIVersion) {
+				t.Errorf("error %v does not wrap ErrUnsupportedAPIVersion", err)
+			}
+		})
 	}
 }

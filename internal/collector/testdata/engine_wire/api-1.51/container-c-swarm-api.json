@@ -43,9 +43,27 @@
         "/healthcheck"
       ],
       "Interval": 10000000000
-    }
+    },
+    "OnBuild": null
   },
   "NetworkSettings": {
+    "Bridge": "",
+    "SandboxID": "sb-c-swarm-api",
+    "HairpinMode": false,
+    "LinkLocalIPv6Address": "",
+    "LinkLocalIPv6PrefixLen": 0,
+    "Ports": {},
+    "SandboxKey": "/var/run/docker/netns/c-swarm-api",
+    "SecondaryIPAddresses": null,
+    "SecondaryIPv6Addresses": null,
+    "EndpointID": "",
+    "Gateway": "",
+    "GlobalIPv6Address": "",
+    "GlobalIPv6PrefixLen": 0,
+    "IPAddress": "",
+    "IPPrefixLen": 0,
+    "IPv6Gateway": "",
+    "MacAddress": "",
     "Networks": {}
   }
 }

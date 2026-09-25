@@ -72,7 +72,7 @@ from modifying the socket file, and a client can still POST creates, updates and
 through it. So the read-only property rests entirely on the code:
 
 - the `DockerAPI` interface (`internal/collector/docker_api.go`), which exposes only list,
-  inspect and events calls (`NodeList`, `ServiceList`, `ServiceInspectWithRaw`, `TaskList`,
+  inspect and events calls (`NodeList`, `ServiceList`, `ServiceInspect`, `TaskList`,
   `ContainerList`, `ContainerInspect`, `Events`), and through which all collector code reaches
   Docker;
 - the depguard rule `docker-sdk-boundary` in `.golangci.yaml`, which denies Docker SDK imports

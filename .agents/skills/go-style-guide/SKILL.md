@@ -49,8 +49,8 @@ import (
     "fmt"
 
     // Group 2: third-party (everything that is NOT this module)
-    "github.com/docker/docker/api/types/swarm"
-    "github.com/docker/docker/client"
+    "github.com/moby/moby/api/types/swarm"
+    "github.com/moby/moby/client"
     "github.com/prometheus/client_golang/prometheus"
 
     // Group 3: local module (github.com/leinardi/swarm-scheduler-exporter/...)
@@ -100,7 +100,7 @@ if err != nil { ... }
 Always wrap errors so callers can use `errors.Is`/`errors.As`:
 
 ```go
-nodes, listErr := cli.NodeList(ctx, swarm.NodeListOptions{Filters: filters.Args{}})
+listResult, listErr := cli.NodeList(ctx, client.NodeListOptions{Filters: nil})
 if listErr != nil {
     return fmt.Errorf("node list: %w", listErr)
 }
@@ -575,27 +575,41 @@ real `*client.Client`, which satisfies it with no adapter. The logger is the one
 | `log/slog` (stdlib) | Structured logging | Only logger allowed; logrus is banned (§9) |
 | `flag` (stdlib) | CLI flags | No cobra/pflag |
 | `sync`, `sync/atomic` (stdlib) | Concurrency | Preferred over external sync libraries |
-| `github.com/docker/docker` | Docker Swarm API client | Configured from the environment via `client.FromEnv` |
-| `github.com/containerd/errdefs` | Docker error classification | `errdefs.IsNotFound` |
+| `github.com/moby/moby/client`, `github.com/moby/moby/api` | Docker Swarm API client and types | Configured from the environment via `client.FromEnv`; only in `internal/collector` and `main` (§9) |
+| `github.com/containerd/errdefs` | Docker error classification | `errdefs.IsNotFound` (the client still maps status codes to these errors) |
 | `github.com/prometheus/client_golang` | Metrics exposition | `prometheus.MustRegister` for every metric |
 
 OpenTelemetry, gRPC and protobuf come in transitively through the Docker SDK and are not used
-directly.
+directly; the OpenTelemetry modules are still pinned in `go.mod` so vulnerability fixes can be
+taken without waiting for the SDK.
 
 The Docker client is always built from the environment, so socket, TCP/TLS and API version are
 configured externally:
 
 ```go
-dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+dockerClient, err := client.New(client.FromEnv)
 if err != nil {
     logger.L().Error("docker client init failed", "err", err)
     return 1
 }
 defer dockerClient.Close()
-dockerClient.NegotiateAPIVersion(rootContext)
+
+versionErr := validateClientAPIVersion(dockerClient)
+if versionErr != nil {
+    logger.L().Error("unsupported Docker API version", "err", versionErr)
+    return 1
+}
 ```
 
-`NegotiateAPIVersion` runs before any API call, so requests use a version the daemon supports.
+API version negotiation is lazy: the client pings the daemon before its first request and
+refuses a daemon below `client.MinAPIVersion`. `validateClientAPIVersion` covers the other
+path — a `DOCKER_API_VERSION` pin, which skips negotiation — by refusing a version outside
+`client.MinAPIVersion`..`client.MaxAPIVersion` at startup.
+
+Every SDK call takes an `…Options` struct and returns a `…Result` (`NodeList` → `.Items`,
+`ServiceInspect` → `.Service`, `ContainerInspect` → `.Container`, `Events` → `.Messages` /
+`.Err`). `client.Filters` is a map: leave it `nil` for no filter, and allocate it before adding
+(`make(client.Filters).Add("type", "service", "node")`) — `Add` on a nil `Filters` panics.
 
 ---
 

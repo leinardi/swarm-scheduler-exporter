@@ -44,7 +44,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/common/expfmt"
@@ -93,11 +93,21 @@ var updateEngineWireGolden = flag.Bool(
 	"rewrite "+engineWireGoldenFile+" from the current output instead of comparing against it",
 )
 
-// engineWireFixtureSets are the response fixtures the fake engine serves, one directory per API
-// response shape. Every set describes the same cluster state, so every set must produce the same
-// golden metrics.
-var engineWireFixtureSets = []string{
-	"testdata/engine_wire/api-1.51",
+// engineWireFixtureSet is one directory of response fixtures in a given API response shape, plus
+// the Content-Type a daemon of that API version streams /events with.
+type engineWireFixtureSet struct {
+	dir               string
+	eventsContentType string
+}
+
+// engineWireFixtureSets describe the same cluster state in the response shapes of two API
+// versions, so every set must produce the same golden metrics. 1.51 is what a Docker 28 daemon
+// answers; 1.56 (Docker 29) drops the deprecated container NetworkSettings fields and an empty
+// Config.OnBuild, adds SwapBytes/MemorySwappiness to service and task resources, and streams
+// events as JSON Lines when asked to (API CHANGELOG, v1.52 and v1.53).
+var engineWireFixtureSets = []engineWireFixtureSet{
+	{dir: "testdata/engine_wire/api-1.51", eventsContentType: "application/json"},
+	{dir: "testdata/engine_wire/api-1.56", eventsContentType: "application/jsonl"},
 }
 
 // wireExpectations are the request properties that are allowed to differ between SDK versions.
@@ -107,26 +117,83 @@ type wireExpectations struct {
 	firstRequest    string // W2: the path of the first request of a run (API version negotiation)
 	eventsAccept    string // W3: the Accept header of GET /events
 	userAgentPrefix string // W4: the prefix of the User-Agent header
+	// W5: the query of GET /services/{id}, which the exporter always sends with
+	// InsertDefaults false.
+	serviceInspectQuery string
 }
 
 // engineWireBaseline is what the github.com/docker/docker v28.5.2 client sends.
 var engineWireBaseline = wireExpectations{
-	versionPrefix:   "/v1.51",
-	firstRequest:    "/_ping",
-	eventsAccept:    "",
-	userAgentPrefix: "Go-http-client/",
+	versionPrefix:       "/v1.51",
+	firstRequest:        "/_ping",
+	eventsAccept:        "",
+	userAgentPrefix:     "Go-http-client/",
+	serviceInspectQuery: "insertDefaults=false",
 }
 
 // wireAllowance relaxes exactly one of wireExpectations, with the evidence that the difference
 // does not change what the daemon does.
 type wireAllowance struct {
-	id       string // W1..W4
+	id       string // W1..W5
 	evidence string
 	apply    func(expectations *wireExpectations)
 }
 
-// engineWireAllowances is the allowance table. It is empty while v28 is the baseline.
-var engineWireAllowances = []wireAllowance{}
+// engineWireAllowances is the allowance table: every way the github.com/moby/moby client v0.6.0
+// request differs from the v28 baseline, and why the daemon treats it the same. Each entry relaxes
+// exactly one assertion.
+var engineWireAllowances = []wireAllowance{
+	{
+		id: "W1",
+		evidence: "v28 negotiates down to its maximum, 1.51; moby client v0.6.0 goes up to 1.56, which a " +
+			"Docker 29 daemon speaks. The API CHANGELOG entries for 1.52-1.56 that touch nodes, services, " +
+			"tasks, container list/inspect and events only change response shapes (removed deprecated " +
+			"fields, added resource fields, new event encodings) or add filters the exporter does not use; " +
+			"the api-1.56 fixture set covers those shapes and must produce the same golden metrics.",
+		apply: func(expectations *wireExpectations) { expectations.versionPrefix = "/v1.56" },
+	},
+	{
+		id: "W2",
+		evidence: "v28 negotiated in main with an explicit NegotiateAPIVersion at startup; v0.6.0 negotiates " +
+			"lazily with the same /_ping before its first request. The ping is still the first request of " +
+			"the run and is still sent once; it now lands in the first phase, which the phase comparisons " +
+			"already ignore. If the daemon is down, the first poll or event connect fails as before.",
+		apply: func(expectations *wireExpectations) { expectations.firstRequest = "/_ping" },
+	},
+	{
+		id: "W3",
+		evidence: "v0.6.0 asks for JSON Lines, NDJSON or JSON sequences on /events (API 1.52/1.53 content " +
+			"negotiation) and picks its decoder from the response Content-Type, so it reads the " +
+			"application/json stream of an older daemon and the application/jsonl stream of Docker 29 " +
+			"alike: both fixture sets decode to the same events and the same golden metrics.",
+		apply: func(expectations *wireExpectations) {
+			expectations.eventsAccept = "application/jsonl, application/x-ndjson;q=0.9, application/json-seq;q=0.5"
+		},
+	},
+	{
+		id: "W4",
+		evidence: "v0.6.0 sends its own User-Agent (moby-client/<version> <os>/<arch>) instead of Go's " +
+			"default; the daemon only logs it and does not change any of these responses based on it.",
+		apply: func(expectations *wireExpectations) { expectations.userAgentPrefix = "moby-client/" },
+	},
+	{
+		id: "W5",
+		evidence: "v0.6.0 ServiceInspect only sends insertDefaults when it is true; v28 always sent " +
+			"insertDefaults=false. The API declares the parameter with default: false (swagger.yaml, " +
+			"GET /services/{id}), so omitting it asks for exactly the same response.",
+		apply: func(expectations *wireExpectations) { expectations.serviceInspectQuery = "" },
+	},
+}
+
+// serviceInspectRequest is the normalised GET /services/{id} the exporter sends, given the
+// expected query (W5).
+func serviceInspectRequest(query, serviceID string) string {
+	if query == "" {
+		return "GET /services/" + serviceID
+	}
+
+	return "GET /services/" + serviceID + "?" + query
+}
 
 // engineWireExcludedFamilies are registered families the golden file deliberately does not pin,
 // because their values depend on timing or do not come from the SDK.
@@ -186,7 +253,7 @@ func (recorder *requestRecorder) record(request *http.Request) recordedRequest {
 		rawQuery:  request.URL.RawQuery,
 		path:      request.URL.Path,
 		query:     request.URL.Query(),
-		accept:    request.Header.Get("Accept"),
+		accept:    strings.Join(request.Header.Values("Accept"), ", "),
 		userAgent: request.Header.Get("User-Agent"),
 	}
 
@@ -358,7 +425,9 @@ type fakeEngine struct {
 	t        *testing.T
 	fixtures string
 	recorder *requestRecorder
-	stop     chan struct{}
+	// eventsContentType is the Content-Type of GET /events responses.
+	eventsContentType string
+	stop              chan struct{}
 
 	// bodyOverrides replaces the answer for a path (without version prefix). Read-only once
 	// the server runs.
@@ -455,7 +524,7 @@ func (engine *fakeEngine) serveEvents(responseWriter http.ResponseWriter, reques
 
 	connection := script[index]
 
-	responseWriter.Header().Set("Content-Type", "application/json")
+	responseWriter.Header().Set("Content-Type", engine.eventsContentType)
 	responseWriter.WriteHeader(http.StatusOK)
 
 	if connection.fixture != "" {
@@ -515,21 +584,23 @@ func writeEngineJSON(responseWriter http.ResponseWriter, status int, body []byte
 }
 
 // startFakeEngine serves fixtureDir and returns it with a real Docker client pointed at it. Like
-// main, the client negotiates its API version before the first call.
+// main, the client is not asked to negotiate: it negotiates its API version lazily, with a /_ping
+// before its first request.
 func startFakeEngine(
 	t *testing.T,
-	ctx context.Context,
-	fixtureDir string,
+	fixtureSet engineWireFixtureSet,
 	bodyOverrides map[string][]byte,
 ) (*fakeEngine, *client.Client) {
 	t.Helper()
 
 	engine := &fakeEngine{
-		t:             t,
-		fixtures:      fixtureDir,
-		recorder:      &requestRecorder{t: t},
-		stop:          make(chan struct{}),
-		bodyOverrides: bodyOverrides,
+		t:        t,
+		fixtures: fixtureSet.dir,
+		// The Content-Type a daemon of this API version streams /events with.
+		eventsContentType: fixtureSet.eventsContentType,
+		recorder:          &requestRecorder{t: t},
+		stop:              make(chan struct{}),
+		bodyOverrides:     bodyOverrides,
 	}
 
 	server := httptest.NewServer(engine)
@@ -537,7 +608,7 @@ func startFakeEngine(
 	// Registered after server.Close, so it runs first and releases held /events connections.
 	t.Cleanup(func() { close(engine.stop) })
 
-	dockerClient, err := client.NewClientWithOpts(
+	dockerClient, err := client.New(
 		client.WithHTTPClient(server.Client()),
 		client.WithHost("tcp://"+server.Listener.Addr().String()),
 	)
@@ -546,8 +617,6 @@ func startFakeEngine(
 	}
 
 	t.Cleanup(func() { _ = dockerClient.Close() })
-
-	dockerClient.NegotiateAPIVersion(ctx)
 
 	return engine, dockerClient
 }
@@ -1026,14 +1095,14 @@ func assertCoverage(t *testing.T, registered map[string]bool) {
 // --- Tests ---
 
 func TestEngineWire_PinsRequestsAndMetrics(t *testing.T) {
-	for _, fixtureDir := range engineWireFixtureSets {
-		t.Run(filepath.Base(fixtureDir), func(t *testing.T) {
-			testEngineWire(t, fixtureDir)
+	for _, fixtureSet := range engineWireFixtureSets {
+		t.Run(filepath.Base(fixtureSet.dir), func(t *testing.T) {
+			testEngineWire(t, fixtureSet)
 		})
 	}
 }
 
-func testEngineWire(t *testing.T, fixtureDir string) {
+func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	t.Helper()
 
 	resetCollectorState(t)
@@ -1042,7 +1111,8 @@ func testEngineWire(t *testing.T, fixtureDir string) {
 	defer cancel()
 
 	registerer := configureCollectorsLikeMain(t)
-	engine, dockerClient := startFakeEngine(t, ctx, fixtureDir, nil)
+	engine, dockerClient := startFakeEngine(t, fixtureSet, nil)
+	expectations := engineWireExpectations(t)
 	recorder := engine.recorder
 
 	// Phase 1: startup seeding. Sequential: service list, then node list.
@@ -1084,7 +1154,7 @@ func testEngineWire(t *testing.T, fixtureDir string) {
 		normalizedRequests(recorder.phaseRequests()),
 		[]string{
 			"GET /tasks?filters={service:[svc-agent,svc-api,svc-cron,svc-db]}",
-			"GET /services/svc-gone?insertDefaults=false",
+			serviceInspectRequest(expectations.serviceInspectQuery, "svc-gone"),
 		},
 	)
 
@@ -1121,9 +1191,9 @@ func testEngineWire(t *testing.T, fixtureDir string) {
 	reconnectsBefore := testutil.ToFloat64(eventsReconnectsTotalCounter)
 	wantEventRequests := []string{
 		"GET /events?filters={type:[node,service]}&since=<time>",
-		"GET /services/svc-api?insertDefaults=false",
+		serviceInspectRequest(expectations.serviceInspectQuery, "svc-api"),
 		"GET /nodes",
-		"GET /services/svc-agent?insertDefaults=false",
+		serviceInspectRequest(expectations.serviceInspectQuery, "svc-agent"),
 	}
 
 	stopListener := runListener(t, ctx, dockerClient, since)
@@ -1209,7 +1279,7 @@ func testEngineWire(t *testing.T, fixtureDir string) {
 	reconnectsBefore = testutil.ToFloat64(eventsReconnectsTotalCounter)
 	wantReconnectRequests := []string{
 		"GET /events?filters={type:[node,service]}&since=<time>",
-		"GET /services/svc-db?insertDefaults=false",
+		serviceInspectRequest(expectations.serviceInspectQuery, "svc-db"),
 		"GET /events?filters={type:[node,service]}&since=<time>",
 	}
 
@@ -1261,7 +1331,6 @@ func TestEngineWire_TaskFilterCap(t *testing.T) {
 
 	engine, dockerClient := startFakeEngine(
 		t,
-		ctx,
 		engineWireFixtureSets[0],
 		map[string][]byte{"/tasks": []byte("[]")},
 	)

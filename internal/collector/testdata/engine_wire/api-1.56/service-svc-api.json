@@ -1,0 +1,55 @@
+{
+  "ID": "svc-api",
+  "Version": {
+    "Index": 210
+  },
+  "CreatedAt": "2026-09-10T10:00:00.000000000Z",
+  "UpdatedAt": "2026-09-20T11:00:00.000000000Z",
+  "Spec": {
+    "Name": "web_api",
+    "Labels": {
+      "com.docker.stack.namespace": "web",
+      "com.example.team": "payments"
+    },
+    "TaskTemplate": {
+      "ContainerSpec": {
+        "Image": "example/api:1.4.0",
+        "Labels": {
+          "com.docker.stack.namespace": "web"
+        },
+        "Isolation": "default"
+      },
+      "Resources": {
+        "Limits": {},
+        "Reservations": {},
+        "SwapBytes": 536870912,
+        "MemorySwappiness": 60
+      },
+      "RestartPolicy": {
+        "Condition": "any",
+        "Delay": 5000000000,
+        "MaxAttempts": 0
+      },
+      "Placement": {
+        "Constraints": [
+          "node.role==worker"
+        ]
+      },
+      "ForceUpdate": 0,
+      "Runtime": "container"
+    },
+    "Mode": {
+      "Replicated": {
+        "Replicas": 5
+      }
+    },
+    "EndpointSpec": {
+      "Mode": "vip"
+    }
+  },
+  "Endpoint": {
+    "Spec": {
+      "Mode": "vip"
+    }
+  }
+}

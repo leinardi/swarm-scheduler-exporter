@@ -1,0 +1,117 @@
+[
+  {
+    "Id": "c-compose-web",
+    "Names": [
+      "/shop-web-1"
+    ],
+    "Image": "example/app:1",
+    "ImageID": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Command": "/entrypoint",
+    "Created": 1726400000,
+    "Ports": [],
+    "Labels": {
+      "com.docker.compose.project": "shop",
+      "com.docker.compose.service": "web"
+    },
+    "State": "running",
+    "Status": "Up 2 hours (healthy)",
+    "HostConfig": {
+      "NetworkMode": "bridge"
+    },
+    "NetworkSettings": {
+      "Networks": {}
+    },
+    "Mounts": []
+  },
+  {
+    "Id": "c-compose-worker",
+    "Names": [
+      "/shop-worker-1"
+    ],
+    "Image": "example/app:1",
+    "ImageID": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Command": "/entrypoint",
+    "Created": 1726400000,
+    "Ports": [],
+    "Labels": {
+      "com.docker.compose.project": "shop",
+      "com.docker.compose.service": "worker"
+    },
+    "State": "exited",
+    "Status": "Exited (137) 3 minutes ago",
+    "HostConfig": {
+      "NetworkMode": "bridge"
+    },
+    "NetworkSettings": {
+      "Networks": {}
+    },
+    "Mounts": []
+  },
+  {
+    "Id": "c-plain",
+    "Names": [
+      "/toolbox"
+    ],
+    "Image": "example/app:1",
+    "ImageID": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Command": "/entrypoint",
+    "Created": 1726400000,
+    "Ports": [],
+    "Labels": {},
+    "State": "running",
+    "Status": "Up 5 days",
+    "HostConfig": {
+      "NetworkMode": "bridge"
+    },
+    "NetworkSettings": {
+      "Networks": {}
+    },
+    "Mounts": []
+  },
+  {
+    "Id": "c-paused",
+    "Names": [
+      "/sidecar"
+    ],
+    "Image": "example/app:1",
+    "ImageID": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Command": "/entrypoint",
+    "Created": 1726400000,
+    "Ports": [],
+    "Labels": {},
+    "State": "paused",
+    "Status": "Up 1 hour (Paused)",
+    "HostConfig": {
+      "NetworkMode": "bridge"
+    },
+    "NetworkSettings": {
+      "Networks": {}
+    },
+    "Mounts": []
+  },
+  {
+    "Id": "c-swarm-api",
+    "Names": [
+      "/web_api.1.t-api-1"
+    ],
+    "Image": "example/app:1",
+    "ImageID": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "Command": "/entrypoint",
+    "Created": 1726400000,
+    "Ports": [],
+    "Labels": {
+      "com.docker.stack.namespace": "web",
+      "com.docker.swarm.service.name": "web_api",
+      "com.docker.swarm.task.id": "t-api-1"
+    },
+    "State": "running",
+    "Status": "Up 1 hour (health: starting)",
+    "HostConfig": {
+      "NetworkMode": "bridge"
+    },
+    "NetworkSettings": {
+      "Networks": {}
+    },
+    "Mounts": []
+  }
+]

@@ -39,12 +39,14 @@ linters:
           deny:
             - pkg: "github.com/docker/docker/"
               desc: >-
-                Docker SDK access only in internal/collector (through the DockerAPI interface) and
-                cmd/swarm-scheduler-exporter — keeps the exporter's Docker surface read-only.
+                the v28 Docker SDK, replaced by github.com/moby/moby and no longer a dependency;
+                kept here so that, should it come back, it stays confined to internal/collector and
+                cmd/swarm-scheduler-exporter like the SDK that replaced it.
             - pkg: "github.com/moby/moby/"
               desc: >-
-                Docker SDK access only in internal/collector (through the DockerAPI interface) and
-                cmd/swarm-scheduler-exporter — keeps the exporter's Docker surface read-only.
+                Docker SDK (github.com/moby/moby/client and api) access only in internal/collector
+                (through the DockerAPI interface) and cmd/swarm-scheduler-exporter — keeps the
+                exporter's Docker surface read-only.
           files:
             - "!**/internal/collector/**.go"
             - "!**/cmd/swarm-scheduler-exporter/**.go"

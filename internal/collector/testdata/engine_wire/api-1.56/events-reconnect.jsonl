@@ -1,0 +1,1 @@
+{"Type":"service","Action":"update","Actor":{"ID":"svc-db","Attributes":{"name":"db"}},"scope":"swarm","time":1789902300,"timeNano":1789902300200000000}

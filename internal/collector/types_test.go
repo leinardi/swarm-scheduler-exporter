@@ -27,7 +27,7 @@ package collector
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 // resetCollectorState clears package-level caches between tests.
