@@ -1,0 +1,96 @@
+[
+  {
+    "ID": "svc-api",
+    "Version": { "Index": 201 },
+    "CreatedAt": "2026-09-10T10:00:00.000000000Z",
+    "UpdatedAt": "2026-09-10T10:00:00.000000000Z",
+    "Spec": {
+      "Name": "web_api",
+      "Labels": { "com.docker.stack.namespace": "web", "com.example.team": "payments" },
+      "TaskTemplate": {
+        "ContainerSpec": { "Image": "example/api:1.4.0", "Labels": { "com.docker.stack.namespace": "web" }, "Isolation": "default" },
+        "Resources": { "Limits": {}, "Reservations": {} },
+        "RestartPolicy": { "Condition": "any", "Delay": 5000000000, "MaxAttempts": 0 },
+        "Placement": { "Constraints": ["node.role==worker"] },
+        "ForceUpdate": 0,
+        "Runtime": "container"
+      },
+      "Mode": { "Replicated": { "Replicas": 3 } },
+      "EndpointSpec": { "Mode": "vip" }
+    },
+    "Endpoint": { "Spec": { "Mode": "vip" } }
+  },
+  {
+    "ID": "svc-agent",
+    "Version": { "Index": 202 },
+    "CreatedAt": "2026-09-10T10:01:00.000000000Z",
+    "UpdatedAt": "2026-09-19T12:00:00.000000000Z",
+    "Spec": {
+      "Name": "web_agent",
+      "Labels": { "com.docker.stack.namespace": "web" },
+      "TaskTemplate": {
+        "ContainerSpec": { "Image": "example/agent:2.0.0", "Isolation": "default" },
+        "Resources": { "Limits": {}, "Reservations": {} },
+        "RestartPolicy": { "Condition": "any", "MaxAttempts": 0 },
+        "Placement": { "Platforms": [{ "Architecture": "amd64", "OS": "linux" }] },
+        "ForceUpdate": 0,
+        "Runtime": "container"
+      },
+      "Mode": { "Global": {} },
+      "EndpointSpec": { "Mode": "vip" }
+    },
+    "Endpoint": { "Spec": {} },
+    "UpdateStatus": { "State": "updating", "StartedAt": "2026-09-19T12:00:00.000000000Z", "Message": "update in progress" }
+  },
+  {
+    "ID": "svc-db",
+    "Version": { "Index": 203 },
+    "CreatedAt": "2026-09-10T10:02:00.000000000Z",
+    "UpdatedAt": "2026-09-18T08:00:00.000000000Z",
+    "Spec": {
+      "Name": "db",
+      "TaskTemplate": {
+        "ContainerSpec": { "Image": "postgres:17", "Isolation": "default" },
+        "Resources": { "Limits": {}, "Reservations": {} },
+        "Placement": { "Constraints": ["node.labels.zone == a"] },
+        "ForceUpdate": 0,
+        "Runtime": "container"
+      },
+      "Mode": { "Replicated": { "Replicas": 2 } },
+      "EndpointSpec": { "Mode": "vip" }
+    },
+    "Endpoint": { "Spec": {} },
+    "UpdateStatus": {
+      "State": "completed",
+      "StartedAt": "2026-09-18T07:55:00.000000000Z",
+      "CompletedAt": "2026-09-18T08:00:00.000000000Z",
+      "Message": "update completed"
+    }
+  },
+  {
+    "ID": "svc-cron",
+    "Version": { "Index": 204 },
+    "CreatedAt": "2026-09-10T10:03:00.000000000Z",
+    "UpdatedAt": "2026-09-17T06:00:00.000000000Z",
+    "Spec": {
+      "Name": "cron_backup",
+      "Labels": { "com.docker.stack.namespace": "cron", "com.example.team": "ops" },
+      "TaskTemplate": {
+        "ContainerSpec": { "Image": "example/backup:1.0.0", "Isolation": "default" },
+        "Resources": { "Limits": {}, "Reservations": {} },
+        "RestartPolicy": { "Condition": "none", "MaxAttempts": 0 },
+        "ForceUpdate": 0,
+        "Runtime": "container"
+      },
+      "Mode": { "Replicated": { "Replicas": 1 } },
+      "EndpointSpec": { "Mode": "vip" }
+    },
+    "Endpoint": { "Spec": {} },
+    "UpdateStatus": {
+      "State": "rollback_paused",
+      "StartedAt": "2026-09-17T05:50:00.000000000Z",
+      "CompletedAt": "2026-09-17T06:00:00.000000000Z",
+      "Message": "rollback paused"
+    }
+  }
+]

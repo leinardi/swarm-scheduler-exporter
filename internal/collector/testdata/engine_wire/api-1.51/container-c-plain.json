@@ -1,0 +1,39 @@
+{
+  "Id": "c-plain",
+  "Created": "2026-09-15T10:00:00.000000000Z",
+  "Path": "/entrypoint",
+  "Args": [],
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 1234,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-09-20T08:00:00.000000000Z",
+    "FinishedAt": "0001-01-01T00:00:00Z"
+  },
+  "Image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "Name": "/toolbox",
+  "RestartCount": 0,
+  "Driver": "overlay2",
+  "Platform": "linux",
+  "HostConfig": {
+    "NetworkMode": "bridge"
+  },
+  "Mounts": [],
+  "Config": {
+    "Hostname": "c-plain",
+    "Image": "example/app:1",
+    "Labels": {},
+    "Env": [
+      "PATH=/usr/bin"
+    ]
+  },
+  "NetworkSettings": {
+    "Networks": {}
+  }
+}

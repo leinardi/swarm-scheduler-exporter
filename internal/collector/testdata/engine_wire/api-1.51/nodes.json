@@ -1,0 +1,63 @@
+[
+  {
+    "ID": "node-mgr1",
+    "Version": { "Index": 101 },
+    "CreatedAt": "2026-09-01T08:00:00.000000000Z",
+    "UpdatedAt": "2026-09-20T09:00:00.000000000Z",
+    "Spec": { "Labels": { "zone": "a" }, "Role": "manager", "Availability": "active" },
+    "Description": {
+      "Hostname": "mgr1",
+      "Platform": { "Architecture": "x86_64", "OS": "linux" },
+      "Resources": { "NanoCPUs": 4000000000, "MemoryBytes": 8589934592 },
+      "Engine": { "EngineVersion": "28.5.2", "Labels": { "tier": "core" }, "Plugins": [] },
+      "TLSInfo": { "TrustRoot": "", "CertIssuerSubject": "", "CertIssuerPublicKey": "" }
+    },
+    "Status": { "State": "ready", "Addr": "10.0.0.1" },
+    "ManagerStatus": { "Leader": true, "Reachability": "reachable", "Addr": "10.0.0.1:2377" }
+  },
+  {
+    "ID": "node-w1",
+    "Version": { "Index": 102 },
+    "CreatedAt": "2026-09-01T08:05:00.000000000Z",
+    "UpdatedAt": "2026-09-20T09:00:00.000000000Z",
+    "Spec": { "Labels": { "zone": "b" }, "Role": "worker", "Availability": "active" },
+    "Description": {
+      "Hostname": "w1",
+      "Platform": { "Architecture": "aarch64", "OS": "linux" },
+      "Resources": { "NanoCPUs": 2000000000, "MemoryBytes": 4294967296 },
+      "Engine": { "EngineVersion": "28.5.2", "Plugins": [] },
+      "TLSInfo": { "TrustRoot": "", "CertIssuerSubject": "", "CertIssuerPublicKey": "" }
+    },
+    "Status": { "State": "ready", "Addr": "10.0.0.2" }
+  },
+  {
+    "ID": "node-w2",
+    "Version": { "Index": 103 },
+    "CreatedAt": "2026-09-01T08:10:00.000000000Z",
+    "UpdatedAt": "2026-09-20T09:00:00.000000000Z",
+    "Spec": { "Labels": { "zone": "a" }, "Role": "worker", "Availability": "drain" },
+    "Description": {
+      "Hostname": "w2",
+      "Platform": { "Architecture": "x86_64", "OS": "linux" },
+      "Resources": { "NanoCPUs": 2000000000, "MemoryBytes": 4294967296 },
+      "Engine": { "EngineVersion": "28.5.2", "Plugins": [] },
+      "TLSInfo": { "TrustRoot": "", "CertIssuerSubject": "", "CertIssuerPublicKey": "" }
+    },
+    "Status": { "State": "ready", "Addr": "10.0.0.3" }
+  },
+  {
+    "ID": "node-w3",
+    "Version": { "Index": 104 },
+    "CreatedAt": "2026-09-01T08:15:00.000000000Z",
+    "UpdatedAt": "2026-09-20T09:00:00.000000000Z",
+    "Spec": { "Labels": { "zone": "a" }, "Role": "worker", "Availability": "active" },
+    "Description": {
+      "Hostname": "w3",
+      "Platform": { "Architecture": "x86_64", "OS": "linux" },
+      "Resources": { "NanoCPUs": 2000000000, "MemoryBytes": 4294967296 },
+      "Engine": { "EngineVersion": "28.5.2", "Plugins": [] },
+      "TLSInfo": { "TrustRoot": "", "CertIssuerSubject": "", "CertIssuerPublicKey": "" }
+    },
+    "Status": { "State": "down", "Message": "heartbeat failure", "Addr": "10.0.0.4" }
+  }
+]

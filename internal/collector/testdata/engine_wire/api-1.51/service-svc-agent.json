@@ -1,0 +1,52 @@
+{
+  "ID": "svc-agent",
+  "Version": {
+    "Index": 202
+  },
+  "CreatedAt": "2026-09-10T10:01:00.000000000Z",
+  "UpdatedAt": "2026-09-19T12:00:00.000000000Z",
+  "Spec": {
+    "Name": "web_agent",
+    "Labels": {
+      "com.docker.stack.namespace": "web"
+    },
+    "TaskTemplate": {
+      "ContainerSpec": {
+        "Image": "example/agent:2.0.0",
+        "Isolation": "default"
+      },
+      "Resources": {
+        "Limits": {},
+        "Reservations": {}
+      },
+      "RestartPolicy": {
+        "Condition": "any",
+        "MaxAttempts": 0
+      },
+      "Placement": {
+        "Platforms": [
+          {
+            "Architecture": "amd64",
+            "OS": "linux"
+          }
+        ]
+      },
+      "ForceUpdate": 0,
+      "Runtime": "container"
+    },
+    "Mode": {
+      "Global": {}
+    },
+    "EndpointSpec": {
+      "Mode": "vip"
+    }
+  },
+  "Endpoint": {
+    "Spec": {}
+  },
+  "UpdateStatus": {
+    "State": "updating",
+    "StartedAt": "2026-09-19T12:00:00.000000000Z",
+    "Message": "update in progress"
+  }
+}
