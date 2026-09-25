@@ -142,8 +142,6 @@ func makeTestMetadata(stack, service, mode string) serviceMetadata {
 }
 
 // serviceLabels builds the prometheus.Labels for a service under test.
-//
-//nolint:unparam // mode supports all service modes; current tests exercise replicated only
 func serviceLabels(stack, service, mode string) prometheus.Labels {
 	return prometheus.Labels{
 		labelStack:       stack,
