@@ -40,6 +40,8 @@ All metrics live under the `swarm_` namespace.
 
 - `swarm_service_running_replicas{stack,service,service_mode,...custom}`
   Number of **currently running** tasks per service (latest-per-slot view, same snapshot as `replicas_state`).
+  A service with no tasks at all (e.g. one never scheduled anywhere) still gets `0` here and in `replicas_state`, plus an `at_desired`
+  series, so an alert on `at_desired == 0` also covers a service whose tasks were never created.
 
 - `swarm_service_at_desired{stack,service,service_mode,...custom}`
   `1` if `running_replicas == desired_replicas`, else `0`. Useful for dead-simple SLOs and alerting.
@@ -62,8 +64,7 @@ All metrics live under the `swarm_` namespace.
 > ℹ️ **Global services:** `desired_replicas` is the number of eligible nodes, not `0`. It is `0` only when no node is eligible: none is
 > `ready` + `active` (a node that is down, disconnected, paused, or drained does not count), or none meets the placement constraints or
 > platforms. `running_replicas` is then usually `0` too, and `at_desired=1` only when it is. A paused or disconnected node can still run an
-> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`. A service that has no tasks at all (e.g. one that was
-> never scheduled anywhere) has no `running_replicas`, `swarm_task_replicas_state` or `at_desired` series yet, rather than `0`.
+> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`.
 
 ### Service update/rollback (info-style)
 

@@ -244,6 +244,111 @@ func TestPollReplicasState_TaskListError(t *testing.T) {
 	}
 }
 
+func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
+	resetCollectorState(t)
+	rrg, adg := installReplicasStateGauges(t)
+
+	// A global service no node is eligible for: no tasks, desired 0.
+	unscheduledGlobal := makeTestMetadata("s", "glb", serviceModeGlobal)
+	setServiceMetadata("glb_empty", &unscheduledGlobal)
+	setServiceDesiredReplicas("glb_empty", 0)
+
+	// A replicated service whose tasks were never created: no tasks, desired 2.
+	pendingReplicated := makeTestMetadata("s", "pending", serviceModeReplicated)
+	setServiceMetadata("rep_pending", &pendingReplicated)
+	setServiceDesiredReplicas("rep_pending", 2)
+
+	// A service with a running task, to check it is left alone.
+	running := makeTestMetadata("s", "ok", serviceModeReplicated)
+	setServiceMetadata("rep_ok", &running)
+	setServiceDesiredReplicas("rep_ok", 1)
+
+	fd := &fakeDocker{tasks: []swarm.Task{{
+		Meta:      swarm.Meta{CreatedAt: time.Now(), Version: swarm.Version{Index: 1}},
+		ServiceID: "rep_ok",
+		Slot:      1,
+		Status:    swarm.TaskStatus{State: swarm.TaskStateRunning},
+	}}}
+
+	sc, err := PollReplicasState(context.Background(), fd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sc) != 3 {
+		t.Fatalf("got %d services, want 3 (services without tasks included)", len(sc))
+	}
+
+	UpdateReplicasStateGauge(sc)
+
+	// Count before any With() call, which would create the series being asserted on.
+	if got := testutil.CollectAndCount(rrg); got != 3 {
+		t.Errorf("running_replicas series = %d, want 3", got)
+	}
+
+	if got := testutil.CollectAndCount(adg); got != 3 {
+		t.Errorf("at_desired series = %d, want 3", got)
+	}
+
+	if got := testutil.CollectAndCount(replicasStateGauge); got != 3*len(knownTaskStates) {
+		t.Errorf("replicas_state series = %d, want %d", got, 3*len(knownTaskStates))
+	}
+
+	cases := []struct {
+		service, mode      string
+		running, atDesired float64
+	}{
+		{"glb", serviceModeGlobal, 0, 1},
+		{"pending", serviceModeReplicated, 0, 0},
+		{"ok", serviceModeReplicated, 1, 1},
+	}
+	for _, tc := range cases {
+		lbls := serviceLabels("s", tc.service, tc.mode)
+		if got := testutil.ToFloat64(rrg.With(lbls)); got != tc.running {
+			t.Errorf("[%s] running_replicas = %v, want %v", tc.service, got, tc.running)
+		}
+
+		if got := testutil.ToFloat64(adg.With(lbls)); got != tc.atDesired {
+			t.Errorf("[%s] at_desired = %v, want %v", tc.service, got, tc.atDesired)
+		}
+	}
+}
+
+func TestAddServicesWithoutTasks(t *testing.T) {
+	resetCollectorState(t)
+
+	md := makeTestMetadata("s", "empty", serviceModeReplicated)
+	setServiceMetadata("svc_empty", &md)
+
+	existing := newTaskCounter(serviceLabels("s", "busy", serviceModeReplicated))
+	existing.inc(string(swarm.TaskStateRunning))
+	sc := serviceCounter{"svc_busy": existing}
+
+	// svc_removed is not in the metadata cache: it was removed while polling.
+	addServicesWithoutTasks(sc, []string{"svc_busy", "svc_empty", "svc_removed"})
+
+	if sc["svc_busy"].states[string(swarm.TaskStateRunning)] != 1 {
+		t.Error("existing counter must not be replaced")
+	}
+
+	empty, ok := sc["svc_empty"]
+	if !ok {
+		t.Fatal("expected an empty counter for svc_empty")
+	}
+
+	if len(empty.states) != 0 {
+		t.Errorf("svc_empty states = %v, want none", empty.states)
+	}
+
+	if empty.labels[labelService] != "empty" {
+		t.Errorf("svc_empty labels = %v, want service=empty", empty.labels)
+	}
+
+	if _, ok := sc["svc_removed"]; ok {
+		t.Error("uncached service must not be added")
+	}
+}
+
 // ---- UpdateReplicasStateGauge ----
 
 func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {

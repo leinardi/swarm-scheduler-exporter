@@ -162,11 +162,15 @@ func PollReplicasState(
 	serviceIDs := getAllServiceIDs()
 
 	// A nil client.Filters sends no filter; Add on it would panic, so allocate before adding.
-	var taskFilters client.Filters
+	var (
+		taskFilters       client.Filters
+		queriedServiceIDs []string
+	)
 
 	if len(serviceIDs) > 0 {
 		limit := min(len(serviceIDs), maxServicesInTaskFilter)
-		taskFilters = make(client.Filters).Add("service", serviceIDs[:limit]...)
+		queriedServiceIDs = serviceIDs[:limit]
+		taskFilters = make(client.Filters).Add("service", queriedServiceIDs...)
 	}
 
 	taskListResult, listErr := dockerClient.TaskList(parentContext, client.TaskListOptions{
@@ -249,7 +253,31 @@ func PollReplicasState(
 		replicasByService[key.serviceID] = counter
 	}
 
+	addServicesWithoutTasks(replicasByService, queriedServiceIDs)
+
 	return replicasByService, nil
+}
+
+// addServicesWithoutTasks gives every queried service that has no tasks an empty counter, so
+// it still emits running_replicas=0, zeroed task states and an at_desired series. Without it a
+// service that was never scheduled (a global service no node is eligible for, a replicated
+// service whose tasks cannot be created) has no series at all, and an "at_desired == 0" alert
+// never fires for it. Only services that were in the TaskList filter are added: one beyond
+// maxServicesInTaskFilter was not queried, so its task count is unknown, not zero.
+func addServicesWithoutTasks(replicasByService serviceCounter, queriedServiceIDs []string) {
+	for _, serviceID := range queriedServiceIDs {
+		if _, exists := replicasByService[serviceID]; exists {
+			continue
+		}
+
+		metadata, found := getServiceMetadata(serviceID)
+		if !found {
+			// Removed while this poll was running.
+			continue
+		}
+
+		replicasByService[serviceID] = newTaskCounter(labelsForMetadata(&metadata))
+	}
 }
 
 // UpdateReplicasStateGauge writes the aggregated state counters into the
