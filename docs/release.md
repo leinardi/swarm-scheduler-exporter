@@ -184,6 +184,8 @@ an action that moves, or whose repository is compromised, would execute inside t
 `packages: write` and an OIDC identity. A SHA cannot be moved. Dependabot's `github-actions` ecosystem updates the pins and
 rewrites the comment. `svu` is pinned the same way, as a version in `SVU_VERSION`, and is a human's job to bump. The Dockerfile
 frontend (`# syntax=docker/dockerfile:…`) is pinned by digest too, so BuildKit never pulls a frontend that moved under its tag.
+Dependabot's `docker` ecosystem does not update that syntax line, so it is bumped by hand: resolve the new index digest with
+`docker buildx imagetools inspect docker/dockerfile:<version>` and replace the tag and the digest together.
 
 A SHA pin fixes only the top-level ref, so the actions and reusable workflows we own pin what they run too:
 `leinardi/gha-pre-commit-reviewdog-actions` from `v1.0.1` and `leinardi/gh-reusable-workflows` from `v1.2.1`, the releases pinned
