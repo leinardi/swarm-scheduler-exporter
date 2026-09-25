@@ -68,7 +68,7 @@ swarm_service_desired_replicas{com_example_team="",display_name="db",service="db
 swarm_service_desired_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
 swarm_service_desired_replicas{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1
 swarm_service_desired_replicas{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 5
-# HELP swarm_service_running_replicas Current number of running tasks per Swarm service (latest per slot).
+# HELP swarm_service_running_replicas Current number of running tasks per Swarm service (current task per slot for replicated services or node for global services).
 # TYPE swarm_service_running_replicas gauge
 swarm_service_running_replicas{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 2
 swarm_service_running_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
@@ -114,7 +114,7 @@ swarm_service_update_state_info{com_example_team="payments",display_name="web ap
 swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="rollback_completed"} 0
 swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="rollback_started"} 0
 swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="updating"} 0
-# HELP swarm_task_replicas_state Number of tasks per Swarm service segmented by task state (latest per slot).
+# HELP swarm_task_replicas_state Number of tasks per Swarm service segmented by task state (current task per slot for replicated services or node for global services).
 # TYPE swarm_task_replicas_state gauge
 swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="accepted"} 0
 swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="allocated"} 0

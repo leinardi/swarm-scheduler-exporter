@@ -6,13 +6,14 @@ Fork of (and huge thanks to) **[akerouanton/swarm-tasks-exporter](https://github
 ## 💡 What is “Swarm Scheduler Exporter”?
 
 **Swarm Scheduler Exporter** surfaces what Docker Swarm’s **scheduler** is doing right now, and *why*. It reports **desired replicas** (including
-accurate eligibility for `global` services), **live task state** per service (latest per slot), **service update/rollback** state + timestamps,
-**cluster node** availability, and now **SLO-friendly service readiness** signals.
+accurate eligibility for `global` services), **live task state** per service (current task per slot, or per node for `global` services),
+**service update/rollback** state + timestamps, **cluster node** availability, and now **SLO-friendly service readiness** signals.
 
 ## 📦 What This Exporter Does
 
 - Watches Swarm **service** and **node** events to keep metrics fresh (resilient reconnect, bounded worker pool).
-- Periodically polls **tasks** and aggregates **current** states per service (latest per slot, exhaustive zero-emission).
+- Periodically polls **tasks** and aggregates **current** states per service (current task per slot for replicated services or per node for
+  global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only: status/availability/constraints/platforms).
 - Emits **exporter** and **cluster** health metrics for alerting & SLOs.
 - Sanitizes and validates **custom labels** for Prometheus compliance and safe cardinality.
@@ -36,12 +37,17 @@ All metrics live under the `swarm_` namespace.
   supports an IP or CIDR.
 
 - `swarm_task_replicas_state{stack,service,service_mode,state,...custom}`
-  **Latest-per-slot** task count by state (always emits zeros for all known states per current service).
+  Task count by state, counting the **current task per slot** for replicated services or **per node** for global services (always emits
+  zeros for all known states per current service).
 
 - `swarm_service_running_replicas{stack,service,service_mode,...custom}`
-  Number of **currently running** tasks per service (latest-per-slot view, same snapshot as `replicas_state`).
+  Number of **currently running** tasks per service (current task per slot or node, same snapshot as `replicas_state`).
   A service with no tasks at all (e.g. one never scheduled anywhere) still gets `0` here and in `replicas_state`, plus an `at_desired`
   series, so an alert on `at_desired == 0` also covers a service whose tasks were never created.
+
+> ℹ️ **Current task:** the task Swarm still wants (desired state not `shutdown`, `remove`, …), preferring a running one, then the newest.
+> A retired task still reported as running, for example on a down node, is not counted. This is why `running_replicas` can differ from
+> the `REPLICAS` column of `docker service ls` during node outages and updates.
 
 - `swarm_service_at_desired{stack,service,service_mode,...custom}`
   `1` if `running_replicas == desired_replicas`, else `0`. Useful for dead-simple SLOs and alerting.
@@ -376,7 +382,7 @@ scrape_configs:
 - **Global desired replicas accuracy**: evaluate **eligible nodes** (status/availability/constraints/platforms), not total nodes.
 - **Label sanitation & validation**: full Prometheus regex, collision checks, max label keys, high-cardinality warning, raw→sanitized mapping.
 - **Operability**: graceful shutdown; `/healthz`; health/build/exporter metrics; quieter default logs; validated `-poll-delay`.
-- **Performance**: node snapshot cache; on node events recompute **only** global services; task poll optimized to “latest per slot”; worker pool.
+- **Performance**: node snapshot cache; on node events recompute **only** global services; task poll optimized to “current task per slot/node”; worker pool.
 - **Metrics namespace**: consistent `swarm_*` names & labels aligned with Prometheus best practices.
 - **Service update visibility**: `swarm_service_update_state_info` + timestamps for rollbacks/paused/update flows.
 - **SLO helpers**: `swarm_service_running_replicas` and `swarm_service_at_desired` for direct alerting/dashboards.

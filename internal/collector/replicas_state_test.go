@@ -48,6 +48,133 @@ func makeTask(createdAt, statusTS time.Time, versionIndex uint64) *swarm.Task {
 	}
 }
 
+// makeStateTask returns a task with the given creation time, desired state and actual state.
+func makeStateTask(createdAt time.Time, desired, state swarm.TaskState) *swarm.Task {
+	task := makeTask(createdAt, time.Time{}, 1)
+	task.DesiredState = desired
+	task.Status.State = state
+
+	return task
+}
+
+func TestPreferredTask(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	later := base.Add(time.Second)
+
+	lateShutdownOld := makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateShutdown)
+	lateShutdownOld.Status.Timestamp = base.Add(time.Minute)
+
+	lateShutdownNew := makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStateAssigned)
+	lateShutdownNew.Status.Timestamp = later
+
+	tests := []struct {
+		name   string
+		winner *swarm.Task
+		loser  *swarm.Task
+	}{
+		{
+			name:   "issue 62: start-first update whose new task failed keeps the old one",
+			winner: makeStateTask(base, swarm.TaskStateRunning, swarm.TaskStateRunning),
+			loser:  makeStateTask(later, swarm.TaskStateShutdown, swarm.TaskStateFailed),
+		},
+		{
+			name:   "node down: replacement beats stale task still reported running",
+			winner: makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStatePending),
+			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateRunning),
+		},
+		{
+			name:   "crash and restart: replacement beats failed task",
+			winner: makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStateRunning),
+			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateFailed),
+		},
+		{
+			name:   "start-first in progress: serving old task beats starting new one",
+			winner: makeStateTask(base, swarm.TaskStateRunning, swarm.TaskStateRunning),
+			loser:  makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStateStarting),
+		},
+		{
+			name:   "start-first with both running: newer wins",
+			winner: makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStateRunning),
+			loser:  makeStateTask(base, swarm.TaskStateRunning, swarm.TaskStateRunning),
+		},
+		{
+			name:   "stop-first in progress: new task desired ready beats old one being stopped",
+			winner: makeStateTask(later, swarm.TaskStateReady, swarm.TaskStatePending),
+			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateRunning),
+		},
+		{
+			name:   "late shutdown status: new task wins despite older task's newer status timestamp",
+			winner: lateShutdownNew,
+			loser:  lateShutdownOld,
+		},
+		{
+			name:   "both retired and not running: newer wins",
+			winner: makeStateTask(later, swarm.TaskStateShutdown, swarm.TaskStateRejected),
+			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateFailed),
+		},
+		{
+			name:   "both wanted and not running: newer wins",
+			winner: makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStatePreparing),
+			loser:  makeStateTask(base, swarm.TaskStateRunning, swarm.TaskStatePending),
+		},
+		{
+			name:   "empty desired state counts as wanted",
+			winner: makeStateTask(base, "", swarm.TaskStateRunning),
+			loser:  makeStateTask(later, swarm.TaskStateShutdown, swarm.TaskStateFailed),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !preferredTask(tc.winner, tc.loser) {
+				t.Error("preferredTask(winner, loser) = false, want true")
+			}
+
+			if preferredTask(tc.loser, tc.winner) {
+				t.Error("preferredTask(loser, winner) = true, want false")
+			}
+		})
+	}
+}
+
+func TestPreferredTask_AllRulesTie(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, desired := range []swarm.TaskState{swarm.TaskStateRunning, swarm.TaskStateShutdown} {
+		first := makeStateTask(base, desired, swarm.TaskStateRunning)
+		second := makeStateTask(base, desired, swarm.TaskStateRunning)
+
+		// Identical rank: neither replaces the other, so the first one listed is kept.
+		if preferredTask(first, second) || preferredTask(second, first) {
+			t.Errorf("desired=%s: tied tasks should not replace each other", desired)
+		}
+	}
+}
+
+func TestRetiredTask(t *testing.T) {
+	tests := []struct {
+		desired swarm.TaskState
+		want    bool
+	}{
+		{swarm.TaskStateShutdown, true},
+		{swarm.TaskStateFailed, true},
+		{swarm.TaskStateRejected, true},
+		{swarm.TaskStateRemove, true},
+		{swarm.TaskStateOrphaned, true},
+		{swarm.TaskStateComplete, false},
+		{swarm.TaskStateRunning, false},
+		{swarm.TaskStateReady, false},
+		{"", false},
+	}
+
+	for _, tc := range tests {
+		task := &swarm.Task{DesiredState: tc.desired}
+		if got := retiredTask(task); got != tc.want {
+			t.Errorf("retiredTask(desired=%q) = %v, want %v", tc.desired, got, tc.want)
+		}
+	}
+}
+
 func TestNewerThan_CreatedAt(t *testing.T) {
 	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := makeTask(base.Add(time.Second), time.Time{}, 1)
@@ -132,17 +259,23 @@ func TestPollReplicasState_DedupeBySlot_NewerWins(t *testing.T) {
 	md := makeTestMetadata("stack", "svc", serviceModeReplicated)
 	setServiceMetadata("svc1", &md)
 
+	// Same desired state and neither running, so only creation time tells them apart.
 	older := swarm.Task{
-		Meta:      swarm.Meta{CreatedAt: base, Version: swarm.Version{Index: 1}},
-		ServiceID: "svc1",
-		Slot:      1,
-		Status:    swarm.TaskStatus{State: swarm.TaskStateRunning},
+		Meta:         swarm.Meta{CreatedAt: base, Version: swarm.Version{Index: 1}},
+		ServiceID:    "svc1",
+		Slot:         1,
+		DesiredState: swarm.TaskStateShutdown,
+		Status:       swarm.TaskStatus{State: swarm.TaskStateFailed},
 	}
 	newer := swarm.Task{
-		Meta:      swarm.Meta{CreatedAt: base.Add(time.Second), Version: swarm.Version{Index: 2}},
-		ServiceID: "svc1",
-		Slot:      1,
-		Status:    swarm.TaskStatus{State: swarm.TaskStateFailed},
+		Meta: swarm.Meta{
+			CreatedAt: base.Add(time.Second),
+			Version:   swarm.Version{Index: 2},
+		},
+		ServiceID:    "svc1",
+		Slot:         1,
+		DesiredState: swarm.TaskStateShutdown,
+		Status:       swarm.TaskStatus{State: swarm.TaskStateRejected},
 	}
 
 	fd := &fakeDocker{tasks: []swarm.Task{older, newer}}
@@ -156,16 +289,83 @@ func TestPollReplicasState_DedupeBySlot_NewerWins(t *testing.T) {
 	if !ok {
 		t.Fatal("expected entry for svc1")
 	}
-	// Only the newer (failed) task should count.
-	if c.states[string(swarm.TaskStateFailed)] != 1 {
-		t.Errorf("failed = %v, want 1", c.states[string(swarm.TaskStateFailed)])
+	// Only the newer (rejected) task should count.
+	if c.states[string(swarm.TaskStateRejected)] != 1 {
+		t.Errorf("rejected = %v, want 1", c.states[string(swarm.TaskStateRejected)])
 	}
 
-	if c.states[string(swarm.TaskStateRunning)] != 0 {
+	if c.states[string(swarm.TaskStateFailed)] != 0 {
 		t.Errorf(
-			"running = %v, want 0 (older task should be deduped)",
-			c.states[string(swarm.TaskStateRunning)],
+			"failed = %v, want 0 (older task should be deduped)",
+			c.states[string(swarm.TaskStateFailed)],
 		)
+	}
+}
+
+// TestPollReplicasState_NewerRetiredTask_DoesNotHideRunningTask reproduces issue 62: a
+// start-first update whose new task failed leaves a newer retired task next to the older task
+// that is still serving, in the same slot (replicated) or on the same node (global).
+func TestPollReplicasState_NewerRetiredTask_DoesNotHideRunningTask(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		mode string
+		slot int
+		node string
+	}{
+		{name: "replicated keyed by slot", mode: serviceModeReplicated, slot: 1},
+		{name: "global keyed by node", mode: serviceModeGlobal, node: "node-a"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resetCollectorState(t)
+
+			md := makeTestMetadata("stack", "svc", tc.mode)
+			setServiceMetadata("svc1", &md)
+
+			serving := swarm.Task{
+				Meta:         swarm.Meta{CreatedAt: base, Version: swarm.Version{Index: 1}},
+				ServiceID:    "svc1",
+				Slot:         tc.slot,
+				NodeID:       tc.node,
+				DesiredState: swarm.TaskStateRunning,
+				Status:       swarm.TaskStatus{State: swarm.TaskStateRunning},
+			}
+			failedUpdate := swarm.Task{
+				Meta: swarm.Meta{
+					CreatedAt: base.Add(time.Hour),
+					Version:   swarm.Version{Index: 2},
+				},
+				ServiceID:    "svc1",
+				Slot:         tc.slot,
+				NodeID:       tc.node,
+				DesiredState: swarm.TaskStateShutdown,
+				Status:       swarm.TaskStatus{State: swarm.TaskStateFailed},
+			}
+
+			// Both list orders: Docker does not guarantee one.
+			for _, tasks := range [][]swarm.Task{{serving, failedUpdate}, {failedUpdate, serving}} {
+				sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				c, ok := sc["svc1"]
+				if !ok {
+					t.Fatal("expected entry for svc1")
+				}
+
+				if got := c.states[string(swarm.TaskStateRunning)]; got != 1 {
+					t.Errorf("running = %v, want 1", got)
+				}
+
+				if got := c.states[string(swarm.TaskStateFailed)]; got != 0 {
+					t.Errorf("failed = %v, want 0 (retired task must not be counted)", got)
+				}
+			}
+		})
 	}
 }
 

@@ -26,9 +26,11 @@ package collector
 
 // replicas_state exposes the gauge "swarm_service_replicas_state", which tracks
 // the number of tasks per service per state (new, running, failed, etc.).
-// This implementation counts only the "latest" task per (service,slot) for
+// This implementation counts only the current task per (service,slot) for
 // replicated services and per (service,nodeID) for global services, so that
-// historical tasks from previous rollouts do not inflate counts.
+// historical tasks from previous rollouts do not inflate counts. The current task
+// is the one Swarm still wants, preferring a running one, then the newest (see
+// preferredTask).
 
 import (
 	"context"
@@ -74,6 +76,18 @@ var knownTaskStates = []string{
 	string(swarm.TaskStateOrphaned),
 }
 
+// retiredDesiredStates are the desired states of a task Swarm no longer wants running. They
+// mirror swarmkit's "DesiredState > Completed" check in its restart supervisor: a task in one
+// of them has been shut down or replaced, even if its node still reports it as running (a down
+// node's tasks keep their last status for up to 24h).
+var retiredDesiredStates = map[swarm.TaskState]struct{}{
+	swarm.TaskStateShutdown: {},
+	swarm.TaskStateFailed:   {},
+	swarm.TaskStateRejected: {},
+	swarm.TaskStateRemove:   {},
+	swarm.TaskStateOrphaned: {},
+}
+
 // replicasStateGauge is the gauge vector exported at /metrics.
 var replicasStateGauge *prometheus.GaugeVec
 
@@ -116,10 +130,11 @@ func ConfigureReplicasStateGauge() {
 	}, getSanitizedCustomLabelNames()...)
 
 	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusTaskSubsystem,
-		Name:        "replicas_state",
-		Help:        "Number of tasks per Swarm service segmented by task state (latest per slot).",
+		Namespace: prometheusNamespace,
+		Subsystem: prometheusTaskSubsystem,
+		Name:      "replicas_state",
+		Help: "Number of tasks per Swarm service segmented by task state " +
+			"(current task per slot for replicated services or node for global services).",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(replicasStateGauge)
@@ -132,10 +147,11 @@ func ConfigureReplicasStateGauge() {
 		labelDisplayName,
 	}, getSanitizedCustomLabelNames()...)
 	runningReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusServiceSubsystem,
-		Name:        "running_replicas",
-		Help:        "Current number of running tasks per Swarm service (latest per slot).",
+		Namespace: prometheusNamespace,
+		Subsystem: prometheusServiceSubsystem,
+		Name:      "running_replicas",
+		Help: "Current number of running tasks per Swarm service " +
+			"(current task per slot for replicated services or node for global services).",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(runningBase))
 	prometheus.MustRegister(runningReplicasGauge)
@@ -152,8 +168,8 @@ func ConfigureReplicasStateGauge() {
 }
 
 // PollReplicasState lists tasks and aggregates them by state per service,
-// counting only the latest task per (service, slot) for replicated services
-// and per (service, nodeID) for global services.
+// counting only the current task per (service, slot) for replicated services
+// and per (service, nodeID) for global services, as chosen by preferredTask.
 func PollReplicasState(
 	parentContext context.Context,
 	dockerClient DockerAPI,
@@ -182,7 +198,7 @@ func PollReplicasState(
 
 	tasks := taskListResult.Items
 
-	// Step 1: choose the latest task per dedupe key.
+	// Step 1: choose the current task per dedupe key.
 	latestByKey := make(map[latestKey]*swarm.Task)
 
 	for index := range tasks { // iterate by index to avoid copying
@@ -224,7 +240,7 @@ func PollReplicasState(
 		}
 
 		if previousTask, exists := latestByKey[dedupeKey]; !exists ||
-			newerThan(task, previousTask) {
+			preferredTask(task, previousTask) {
 			latestByKey[dedupeKey] = task
 		}
 	}
@@ -401,9 +417,41 @@ func newTaskCounter(labels map[string]string) taskCounter {
 	}
 }
 
+// preferredTask returns true if candidate should replace current as the task counted for a
+// dedupe key. The first rule that tells them apart decides:
+//  1. a task Swarm still wants beats a retired one: after a failed start-first update the
+//     newer, failed task is retired while the older one keeps serving, and a stale task on a
+//     down node is retired while its replacement starts;
+//  2. a running task beats one that is not: during a start-first update the old task keeps
+//     serving until its replacement is running;
+//  3. the newer task wins (newerThan).
+//
+// Each rule is symmetric, so the choice does not depend on the order Docker lists tasks in.
+func preferredTask(candidate, current *swarm.Task) bool {
+	candidateRetired := retiredTask(candidate)
+	if candidateRetired != retiredTask(current) {
+		return !candidateRetired
+	}
+
+	candidateRunning := candidate.Status.State == swarm.TaskStateRunning
+	if candidateRunning != (current.Status.State == swarm.TaskStateRunning) {
+		return candidateRunning
+	}
+
+	return newerThan(candidate, current)
+}
+
+// retiredTask reports whether Swarm no longer wants task running (see retiredDesiredStates).
+// An empty desired state counts as wanted.
+func retiredTask(task *swarm.Task) bool {
+	_, retired := retiredDesiredStates[task.DesiredState]
+
+	return retired
+}
+
 // newerThan returns true if candidate is strictly newer than current.
-// Prefer task CreatedAt (creation time) so "latest per slot" reflects the newest task
-// attempt rather than the most recently updated status (which can be a late Shutdown).
+// Prefer task CreatedAt (creation time) so the newest task attempt wins rather than the
+// most recently updated status (which can be a late Shutdown).
 // Fall back to Status.Timestamp, then Version.Index as a last resort.
 func newerThan(candidate, current *swarm.Task) bool {
 	// 1) Task creation time (stable across status updates).
