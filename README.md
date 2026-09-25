@@ -345,7 +345,11 @@ scrape_configs:
 
 ## 🔐 Security & Permissions
 
-- Only needs **read-only** access to the Docker API (`/var/run/docker.sock:ro`).
+- The exporter only **issues read requests** to the Docker API (list, inspect and events).
+  Mounting the socket with `:ro` does **not** make the API read-only: it only stops the container from
+  modifying the socket file, and any client holding the socket can still create, update or remove resources.
+  To enforce read-only access, put a socket proxy in front of the Docker API (for example a
+  docker-socket-proxy that allows only `GET` requests on the endpoints the exporter uses).
 - Must run on a **manager** node in Swarm to receive cluster-wide events and inspect services.
 - Avoid exposing the exporter to untrusted networks; it exposes metrics only, but your scrape endpoint should be internal.
 
