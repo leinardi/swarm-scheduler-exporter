@@ -27,6 +27,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -205,10 +206,10 @@ func TestConstraintsMatch(t *testing.T) {
 		ID: "abc123",
 		Description: swarm.NodeDescription{
 			Hostname: "pollux",
-			Platform: swarm.Platform{OS: "linux", Architecture: "amd64"},
+			Platform: swarm.Platform{OS: "linux", Architecture: "x86_64"},
 			Engine:   swarm.EngineDescription{Labels: map[string]string{"engine_env": "prod"}},
 		},
-		Status: swarm.NodeStatus{State: swarm.NodeStateReady},
+		Status: swarm.NodeStatus{State: swarm.NodeStateReady, Addr: "10.0.0.5"},
 		Spec: swarm.NodeSpec{
 			Annotations:  swarm.Annotations{Labels: map[string]string{"zone": "us-east-1"}},
 			Role:         swarm.NodeRoleManager,
@@ -230,7 +231,9 @@ func TestConstraintsMatch(t *testing.T) {
 		{"hostname mismatch", []string{"node.hostname == castor"}, false},
 		{"node.id match", []string{"node.id == abc123"}, true},
 		{"platform.os", []string{"node.platform.os == linux"}, true},
-		{"platform.arch", []string{"node.platform.arch == amd64"}, true},
+		// Swarm compares the raw arch the node reports, unlike platformMatches.
+		{"platform.arch raw", []string{"node.platform.arch == x86_64"}, true},
+		{"platform.arch not normalized", []string{"node.platform.arch == amd64"}, false},
 		{"node label", []string{"node.labels.zone == us-east-1"}, true},
 		{"node label mismatch", []string{"node.labels.zone == eu-west-1"}, false},
 		{"missing node label", []string{"node.labels.nonexistent == x"}, false},
@@ -248,64 +251,32 @@ func TestConstraintsMatch(t *testing.T) {
 		},
 		{"malformed no operator", []string{"node.role"}, false},
 		{"unsupported operator >", []string{"node.labels.count > 5"}, false},
+		{"empty value", []string{"node.role =="}, false},
+		{"empty key", []string{"== manager"}, false},
+		{"case-insensitive role value", []string{"node.role == Manager"}, true},
+		{"case-insensitive label value", []string{"node.labels.zone == US-EAST-1"}, true},
+		{"case-insensitive key", []string{"Node.Role == manager"}, true},
+		{"case-insensitive label prefix", []string{"Node.Labels.zone == us-east-1"}, true},
+		{"missing node label !=", []string{"node.labels.gpu != true"}, true},
+		{"missing node label ==", []string{"node.labels.gpu == true"}, false},
+		{"missing engine label !=", []string{"engine.labels.gpu != true"}, true},
+		{"node.ip exact", []string{"node.ip == 10.0.0.5"}, true},
+		{"node.ip exact mismatch", []string{"node.ip == 10.0.0.6"}, false},
+		{"node.ip cidr", []string{"node.ip == 10.0.0.0/24"}, true},
+		{"node.ip != cidr", []string{"node.ip != 10.0.0.0/24"}, false},
+		{"node.ip != other cidr", []string{"node.ip != 192.168.0.0/16"}, true},
+		{"node.ip invalid value ==", []string{"node.ip == not-an-ip"}, false},
+		{"node.ip invalid value !=", []string{"node.ip != not-an-ip"}, false},
+		{"unknown key", []string{"node.unknown == x"}, false},
+		{"unknown key !=", []string{"node.unknown != x"}, false},
+		{"exact node.labels. prefix", []string{"node.labels. != x"}, false},
+		{"exact engine.labels. prefix", []string{"engine.labels. != x"}, false},
 	}
 	for _, tc := range cases {
 		got := constraintsMatch(&node, tc.constraints)
 		if got != tc.want {
 			t.Errorf("[%s] constraintsMatch = %v, want %v", tc.name, got, tc.want)
 		}
-	}
-}
-
-func TestNodeAttributes(t *testing.T) {
-	node := swarm.Node{
-		ID: "myid",
-		Description: swarm.NodeDescription{
-			Hostname: "myhost",
-			Platform: swarm.Platform{OS: "linux", Architecture: "arm64"},
-			Engine: swarm.EngineDescription{
-				Labels: map[string]string{"env": "staging"},
-			},
-		},
-		Spec: swarm.NodeSpec{
-			Annotations: swarm.Annotations{Labels: map[string]string{"region": "eu"}},
-			Role:        swarm.NodeRoleWorker,
-		},
-	}
-
-	attrs := nodeAttributes(&node)
-
-	check := func(key, want string) {
-		t.Helper()
-
-		if got := attrs[key]; got != want {
-			t.Errorf("attrs[%q] = %q, want %q", key, got, want)
-		}
-	}
-
-	check("node.id", "myid")
-	check("node.hostname", "myhost")
-	check("node.role", "worker")
-	check("node.platform.os", "linux")
-	check("node.platform.arch", "arm64")
-	check("node.labels.region", "eu")
-	check("engine.labels.env", "staging")
-}
-
-func TestNodeAttributes_NoPlatformWhenEmpty(t *testing.T) {
-	node := swarm.Node{
-		ID:          "noid",
-		Description: swarm.NodeDescription{Hostname: "h"},
-		Spec:        swarm.NodeSpec{Role: swarm.NodeRoleWorker},
-	}
-
-	attrs := nodeAttributes(&node)
-	if _, ok := attrs["node.platform.os"]; ok {
-		t.Error("node.platform.os should be absent when OS is empty")
-	}
-
-	if _, ok := attrs["node.platform.arch"]; ok {
-		t.Error("node.platform.arch should be absent when arch is empty")
 	}
 }
 
@@ -361,6 +332,35 @@ func TestCountEligibleNodesForServiceFromNodes(t *testing.T) {
 		got := countEligibleNodesForServiceFromNodes(nodes2, svc)
 		if got != 0 {
 			t.Errorf("got %d, want 0", got)
+		}
+	})
+
+	// Issue #35: a stack-deployed global service carries the image platform (amd64)
+	// and a != constraint on a label no node has; every x86_64 node must still count.
+	t.Run("global amd64 with missing-label != constraint", func(t *testing.T) {
+		nodes6 := make([]swarm.Node, 0, 6)
+
+		for index := range 6 {
+			node := makeSchedulableNode(fmt.Sprintf("n%d", index), fmt.Sprintf("host%d", index))
+			node.Description.Platform = swarm.Platform{OS: "linux", Architecture: "x86_64"}
+			nodes6 = append(nodes6, node)
+		}
+
+		svc := &swarm.Service{
+			Spec: swarm.ServiceSpec{
+				Mode: swarm.ServiceMode{Global: &swarm.GlobalService{}},
+				TaskTemplate: swarm.TaskSpec{
+					Placement: &swarm.Placement{
+						Constraints: []string{"node.labels.x != y"},
+						Platforms:   []swarm.Platform{{OS: "linux", Architecture: "amd64"}},
+					},
+				},
+			},
+		}
+
+		got := countEligibleNodesForServiceFromNodes(nodes6, svc)
+		if got != 6 {
+			t.Errorf("got %d, want 6", got)
 		}
 	})
 }

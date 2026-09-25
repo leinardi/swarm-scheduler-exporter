@@ -33,6 +33,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -76,8 +77,13 @@ const (
 	archX8664   = "x86_64"
 )
 
-// Capacity hint for the node attribute map; avoids magic numbers.
-const defaultNodeAttrCapacity = 32
+// Placement-constraint operators and label key prefixes, as defined by swarmkit.
+const (
+	constraintOpEqual    = "=="
+	constraintOpNotEqual = "!="
+	nodeLabelsPrefix     = "node.labels."
+	engineLabelsPrefix   = "engine.labels."
+)
 
 var ErrEventsStreamClosed = errors.New("events stream closed")
 
@@ -825,62 +831,29 @@ func platformMatches(node *swarm.Node, required []swarm.Platform) bool {
 	return false
 }
 
-// constraintsMatch evaluates a subset of Swarm placement constraints commonly used in practice.
-// Supported forms (== and !=):
+// constraintsMatch evaluates Swarm placement constraints with the same semantics as
+// swarmkit's constraint.NodeMatches, so the eligible-node count agrees with the scheduler.
+// Supported keys (== and !=):
 //
-//	node.role == manager|worker
-//	node.hostname == <value>
 //	node.id == <value>
+//	node.hostname == <value>
+//	node.role == manager|worker
 //	node.platform.os == <value>
 //	node.platform.arch == <value>
+//	node.ip == <ip>|<cidr>
 //	node.labels.<k> == <value>
 //	engine.labels.<k> == <value>
 //
-// Any unsupported or malformed constraint returns false (conservative).
+// Keys and values compare case-insensitively (label names after the prefix stay
+// case-sensitive), and a missing label compares as the empty string, so
+// "node.labels.gpu != true" matches unlabeled nodes. node.platform.arch compares the
+// raw architecture the node reports (e.g. "x86_64"), not the normalized one used by
+// platformMatches, because that is what Swarm does. Any unknown key or malformed
+// constraint returns false (conservative).
 func constraintsMatch(node *swarm.Node, constraints []string) bool {
-	if len(constraints) == 0 {
-		return true
-	}
-
-	attributes := nodeAttributes(node)
-
 	for index := range constraints {
-		constraintExpr := strings.TrimSpace(constraints[index])
-
-		var operator string
-		if strings.Contains(constraintExpr, "!=") {
-			operator = "!="
-		} else if strings.Contains(constraintExpr, "==") {
-			operator = "=="
-		} else {
-			// Unsupported operator
-			return false
-		}
-
-		parts := strings.SplitN(constraintExpr, operator, 2)
-		if len(parts) != 2 {
-			return false
-		}
-
-		leftKey := strings.TrimSpace(parts[0])
-		expectedValue := strings.TrimSpace(parts[1])
-
-		nodeValue, exists := attributes[leftKey]
-		if !exists {
-			// If the attribute is missing, constraint fails.
-			return false
-		}
-
-		switch operator {
-		case "==":
-			if nodeValue != expectedValue {
-				return false
-			}
-		case "!=":
-			if nodeValue == expectedValue {
-				return false
-			}
-		default:
+		key, operator, expected, ok := parseConstraint(constraints[index])
+		if !ok || !nodeMatchesConstraint(node, key, operator, expected) {
 			return false
 		}
 	}
@@ -888,39 +861,104 @@ func constraintsMatch(node *swarm.Node, constraints []string) bool {
 	return true
 }
 
-// nodeAttributes flattens a node into a string map keyed by the constraint left-hand side.
-func nodeAttributes(node *swarm.Node) map[string]string {
-	attributes := make(
-		map[string]string,
-		defaultNodeAttrCapacity,
-	) // small map; keys are fixed + labels
-
-	attributes["node.id"] = node.ID
-	attributes["node.hostname"] = node.Description.Hostname
-	attributes["node.role"] = strings.ToLower(string(node.Spec.Role))
-
-	// Platform
-	if node.Description.Platform.OS != "" {
-		attributes["node.platform.os"] = strings.ToLower(node.Description.Platform.OS)
-	}
-
-	if node.Description.Platform.Architecture != "" {
-		attributes["node.platform.arch"] = normalizeArch(node.Description.Platform.Architecture)
-	}
-
-	// Node labels
-	for key, value := range node.Spec.Labels {
-		attributes["node.labels."+key] = value
-	}
-
-	// Engine labels
-	if node.Description.Engine.Labels != nil {
-		for key, value := range node.Description.Engine.Labels {
-			attributes["engine.labels."+key] = value
+// parseConstraint splits "key op value" the way swarmkit does: operators are tried in
+// order (== before !=) and the expression is split on the first one found.
+func parseConstraint(constraintExpr string) (key, operator, expected string, ok bool) {
+	for _, candidateOperator := range []string{constraintOpEqual, constraintOpNotEqual} {
+		if !strings.Contains(constraintExpr, candidateOperator) {
+			continue
 		}
+
+		parts := strings.SplitN(constraintExpr, candidateOperator, 2)
+		key = strings.TrimSpace(parts[0])
+		expected = strings.TrimSpace(parts[1])
+
+		if key == "" || expected == "" {
+			return "", "", "", false
+		}
+
+		return key, candidateOperator, expected, true
 	}
 
-	return attributes
+	return "", "", "", false
+}
+
+// nodeMatchesConstraint evaluates one parsed constraint against a node, following the
+// key dispatch of swarmkit's constraint.NodeMatches.
+func nodeMatchesConstraint(node *swarm.Node, key, operator, expected string) bool {
+	switch {
+	case strings.EqualFold(key, "node.id"):
+		return matchConstraintValue(operator, expected, node.ID)
+	case strings.EqualFold(key, "node.hostname"):
+		return matchConstraintValue(operator, expected, node.Description.Hostname)
+	case strings.EqualFold(key, "node.ip"):
+		return matchNodeIPConstraint(operator, expected, node.Status.Addr)
+	case strings.EqualFold(key, "node.role"):
+		return matchConstraintValue(operator, expected, string(node.Spec.Role))
+	case strings.EqualFold(key, "node.platform.os"):
+		return matchConstraintValue(operator, expected, node.Description.Platform.OS)
+	case strings.EqualFold(key, "node.platform.arch"):
+		return matchConstraintValue(operator, expected, node.Description.Platform.Architecture)
+	case hasConstraintKeyPrefix(key, nodeLabelsPrefix):
+		// A nil map yields "", which is how Swarm treats a missing label.
+		return matchConstraintValue(
+			operator,
+			expected,
+			node.Spec.Labels[key[len(nodeLabelsPrefix):]],
+		)
+	case hasConstraintKeyPrefix(key, engineLabelsPrefix):
+		return matchConstraintValue(
+			operator,
+			expected,
+			node.Description.Engine.Labels[key[len(engineLabelsPrefix):]],
+		)
+	default:
+		return false
+	}
+}
+
+// hasConstraintKeyPrefix reports whether key is prefix followed by a non-empty label name.
+// The length guard matches swarmkit: a bare "node.labels." is an unknown key, not a
+// lookup of the empty label, which would make "node.labels. != x" match every node.
+func hasConstraintKeyPrefix(key, prefix string) bool {
+	return len(key) > len(prefix) && strings.EqualFold(key[:len(prefix)], prefix)
+}
+
+// matchConstraintValue compares case-insensitively and inverts the result for !=,
+// like swarmkit's Constraint.Match.
+func matchConstraintValue(operator, expected, candidate string) bool {
+	matched := strings.EqualFold(expected, candidate)
+	if operator == constraintOpNotEqual {
+		return !matched
+	}
+
+	return matched
+}
+
+// matchNodeIPConstraint compares the node address against a single IP or a CIDR subnet,
+// like swarmkit. A value that is neither never matches, whatever the operator.
+func matchNodeIPConstraint(operator, expected, nodeAddr string) bool {
+	nodeIP := net.ParseIP(nodeAddr)
+
+	var matched bool
+
+	expectedIP := net.ParseIP(expected)
+	if expectedIP != nil {
+		matched = expectedIP.Equal(nodeIP)
+	} else {
+		_, subnet, cidrErr := net.ParseCIDR(expected)
+		if cidrErr != nil {
+			return false
+		}
+
+		matched = subnet.Contains(nodeIP)
+	}
+
+	if operator == constraintOpNotEqual {
+		return !matched
+	}
+
+	return matched
 }
 
 // refreshNodesAndRecomputeGlobals refreshes the nodes cache once and recomputes

@@ -30,7 +30,10 @@ All metrics live under the `swarm_` namespace.
 ### Service-level
 
 - `swarm_service_desired_replicas{stack,service,service_mode,...custom}`
-  Desired replicas (**replicated**: configured replicas; **global**: eligible nodes).
+  Desired replicas (**replicated**: configured replicas; **global**: number of eligible nodes, e.g. `6` on a healthy 6-node cluster with
+  no constraints). A node is eligible when it is `ready` + `active` and meets the service's placement constraints and platforms.
+  Placement-constraint evaluation follows Swarm: values are case-insensitive, a missing label compares as empty, and `node.ip`
+  supports an IP or CIDR.
 
 - `swarm_task_replicas_state{stack,service,service_mode,state,...custom}`
   **Latest-per-slot** task count by state (always emits zeros for all known states per current service).
@@ -56,7 +59,11 @@ All metrics live under the `swarm_` namespace.
   swarm_service_running_replicas < on(stack,service,service_mode,display_name) swarm_service_schedulable_replicas
   ```
 
-> ℹ️ **Global services with 0 eligible nodes:** `desired_replicas=0`, `running_replicas` usually `0` ⇒ `at_desired=1`.
+> ℹ️ **Global services:** `desired_replicas` is the number of eligible nodes, not `0`. It is `0` only when no node is eligible: none is
+> `ready` + `active` (a node that is down, disconnected, paused, or drained does not count), or none meets the placement constraints or
+> platforms. `running_replicas` is then usually `0` too, and `at_desired=1` only when it is. A paused or disconnected node can still run an
+> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`. A service that has no tasks at all (e.g. one that was
+> never scheduled anywhere) has no `running_replicas`, `swarm_task_replicas_state` or `at_desired` series yet, rather than `0`.
 
 ### Service update/rollback (info-style)
 
