@@ -102,6 +102,30 @@ jobs:
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  conventional-commits:
+    # The release version is derived from the commit types since the last tag,
+    # so a commit nobody can classify is a release nobody can version. The local
+    # commit-msg hook only runs where `make pre-commit-install` was run; this job
+    # is the check that no commit skips. It runs the repository's own
+    # conventional-pre-commit hook, so --force-scope applies here too, and it
+    # skips merge commits. No pull-request title check: squash merging is
+    # disabled, so a title never becomes a commit on master. Enabling squash
+    # merging would need one added here first.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate the commit messages
+        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@61efb9b3eea9a6e0211fe0cff8dd811d1135b351 # v1.0.1
+        with:
+          from-ref: ${{ github.event.pull_request.base.sha }}
+          to-ref: ${{ github.event.pull_request.head.sha }}
+
   # Modelled on runhold's go-test.yaml, without its reusable-workflow and cache-warmup split:
   # setup-go's built-in cache (keyed on go.sum) is enough at this size.
   go-test:
