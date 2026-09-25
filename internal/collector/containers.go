@@ -37,9 +37,10 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/prometheus/client_golang/prometheus"
+
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Known Docker container states (runtime) + health overlay states.

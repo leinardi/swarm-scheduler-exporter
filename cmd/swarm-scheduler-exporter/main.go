@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/client"
+
 	"github.com/leinardi/swarm-scheduler-exporter/internal/collector"
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
@@ -258,7 +259,7 @@ func startEventListener(
 		}
 
 		listenErr := collector.ListenSwarmEvents(parentContext, dockerClient, initialSinceAnchor)
-		if listenErr != nil && !errors.Is(listenErr, context.Canceled) {
+		if !errors.Is(listenErr, context.Canceled) {
 			loggerInstance.Error("event listener exited with error", "err", listenErr)
 		}
 	})

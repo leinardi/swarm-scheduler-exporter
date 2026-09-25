@@ -42,9 +42,10 @@ import (
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/prometheus/client_golang/prometheus"
+
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // desiredReplicasGauge is the gauge vector exported at /metrics.
@@ -170,6 +171,8 @@ func InitDesiredReplicasGauge(
 // and uses a bounded worker pool to process events without unbounded goroutines.
 // The stream will include events "since" the given time anchor, so that no changes
 // are missed between the initial seeding and the first stream connection.
+// It only returns once parentContext is done, and the error it returns always wraps
+// parentContext.Err(); it never returns nil.
 func ListenSwarmEvents(
 	parentContext context.Context,
 	dockerClient DockerAPI,
@@ -235,9 +238,10 @@ func ListenSwarmEvents(
 			reconnectSince = lastSeenEventTime.Add(-500 * time.Millisecond)
 		}
 
-		if runErr == nil {
-			// Normal exit (no error set by pump).
-			return nil
+		// runEventPump always returns an error. When it ended because we are shutting down,
+		// stop here: counting a reconnect and logging "will reconnect" would be wrong.
+		if parentContext.Err() != nil {
+			return fmt.Errorf("event listener stopping: %w", parentContext.Err())
 		}
 
 		// We will reconnect → count it.
