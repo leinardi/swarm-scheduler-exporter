@@ -62,7 +62,8 @@ All metrics live under the `swarm_` namespace.
 > ℹ️ **Global services:** `desired_replicas` is the number of eligible nodes, not `0`. It is `0` only when no node is eligible: none is
 > `ready` + `active` (a node that is down, disconnected, paused, or drained does not count), or none meets the placement constraints or
 > platforms. `running_replicas` is then usually `0` too, and `at_desired=1` only when it is. A paused or disconnected node can still run an
-> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`.
+> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`. A service that has no tasks at all (e.g. one that was
+> never scheduled anywhere) has no `running_replicas`, `swarm_task_replicas_state` or `at_desired` series yet, rather than `0`.
 
 ### Service update/rollback (info-style)
 
