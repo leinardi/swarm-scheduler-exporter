@@ -1,11 +1,21 @@
 version: 2
 enable-beta-ecosystems: true # Required for the pre-commit ecosystem
 
+registries:
+  dhi:
+    type: docker-registry
+    url: https://dhi.io
+    username: leinardi
+    password: ${{ secrets.DHI_TOKEN }}
+    replaces-base: false
+
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
     groups:
       github-actions:
@@ -16,6 +26,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
     groups:
       pre-commit-hooks:
@@ -24,8 +36,11 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/deployments/docker"
+    registries: ["dhi"]
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
     groups:
@@ -37,6 +52,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # fix, not chore: the release version is derived from commit types, so a
+    # Go dependency bump (security fixes included) produces a patch release.
+    # The other ecosystems stay chore(deps) and bump nothing. That includes the
+    # docker one, whose base-image bumps do change the shipped image: when one
+    # carries a security fix that should ship, release with an explicit version.
+    commit-message:
+      prefix: "fix(deps)"
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
     groups:

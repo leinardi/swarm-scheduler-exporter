@@ -14,12 +14,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Run actionlint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@61efb9b3eea9a6e0211fe0cff8dd811d1135b351 # v1.0.1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -30,12 +30,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Run pre-commit hooks + reviewdog diff
-        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@61efb9b3eea9a6e0211fe0cff8dd811d1135b351 # v1.0.1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -59,12 +59,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Run markdownlint-cli2 via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@61efb9b3eea9a6e0211fe0cff8dd811d1135b351 # v1.0.1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -75,12 +75,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Run shellcheck via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@61efb9b3eea9a6e0211fe0cff8dd811d1135b351 # v1.0.1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -91,12 +91,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Run yamllint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@v1
+        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@61efb9b3eea9a6e0211fe0cff8dd811d1135b351 # v1.0.1
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -134,10 +134,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -153,10 +153,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
