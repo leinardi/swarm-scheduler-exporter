@@ -28,8 +28,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -55,10 +55,12 @@ func ConfigureNodesByStateGauge() {
 
 // UpdateNodesByState refreshes the nodes list from Docker and updates the gauge.
 func UpdateNodesByState(ctx context.Context, cli DockerAPI) error {
-	nodes, listErr := cli.NodeList(ctx, swarm.NodeListOptions{Filters: filters.Args{}})
+	listResult, listErr := cli.NodeList(ctx, client.NodeListOptions{Filters: nil})
 	if listErr != nil {
 		return fmt.Errorf("node list: %w", listErr)
 	}
+
+	nodes := listResult.Items
 
 	setCachedNodes(nodes) // keep the cache fresh for other computations
 	UpdateNodesByStateFromSlice(nodes)

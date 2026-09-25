@@ -36,10 +36,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+	"github.com/prometheus/client_golang/prometheus"
+
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Known Docker container states (runtime) + health overlay states.
@@ -171,13 +173,15 @@ func PollContainersState(
 	ctx, cancel := context.WithTimeout(parentCtx, containersPollTimeout)
 	defer cancel()
 
-	list, listErr := cli.ContainerList(ctx, container.ListOptions{
+	listResult, listErr := cli.ContainerList(ctx, client.ContainerListOptions{
 		All:  true,  // include exited
 		Size: false, // avoid size overhead
 	})
 	if listErr != nil {
 		return nil, fmt.Errorf("container list: %w", listErr)
 	}
+
+	list := listResult.Items
 
 	rows := make([]row, 0, len(list))
 
@@ -221,7 +225,7 @@ func PollContainersState(
 		// Determine if we need an inspect:
 		need := needNone
 
-		switch cnt.State {
+		switch string(cnt.State) {
 		case containerStateRunning:
 			// Only inspect running containers that *might* have a healthcheck.
 			// We don’t know healthcheck presence from the list; inspect to confirm.
@@ -235,7 +239,7 @@ func PollContainersState(
 
 		rows = append(rows, row{
 			id:     cnt.ID,
-			state:  cnt.State,
+			state:  string(cnt.State),
 			labels: base,
 			need:   need,
 		})
@@ -375,7 +379,13 @@ func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 		}
 
 		ctx, cancel := context.WithTimeout(parentCtx, containersPollTimeout)
-		inspectedJSON, inspectErr := cli.ContainerInspect(ctx, rows[rowIdx].id)
+		inspectResult, inspectErr := cli.ContainerInspect(
+			ctx,
+			rows[rowIdx].id,
+			client.ContainerInspectOptions{
+				Size: false,
+			},
+		)
 
 		cancel()
 
@@ -394,9 +404,9 @@ func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 		// Delegate per-need logic to reduce complexity.
 		switch rows[rowIdx].need {
 		case needHealth:
-			applyHealthOverlay(&rows[rowIdx], inspectedJSON)
+			applyHealthOverlay(&rows[rowIdx], &inspectResult.Container)
 		case needExit:
-			applyExitCode(&rows[rowIdx], inspectedJSON)
+			applyExitCode(&rows[rowIdx], &inspectResult.Container)
 		case needNone:
 			// No enrichment; keep the base docker state.
 			rows[rowIdx].labels[labelState] = rows[rowIdx].state
@@ -405,12 +415,12 @@ func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 }
 
 // applyHealthOverlay overlays a health state if the container has a healthcheck.
-func applyHealthOverlay(rowRef *row, inspected container.InspectResponse) {
+func applyHealthOverlay(rowRef *row, inspected *container.InspectResponse) {
 	if inspected.Config != nil &&
 		inspected.Config.Healthcheck != nil &&
 		inspected.State != nil &&
 		inspected.State.Health != nil {
-		switch strings.ToLower(strings.TrimSpace(inspected.State.Health.Status)) {
+		switch strings.ToLower(strings.TrimSpace(string(inspected.State.Health.Status))) {
 		case containerStateHealthy:
 			rowRef.labels[labelState] = containerStateHealthy
 
@@ -430,7 +440,7 @@ func applyHealthOverlay(rowRef *row, inspected container.InspectResponse) {
 }
 
 // applyExitCode annotates the exit code for exited containers.
-func applyExitCode(rowRef *row, inspected container.InspectResponse) {
+func applyExitCode(rowRef *row, inspected *container.InspectResponse) {
 	rowRef.labels[labelState] = rowRef.state
 
 	if inspected.State == nil {

@@ -26,11 +26,14 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -579,5 +582,128 @@ func TestCountActiveNodes_CountsSchedulable(t *testing.T) {
 
 	if count != 2 {
 		t.Errorf("count = %d, want 2", count)
+	}
+}
+
+// connectSignalingDocker reports every Events call on connected, so a test can cancel only once
+// the event pump is running.
+type connectSignalingDocker struct {
+	*fakeDocker
+
+	connected chan struct{}
+}
+
+func (d *connectSignalingDocker) Events(
+	ctx context.Context,
+	options client.EventsListOptions,
+) client.EventsResult {
+	d.connected <- struct{}{}
+
+	return d.fakeDocker.Events(ctx, options)
+}
+
+func TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted(t *testing.T) {
+	resetCollectorState(t)
+
+	reconnects := prometheus.NewCounter(
+		prometheus.CounterOpts{Name: "test_events_reconnects_total", Help: "test"},
+	)
+	previousReconnects := eventsReconnectsTotalCounter
+	eventsReconnectsTotalCounter = reconnects
+
+	t.Cleanup(func() { eventsReconnectsTotalCounter = previousReconnects })
+
+	// Neither channel is ever written or closed: the stream stays open until cancellation.
+	dockerClient := &connectSignalingDocker{
+		fakeDocker: &fakeDocker{eventsCh: make(chan events.Message), errCh: make(chan error)},
+		connected:  make(chan struct{}, 2),
+	}
+
+	listenerContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listenerDone := make(chan error, 1)
+
+	go func() { listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, time.Now()) }()
+
+	select {
+	case <-dockerClient.connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("event stream was never connected")
+	}
+
+	cancel()
+
+	select {
+	case err := <-listenerDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want a context.Canceled wrap", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListenSwarmEvents did not return after cancellation")
+	}
+
+	if got := testutil.ToFloat64(reconnects); got != 0 {
+		t.Errorf("events_reconnects_total = %v, want 0: shutdown is not a reconnect", got)
+	}
+
+	if extra := len(dockerClient.connected); extra != 0 {
+		t.Errorf("event stream reconnected %d time(s) after cancellation", extra)
+	}
+}
+
+// errClosedBody stands in for the error a canceled event stream can end with instead of
+// context.Canceled (the response body is closed under the decoder).
+var errClosedBody = errors.New("read on closed response body")
+
+func TestDispatchEvents_CancelledStreamErrorReportsCancellation(t *testing.T) {
+	// Once the context is canceled, both select cases in dispatchEvents are ready and Go picks
+	// one at random; repeating makes the stream-error branch run with near certainty.
+	const attempts = 64
+
+	for range attempts {
+		parentContext, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		errorChannel := make(chan error, 1)
+		errorChannel <- errClosedBody
+
+		var lastSeen time.Time
+
+		err := dispatchEvents(
+			parentContext,
+			make(chan events.Message, 1),
+			make(chan events.Message),
+			errorChannel,
+			&lastSeen,
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want a context.Canceled wrap", err)
+		}
+	}
+}
+
+func TestDispatchEvents_CancelledStreamCloseReportsCancellation(t *testing.T) {
+	const attempts = 64
+
+	for range attempts {
+		parentContext, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		eventChannel := make(chan events.Message)
+		close(eventChannel)
+
+		var lastSeen time.Time
+
+		err := dispatchEvents(
+			parentContext,
+			make(chan events.Message, 1),
+			eventChannel,
+			make(chan error),
+			&lastSeen,
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want a context.Canceled wrap", err)
+		}
 	}
 }

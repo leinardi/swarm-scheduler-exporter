@@ -28,9 +28,10 @@ import (
 	"context"
 	"sync"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
 // fakeDocker implements DockerAPI for unit tests.
@@ -42,7 +43,7 @@ type fakeDocker struct {
 	containers []container.Summary
 	inspects   map[string]container.InspectResponse
 
-	// serviceByID overrides the ServiceInspectWithRaw response per service ID.
+	// serviceByID overrides the ServiceInspect response per service ID.
 	serviceByID map[string]swarm.Service
 
 	// Per-call errors.
@@ -68,111 +69,115 @@ type fakeDocker struct {
 
 var _ DockerAPI = (*fakeDocker)(nil)
 
-func (f *fakeDocker) NodeList(_ context.Context, _ swarm.NodeListOptions) ([]swarm.Node, error) {
+func (f *fakeDocker) NodeList(
+	_ context.Context,
+	_ client.NodeListOptions,
+) (client.NodeListResult, error) {
 	f.mu.Lock()
 	f.nodeListCalls++
 	f.mu.Unlock()
 
 	if f.nodeListErr != nil {
-		return nil, f.nodeListErr
+		return client.NodeListResult{}, f.nodeListErr
 	}
 
 	out := make([]swarm.Node, len(f.nodes))
 	copy(out, f.nodes)
 
-	return out, nil
+	return client.NodeListResult{Items: out}, nil
 }
 
 func (f *fakeDocker) ServiceList(
 	_ context.Context,
-	_ swarm.ServiceListOptions,
-) ([]swarm.Service, error) {
+	_ client.ServiceListOptions,
+) (client.ServiceListResult, error) {
 	if f.serviceListErr != nil {
-		return nil, f.serviceListErr
+		return client.ServiceListResult{}, f.serviceListErr
 	}
 
 	out := make([]swarm.Service, len(f.services))
 	copy(out, f.services)
 
-	return out, nil
+	return client.ServiceListResult{Items: out}, nil
 }
 
-func (f *fakeDocker) ServiceInspectWithRaw(
+func (f *fakeDocker) ServiceInspect(
 	_ context.Context,
 	id string,
-	_ swarm.ServiceInspectOptions,
-) (swarm.Service, []byte, error) {
+	_ client.ServiceInspectOptions,
+) (client.ServiceInspectResult, error) {
 	if f.serviceByID != nil {
 		if svc, ok := f.serviceByID[id]; ok {
-			return svc, nil, nil
+			return client.ServiceInspectResult{Service: svc}, nil
 		}
 	}
 
 	if f.serviceInspectErr != nil {
-		return swarm.Service{}, nil, f.serviceInspectErr
+		return client.ServiceInspectResult{}, f.serviceInspectErr
 	}
 
-	return swarm.Service{}, nil, nil
+	return client.ServiceInspectResult{}, nil
 }
 
-func (f *fakeDocker) TaskList(_ context.Context, _ swarm.TaskListOptions) ([]swarm.Task, error) {
+func (f *fakeDocker) TaskList(
+	_ context.Context,
+	_ client.TaskListOptions,
+) (client.TaskListResult, error) {
 	if f.taskListErr != nil {
-		return nil, f.taskListErr
+		return client.TaskListResult{}, f.taskListErr
 	}
 
 	out := make([]swarm.Task, len(f.tasks))
 	copy(out, f.tasks)
 
-	return out, nil
+	return client.TaskListResult{Items: out}, nil
 }
 
 func (f *fakeDocker) ContainerList(
 	_ context.Context,
-	_ container.ListOptions,
-) ([]container.Summary, error) {
+	_ client.ContainerListOptions,
+) (client.ContainerListResult, error) {
 	if f.containerListErr != nil {
-		return nil, f.containerListErr
+		return client.ContainerListResult{}, f.containerListErr
 	}
 
 	out := make([]container.Summary, len(f.containers))
 	copy(out, f.containers)
 
-	return out, nil
+	return client.ContainerListResult{Items: out}, nil
 }
 
 func (f *fakeDocker) ContainerInspect(
 	_ context.Context,
 	id string,
-) (container.InspectResponse, error) {
+	_ client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	f.inspectCalls++
 	f.mu.Unlock()
 
 	if f.inspects != nil {
 		if resp, ok := f.inspects[id]; ok {
-			return resp, nil
+			return client.ContainerInspectResult{Container: resp}, nil
 		}
 	}
 
 	if f.inspectErr != nil {
-		return container.InspectResponse{}, f.inspectErr
+		return client.ContainerInspectResult{}, f.inspectErr
 	}
 
-	return container.InspectResponse{}, nil
+	return client.ContainerInspectResult{}, nil
 }
 
-func (f *fakeDocker) Events(
-	_ context.Context,
-	_ events.ListOptions,
-) (msgCh <-chan events.Message, errCh <-chan error) {
+func (f *fakeDocker) Events(_ context.Context, _ client.EventsListOptions) client.EventsResult {
 	if f.eventsCh == nil {
 		ch := make(chan events.Message)
 		ec := make(chan error, 1)
 
 		close(ch)
 
-		return ch, ec
+		return client.EventsResult{Messages: ch, Err: ec}
 	}
 
-	return f.eventsCh, f.errCh
+	return client.EventsResult{Messages: f.eventsCh, Err: f.errCh}
 }

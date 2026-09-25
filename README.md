@@ -106,6 +106,12 @@ the exporter can expose **container state** metrics when started with `-containe
 - HTTP: `/healthz` responds `200` when the exporter is healthy.
 - Metric: `swarm_exporter_health` mirrors health for scraping/alerting.
 
+## 📋 Requirements
+
+- Docker Engine **19.03+** (Engine API **1.40**) in Swarm mode; tested on Docker **29.x**.
+- The exporter negotiates the API version with the daemon. If `DOCKER_API_VERSION` is set, it must be
+  within **1.40–1.56**; otherwise the exporter exits at startup with an error.
+
 ## 🚀 Quick Start
 
 When running the exporter inside a container, it needs permission to talk to the Docker Engine.
@@ -224,6 +230,7 @@ is available at:
 - `DOCKER_HOST` — Docker daemon URL
 - `DOCKER_CERT_PATH` — Path to TLS certs
 - `DOCKER_TLS_VERIFY` — Enable TLS verification (set to `1`)
+- `DOCKER_API_VERSION` — Pin the Engine API version instead of negotiating it (must be within 1.40–1.56)
 
 ### Custom label guardrails
 
@@ -345,7 +352,11 @@ scrape_configs:
 
 ## 🔐 Security & Permissions
 
-- Only needs **read-only** access to the Docker API (`/var/run/docker.sock:ro`).
+- The exporter only **issues read requests** to the Docker API (list, inspect and events).
+  Mounting the socket with `:ro` does **not** make the API read-only: it only stops the container from
+  modifying the socket file, and any client holding the socket can still create, update or remove resources.
+  To enforce read-only access, put a socket proxy in front of the Docker API (for example a
+  docker-socket-proxy that allows only `GET` requests on the endpoints the exporter uses).
 - Must run on a **manager** node in Swarm to receive cluster-wide events and inspect services.
 - Avoid exposing the exporter to untrusted networks; it exposes metrics only, but your scrape endpoint should be internal.
 

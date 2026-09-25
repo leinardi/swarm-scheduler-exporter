@@ -27,25 +27,38 @@ package collector
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/client"
 )
 
-// DockerAPI is the subset of docker/docker client.Client used by this package.
+// DockerAPI is the subset of the moby client.Client used by this package. It only lists,
+// inspects and streams events: the exporter must never change Docker state, and this interface
+// (together with the depguard docker-sdk-boundary rule) is what enforces that.
 // Accepting an interface (rather than the concrete *client.Client) allows tests
 // to inject a fake without requiring a running Docker daemon.
 // *client.Client satisfies this interface — no adapter is needed.
 type DockerAPI interface {
-	NodeList(ctx context.Context, opts swarm.NodeListOptions) ([]swarm.Node, error)
-	ServiceList(ctx context.Context, opts swarm.ServiceListOptions) ([]swarm.Service, error)
-	ServiceInspectWithRaw(
+	NodeList(ctx context.Context, options client.NodeListOptions) (client.NodeListResult, error)
+	ServiceList(
+		ctx context.Context,
+		options client.ServiceListOptions,
+	) (client.ServiceListResult, error)
+	ServiceInspect(
 		ctx context.Context,
 		serviceID string,
-		opts swarm.ServiceInspectOptions,
-	) (swarm.Service, []byte, error)
-	TaskList(ctx context.Context, opts swarm.TaskListOptions) ([]swarm.Task, error)
-	ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
-	Events(ctx context.Context, opts events.ListOptions) (<-chan events.Message, <-chan error)
+		options client.ServiceInspectOptions,
+	) (client.ServiceInspectResult, error)
+	TaskList(ctx context.Context, options client.TaskListOptions) (client.TaskListResult, error)
+	ContainerList(
+		ctx context.Context,
+		options client.ContainerListOptions,
+	) (client.ContainerListResult, error)
+	ContainerInspect(
+		ctx context.Context,
+		containerID string,
+		options client.ContainerInspectOptions,
+	) (client.ContainerInspectResult, error)
+	Events(ctx context.Context, options client.EventsListOptions) client.EventsResult
 }
+
+// *client.Client must keep satisfying DockerAPI without an adapter.
+var _ DockerAPI = (*client.Client)(nil)

@@ -32,8 +32,9 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 )
 
 // Prometheus label name must match: [a-zA-Z_][a-zA-Z0-9_]*

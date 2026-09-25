@@ -1,0 +1,296 @@
+[
+  {
+    "ID": "t-api-1-old",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-20T10:00:00.000000000Z",
+    "UpdatedAt": "2026-09-20T10:00:00.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0,
+      "Resources": {
+        "SwapBytes": 536870912,
+        "MemorySwappiness": 60
+      }
+    },
+    "ServiceID": "svc-api",
+    "NodeID": "node-w1",
+    "Status": {
+      "Timestamp": "2026-09-20T10:00:00.000000000Z",
+      "State": "failed",
+      "Message": "failed",
+      "ContainerStatus": {
+        "ContainerID": "c-t-api-1-old",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "shutdown",
+    "Slot": 1
+  },
+  {
+    "ID": "t-api-1",
+    "Version": {
+      "Index": 301
+    },
+    "CreatedAt": "2026-09-20T10:05:00.000000000Z",
+    "UpdatedAt": "2026-09-20T10:05:00.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0,
+      "Resources": {
+        "SwapBytes": 536870912,
+        "MemorySwappiness": 60
+      }
+    },
+    "ServiceID": "svc-api",
+    "NodeID": "node-w1",
+    "Status": {
+      "Timestamp": "2026-09-20T10:05:00.000000000Z",
+      "State": "running",
+      "Message": "running",
+      "ContainerStatus": {
+        "ContainerID": "c-t-api-1",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running",
+    "Slot": 1
+  },
+  {
+    "ID": "t-api-2",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-20T10:05:01.000000000Z",
+    "UpdatedAt": "2026-09-20T10:05:01.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0,
+      "Resources": {
+        "SwapBytes": 536870912,
+        "MemorySwappiness": 60
+      }
+    },
+    "ServiceID": "svc-api",
+    "NodeID": "node-w1",
+    "Status": {
+      "Timestamp": "2026-09-20T10:05:01.000000000Z",
+      "State": "running",
+      "Message": "running",
+      "ContainerStatus": {
+        "ContainerID": "c-t-api-2",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running",
+    "Slot": 2
+  },
+  {
+    "ID": "t-api-3",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-20T10:05:02.000000000Z",
+    "UpdatedAt": "2026-09-20T10:05:02.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0,
+      "Resources": {
+        "SwapBytes": 536870912,
+        "MemorySwappiness": 60
+      }
+    },
+    "ServiceID": "svc-api",
+    "NodeID": "",
+    "Status": {
+      "Timestamp": "2026-09-20T10:05:02.000000000Z",
+      "State": "pending",
+      "Message": "pending",
+      "ContainerStatus": {
+        "ContainerID": "c-t-api-3",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running",
+    "Slot": 3
+  },
+  {
+    "ID": "t-agent-mgr1",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-19T12:01:00.000000000Z",
+    "UpdatedAt": "2026-09-19T12:01:00.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0
+    },
+    "ServiceID": "svc-agent",
+    "NodeID": "node-mgr1",
+    "Status": {
+      "Timestamp": "2026-09-19T12:01:00.000000000Z",
+      "State": "running",
+      "Message": "running",
+      "ContainerStatus": {
+        "ContainerID": "c-t-agent-mgr1",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running"
+  },
+  {
+    "ID": "t-gone-1",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-15T09:00:00.000000000Z",
+    "UpdatedAt": "2026-09-15T09:00:00.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0
+    },
+    "ServiceID": "svc-gone",
+    "NodeID": "node-w1",
+    "Status": {
+      "Timestamp": "2026-09-15T09:00:00.000000000Z",
+      "State": "running",
+      "Message": "running",
+      "ContainerStatus": {
+        "ContainerID": "c-t-gone-1",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running",
+    "Slot": 1
+  },
+  {
+    "ID": "t-db-1",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-18T08:00:00.000000000Z",
+    "UpdatedAt": "2026-09-18T08:00:00.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0
+    },
+    "ServiceID": "svc-db",
+    "NodeID": "node-mgr1",
+    "Status": {
+      "Timestamp": "2026-09-18T08:00:00.000000000Z",
+      "State": "running",
+      "Message": "running",
+      "ContainerStatus": {
+        "ContainerID": "c-t-db-1",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running",
+    "Slot": 1
+  },
+  {
+    "ID": "t-db-2",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-18T08:00:05.000000000Z",
+    "UpdatedAt": "2026-09-18T08:00:05.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0
+    },
+    "ServiceID": "svc-db",
+    "NodeID": "node-mgr1",
+    "Status": {
+      "Timestamp": "2026-09-18T08:00:05.000000000Z",
+      "State": "running",
+      "Message": "running",
+      "ContainerStatus": {
+        "ContainerID": "c-t-db-2",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "running",
+    "Slot": 2
+  },
+  {
+    "ID": "t-cron-1",
+    "Version": {
+      "Index": 300
+    },
+    "CreatedAt": "2026-09-17T06:00:00.000000000Z",
+    "UpdatedAt": "2026-09-17T06:00:00.000000000Z",
+    "Labels": {},
+    "Spec": {
+      "ContainerSpec": {
+        "Image": "example/app:1",
+        "Isolation": "default"
+      },
+      "ForceUpdate": 0
+    },
+    "ServiceID": "svc-cron",
+    "NodeID": "node-w1",
+    "Status": {
+      "Timestamp": "2026-09-17T06:00:00.000000000Z",
+      "State": "complete",
+      "Message": "complete",
+      "ContainerStatus": {
+        "ContainerID": "c-t-cron-1",
+        "PID": 0,
+        "ExitCode": 0
+      },
+      "PortStatus": {}
+    },
+    "DesiredState": "shutdown",
+    "Slot": 1
+  }
+]

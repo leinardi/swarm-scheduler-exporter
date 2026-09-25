@@ -1,0 +1,178 @@
+# HELP swarm_cluster_nodes_by_state Number of Swarm nodes grouped by role, availability, and status.
+# TYPE swarm_cluster_nodes_by_state gauge
+swarm_cluster_nodes_by_state{availability="active",role="manager",status="ready"} 1
+swarm_cluster_nodes_by_state{availability="active",role="worker",status="down"} 1
+swarm_cluster_nodes_by_state{availability="active",role="worker",status="ready"} 1
+swarm_cluster_nodes_by_state{availability="drain",role="worker",status="ready"} 1
+# HELP swarm_container_state Container state info (exactly one state=1 per container). Includes exit_code for exited.
+# TYPE swarm_container_state gauge
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="created"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="dead"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="exited"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="health_starting"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="healthy"} 1
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="paused"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="removing"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="restarting"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="running"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="unhealthy"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="created"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="dead"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="exited"} 1
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="health_starting"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="healthy"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="paused"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="removing"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="restarting"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="running"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="unhealthy"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="created"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="dead"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="exited"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="health_starting"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="healthy"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="paused"} 1
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="removing"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="restarting"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="running"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="unhealthy"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="created"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="dead"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="exited"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="health_starting"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="healthy"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="paused"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="removing"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="restarting"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="running"} 1
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="unhealthy"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="created"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="dead"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="exited"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="health_starting"} 1
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="healthy"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="paused"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="removing"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="restarting"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="running"} 0
+swarm_container_state{container="web_api.1.t-api-1",display_name="web api",exit_code="",orchestrator="swarm",project="",service="api",stack="web",state="unhealthy"} 0
+# HELP swarm_service_at_desired Service is at desired replicas (1) or not (0).
+# TYPE swarm_service_at_desired gauge
+swarm_service_at_desired{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 1
+swarm_service_at_desired{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_at_desired{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
+swarm_service_at_desired{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 0
+# HELP swarm_service_desired_replicas Number of desired replicas for a Swarm service (replicated: configured replicas; global: eligible nodes).
+# TYPE swarm_service_desired_replicas gauge
+swarm_service_desired_replicas{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 2
+swarm_service_desired_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_desired_replicas{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1
+swarm_service_desired_replicas{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 5
+# HELP swarm_service_running_replicas Current number of running tasks per Swarm service (latest per slot).
+# TYPE swarm_service_running_replicas gauge
+swarm_service_running_replicas{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 2
+swarm_service_running_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_running_replicas{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
+swarm_service_running_replicas{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 2
+# HELP swarm_service_schedulable_replicas Number of replicas that can currently be scheduled given node availability and placement constraints (replicated: min(configured, eligible_nodes); global: eligible nodes).
+# TYPE swarm_service_schedulable_replicas gauge
+swarm_service_schedulable_replicas{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 1
+swarm_service_schedulable_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_schedulable_replicas{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
+swarm_service_schedulable_replicas{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 1
+# HELP swarm_service_update_completed_timestamp_seconds Unix timestamp (seconds) when the current/last service update completed (0 if unknown).
+# TYPE swarm_service_update_completed_timestamp_seconds gauge
+swarm_service_update_completed_timestamp_seconds{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 1.7897184e+09
+swarm_service_update_completed_timestamp_seconds{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 0
+swarm_service_update_completed_timestamp_seconds{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1.7896248e+09
+swarm_service_update_completed_timestamp_seconds{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 0
+# HELP swarm_service_update_started_timestamp_seconds Unix timestamp (seconds) when the current/last service update started (0 if unknown).
+# TYPE swarm_service_update_started_timestamp_seconds gauge
+swarm_service_update_started_timestamp_seconds{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 1.7897181e+09
+swarm_service_update_started_timestamp_seconds{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1.7898192e+09
+swarm_service_update_started_timestamp_seconds{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1.7896242e+09
+swarm_service_update_started_timestamp_seconds{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 0
+# HELP swarm_service_update_state_info Service update/rollback state indicator (1 for the current state, 0 otherwise).
+# TYPE swarm_service_update_state_info gauge
+swarm_service_update_state_info{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="completed"} 1
+swarm_service_update_state_info{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="paused"} 0
+swarm_service_update_state_info{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="rollback_completed"} 0
+swarm_service_update_state_info{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="rollback_started"} 0
+swarm_service_update_state_info{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="updating"} 0
+swarm_service_update_state_info{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="completed"} 0
+swarm_service_update_state_info{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="paused"} 0
+swarm_service_update_state_info{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="rollback_completed"} 0
+swarm_service_update_state_info{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="rollback_started"} 0
+swarm_service_update_state_info{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="updating"} 1
+swarm_service_update_state_info{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="completed"} 0
+swarm_service_update_state_info{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="paused"} 1
+swarm_service_update_state_info{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="rollback_completed"} 0
+swarm_service_update_state_info{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="rollback_started"} 0
+swarm_service_update_state_info{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="updating"} 0
+swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="completed"} 1
+swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="paused"} 0
+swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="rollback_completed"} 0
+swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="rollback_started"} 0
+swarm_service_update_state_info{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="updating"} 0
+# HELP swarm_task_replicas_state Number of tasks per Swarm service segmented by task state (latest per slot).
+# TYPE swarm_task_replicas_state gauge
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="accepted"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="allocated"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="assigned"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="complete"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="failed"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="new"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="orphaned"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="pending"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="preparing"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="ready"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="rejected"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="remove"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="running"} 2
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="shutdown"} 0
+swarm_task_replicas_state{com_example_team="",display_name="db",service="db",service_mode="replicated",stack="",state="starting"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="accepted"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="allocated"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="assigned"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="complete"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="failed"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="new"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="orphaned"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="pending"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="preparing"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="ready"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="rejected"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="remove"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="running"} 1
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="shutdown"} 0
+swarm_task_replicas_state{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web",state="starting"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="accepted"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="allocated"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="assigned"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="complete"} 1
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="failed"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="new"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="orphaned"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="pending"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="preparing"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="ready"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="rejected"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="remove"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="running"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="shutdown"} 0
+swarm_task_replicas_state{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="starting"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="accepted"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="allocated"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="assigned"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="complete"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="failed"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="new"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="orphaned"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="pending"} 1
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="preparing"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="ready"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="rejected"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="remove"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="running"} 2
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="shutdown"} 0
+swarm_task_replicas_state{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web",state="starting"} 0

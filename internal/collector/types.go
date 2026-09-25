@@ -31,7 +31,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 // ErrNoCachedMetadata is returned when a removed service is seen in events

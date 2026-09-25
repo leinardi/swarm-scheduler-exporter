@@ -101,3 +101,40 @@ jobs:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Modelled on runhold's go-test.yaml, without its reusable-workflow and cache-warmup split:
+  # setup-go's built-in cache (keyed on go.sum) is enough at this size.
+  go-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests with the race detector
+        run: go test -race ./...
+
+  # The source-aware govulncheck scan (make audit-deps-go). It needs Go and the network, so it
+  # does not fit the reviewdog pre-commit-hooks job above, which runs an explicit hook allowlist.
+  # The .mk snippets are committed, so the make bootstrap only reads them here.
+  go-vulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Scan dependencies for known vulnerabilities
+        run: make audit-deps-go

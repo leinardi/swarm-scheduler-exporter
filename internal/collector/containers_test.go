@@ -29,7 +29,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
 )
 
 var errInspectFailed = errors.New("inspect failed")
@@ -163,43 +163,34 @@ func makeRow(state string) row {
 }
 
 // buildInspectWithHealth constructs a container.InspectResponse with config+state set.
-func buildInspectWithHealth(healthStatus string) container.InspectResponse {
-	r := container.InspectResponse{
+func buildInspectWithHealth(healthStatus string) *container.InspectResponse {
+	return &container.InspectResponse{
 		Config: &container.Config{Healthcheck: &container.HealthConfig{}},
-	}
-	r.ContainerJSONBase = &container.ContainerJSONBase{
 		State: &container.State{
-			Health: &container.Health{Status: healthStatus},
+			Health: &container.Health{Status: container.HealthStatus(healthStatus)},
 		},
 	}
-
-	return r
 }
 
 // buildInspectNoHealthcheck returns an InspectResponse with Config but no healthcheck.
-func buildInspectNoHealthcheck() container.InspectResponse {
-	return container.InspectResponse{Config: &container.Config{}}
+func buildInspectNoHealthcheck() *container.InspectResponse {
+	return &container.InspectResponse{Config: &container.Config{}}
 }
 
 // buildInspectWithExitCode returns an InspectResponse with the given exit code.
-func buildInspectWithExitCode(code int) container.InspectResponse {
-	r := container.InspectResponse{}
-	r.ContainerJSONBase = &container.ContainerJSONBase{
-		State: &container.State{ExitCode: code},
-	}
-
-	return r
+func buildInspectWithExitCode(code int) *container.InspectResponse {
+	return &container.InspectResponse{State: &container.State{ExitCode: code}}
 }
 
 func TestApplyHealthOverlay(t *testing.T) {
 	cases := []struct {
 		name      string
-		inspected container.InspectResponse
+		inspected *container.InspectResponse
 		wantState string
 	}{
 		{
 			name:      "nil config falls back to base",
-			inspected: container.InspectResponse{},
+			inspected: &container.InspectResponse{},
 			wantState: "running",
 		},
 		{
@@ -251,10 +242,7 @@ func TestApplyHealthOverlay(t *testing.T) {
 func TestApplyExitCode(t *testing.T) {
 	t.Run("nil state leaves exit_code empty", func(t *testing.T) {
 		r := makeRow("exited")
-		// ContainerJSONBase must be non-nil (promoted field access), but State within it is nil.
-		resp := container.InspectResponse{}
-		resp.ContainerJSONBase = &container.ContainerJSONBase{}
-		applyExitCode(&r, resp)
+		applyExitCode(&r, &container.InspectResponse{})
 
 		if r.labels["exit_code"] != "" {
 			t.Errorf("expected empty exit_code, got %q", r.labels["exit_code"])
@@ -405,7 +393,7 @@ func TestPollContainersState_HealthOverlay(t *testing.T) {
 
 	fd := &fakeDocker{
 		containers: []container.Summary{cnt},
-		inspects:   map[string]container.InspectResponse{"c1": healthyInspect},
+		inspects:   map[string]container.InspectResponse{"c1": *healthyInspect},
 	}
 
 	rows, err := PollContainersState(context.Background(), fd)
@@ -433,7 +421,7 @@ func TestPollContainersState_ExitCode(t *testing.T) {
 	}
 	fd := &fakeDocker{
 		containers: []container.Summary{cnt},
-		inspects:   map[string]container.InspectResponse{"c1": buildInspectWithExitCode(137)},
+		inspects:   map[string]container.InspectResponse{"c1": *buildInspectWithExitCode(137)},
 	}
 
 	rows, err := PollContainersState(context.Background(), fd)
@@ -491,8 +479,8 @@ func TestPollContainersState_InspectCapHonored(t *testing.T) {
 	fd := &fakeDocker{
 		containers: []container.Summary{c1, c2},
 		inspects: map[string]container.InspectResponse{
-			"c1": buildInspectWithExitCode(0),
-			"c2": buildInspectWithExitCode(1),
+			"c1": *buildInspectWithExitCode(0),
+			"c2": *buildInspectWithExitCode(1),
 		},
 	}
 

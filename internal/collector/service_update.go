@@ -28,10 +28,11 @@ import (
 	"maps"
 	"sync"
 
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/prometheus/client_golang/prometheus"
+
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Known service update state strings we’ll expose.

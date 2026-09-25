@@ -1,0 +1,2 @@
+{"Type":"service","Action":"update","Actor":{"ID":"svc-api","Attributes":{"name":"web_api","updatestate.new":"updating"}},"scope":"swarm","time":1789902000,"timeNano":1789902000100000000}
+{"Type":"node","Action":"update","Actor":{"ID":"node-w1","Attributes":{"name":"w1","availability.new":"active","availability.old":"active"}},"scope":"swarm","time":1789902001,"timeNano":1789902001200000000}

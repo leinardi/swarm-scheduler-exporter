@@ -37,11 +37,12 @@ import (
 	"sync"
 
 	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/swarm"
+	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
+	"github.com/prometheus/client_golang/prometheus"
+
 	labelutil "github.com/leinardi/swarm-scheduler-exporter/internal/labels"
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -160,22 +161,22 @@ func PollReplicasState(
 	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
 	serviceIDs := getAllServiceIDs()
 
-	taskFilters := filters.NewArgs()
+	// A nil client.Filters sends no filter; Add on it would panic, so allocate before adding.
+	var taskFilters client.Filters
 
 	if len(serviceIDs) > 0 {
 		limit := min(len(serviceIDs), maxServicesInTaskFilter)
-
-		for index := range limit {
-			taskFilters.Add("service", serviceIDs[index])
-		}
+		taskFilters = make(client.Filters).Add("service", serviceIDs[:limit]...)
 	}
 
-	tasks, listErr := dockerClient.TaskList(parentContext, swarm.TaskListOptions{
+	taskListResult, listErr := dockerClient.TaskList(parentContext, client.TaskListOptions{
 		Filters: taskFilters,
 	})
 	if listErr != nil {
 		return serviceCounter{}, fmt.Errorf("task list: %w", listErr)
 	}
+
+	tasks := taskListResult.Items
 
 	// Step 1: choose the latest task per dedupe key.
 	latestByKey := make(map[latestKey]*swarm.Task)
@@ -422,16 +423,18 @@ func getServiceLabels(
 	}
 
 	// Slow path: inspect and cache
-	service, _, inspectErr := dockerClient.ServiceInspectWithRaw(
+	inspectResult, inspectErr := dockerClient.ServiceInspect(
 		parentContext,
 		serviceID,
-		swarm.ServiceInspectOptions{
+		client.ServiceInspectOptions{
 			InsertDefaults: false,
 		},
 	)
 	if inspectErr != nil {
 		return map[string]string{}, fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
 	}
+
+	service := inspectResult.Service
 
 	metadata := buildMetadata(&service)
 	setServiceMetadata(serviceID, &metadata)
