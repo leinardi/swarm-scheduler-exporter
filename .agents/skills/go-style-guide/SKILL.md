@@ -420,7 +420,8 @@ forking it.
 | The label values of one service's series | `labelsForMetadata` (base + custom labels, sanitized, with the high-cardinality warning) | rebuilding the map at the call site — `labelsForService` and the builder in `replicas_state.go` are existing near-copies, not patterns |
 | Any call into Docker from `internal/collector` | the `DockerAPI` interface (`internal/collector/docker_api.go`); `*client.Client` satisfies it with no adapter | taking `*client.Client` in collector code, or widening `DockerAPI` with a method that mutates anything |
 | A Docker fake in a collector unit test | `fakeDocker` (`fake_docker_test.go`) — canned lists, per-call errors, call counters, `eventsCh`/`errCh` for `Events` | a second fake, or a real daemon |
-| Isolating metrics in a collector test | `installDesiredReplicasGauges`, `installReplicasStateGauges`, `installServiceUpdateGauges` (`gauge_helpers_test.go`), `installLocalNodeGauge` (`nodes_test.go`) — unregistered vecs swapped in and restored on cleanup | registering on `prometheus.DefaultRegisterer` from a test |
+| Isolating metrics in a collector test | `installDesiredReplicasGauges`, `installReplicasStateGauges`, `installNodesByStateGauge`, `installContainersStateGauge`, `installServiceUpdateGauges` (`gauge_helpers_test.go`) — unregistered vecs or snapshot collectors swapped in and restored on cleanup | registering on `prometheus.DefaultRegisterer` from a test |
+| Reading a snapshot collector in a test | `gatherSeries`, `snapshotValue`, `seriesID`, `familySeries` (`gauge_helpers_test.go`) — gather through a throwaway pedantic registry | `testutil.ToFloat64` on a `With(...)`, which snapshot collectors do not have |
 | Resetting the package caches between tests | `resetCollectorState(t)` (`types_test.go`) | clearing `metadataCache` / `cachedNodes` by hand |
 | Test fixtures for service metadata and labels | `makeTestMetadata`, `serviceLabels`, `baseServiceLabels` (`gauge_helpers_test.go`) | a per-file copy |
 
@@ -663,10 +664,15 @@ too. Rules (examples in [`references/patterns.md`](references/patterns.md#promet
 - **Registration**: package-level vars, created and `prometheus.MustRegister`ed by one
   `Configure…` function called once from `main`. Set `ConstLabels: nil` explicitly.
 - **Nil guards**: new exported functions that touch a metric return early when its
-  `Configure…` has not run. `UpdateNodesByStateFromSlice` and `UpdateReplicasStateGauge` do not
-  guard their `Reset()` yet; they are not a precedent.
-- **Reset before re-emit**: a gauge describing the current members of a dynamic set is
-  `Reset()` before the full set is written again.
+  `Configure…` has not run.
+- **Publish rebuilt sets as a snapshot**: a family whose full set is recomputed on every update
+  (replicas state, container state, nodes by state) is a snapshot collector
+  (`snapshot_gauge.go`), not a `GaugeVec`. Record every series on a `snapshotBuilder`, call
+  `build()` once, and `publish` the result in one swap; on a build error, log and keep the
+  previous set. Never `Reset()` a vec and re-`Set` it: a scrape in between sees the family empty
+  or partial (#72). Families computed from the same poll share one collector, so a scrape never
+  pairs values from different polls. A `GaugeVec` is for series updated one at a time, from
+  events (`desired_replicas`, service update state), with `Delete` on removal.
 - **Exhaustive zero emission**: a categorical gauge emits every known state (`knownTaskStates`,
   update states, container states) for each subject, zeros included.
 - **Delete, never zero**: when a resource is removed, `Delete` its series
@@ -710,8 +716,8 @@ too. Rules (examples in [`references/patterns.md`](references/patterns.md#promet
 - [ ] No `time.Sleep` in tests: wait with a deadline on a channel or a polled condition (§18)
 - [ ] Metric names and labels built from `metrics_ids.go` constants; any rename or label change
       is reflected in the README metrics section
-- [ ] Removed resources `Delete` their series; categorical gauges emit every known state; dynamic
-      sets `Reset()` before re-emit
+- [ ] Removed resources `Delete` their series; categorical gauges emit every known state;
+      recomputed sets are built whole and published as one snapshot, never `Reset()` and re-`Set`
 - [ ] No label fed by an unbounded value
 - [ ] No new goroutine per external event — work goes through the bounded worker pool; every
       Docker call has a context
