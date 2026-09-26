@@ -123,6 +123,10 @@ func wantPositive(name string, labels map[string]string) metricWant {
 	return metricWant{name: name, labels: labels, positive: true}
 }
 
+func wantAbsent(name string, labels map[string]string) metricWant {
+	return metricWant{name: name, labels: labels, absent: true}
+}
+
 func wantService(name string, svc serviceKey, value float64) metricWant {
 	return metricWant{name: name, labels: svc.labels(), value: value}
 }
