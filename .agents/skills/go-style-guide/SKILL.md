@@ -620,8 +620,8 @@ Rules (examples in [`references/patterns.md`](references/patterns.md#concurrency
 - Every long-running goroutine is owned by a `sync.WaitGroup` whose owner calls `Wait()` before
   returning. Use `waitGroup.Go(...)` (as `main` does for the listener and the poller); the event
   pool's `Add(eventWorkerCount)` plus a `Done` per worker is the one exception, since the count is
-  fixed up front. `runHTTPServer`'s bare `go` for `ListenAndServe` is not waited for: it ends
-  when `Shutdown` makes `ListenAndServe` return into the buffered error channel.
+  fixed up front. `serveHTTP`'s bare `go` for `Serve` is not waited for: it ends when
+  `Shutdown` makes `Serve` return into the buffered error channel.
 - **Never spawn unbounded goroutines.** Work triggered by external input (Swarm events) goes
   through the fixed worker pool (`eventWorkerCount` workers, `eventQueueCapacity` buffered
   queue). A `go processEvent(...)` inside an event loop is forbidden.

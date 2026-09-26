@@ -31,6 +31,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -375,9 +376,20 @@ func startPoller(
 	})
 }
 
+// runHTTPServer binds address and serves handler on it with serveHTTP.
 func runHTTPServer(parentContext context.Context, address string, handler http.Handler) error {
+	listener, listenErr := new(net.ListenConfig).Listen(parentContext, "tcp", address)
+	if listenErr != nil {
+		return fmt.Errorf("http listen: %w", listenErr)
+	}
+
+	return serveHTTP(parentContext, listener, handler)
+}
+
+// serveHTTP serves handler on listener until parentContext ends or the server fails, then shuts
+// the server down gracefully. It takes ownership of listener.
+func serveHTTP(parentContext context.Context, listener net.Listener, handler http.Handler) error {
 	httpServer := &http.Server{
-		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -388,7 +400,7 @@ func runHTTPServer(parentContext context.Context, address string, handler http.H
 	errorChannel := make(chan error, 1)
 
 	go func() {
-		errorChannel <- httpServer.ListenAndServe()
+		errorChannel <- httpServer.Serve(listener)
 	}()
 
 	var resultError error
@@ -400,8 +412,13 @@ func runHTTPServer(parentContext context.Context, address string, handler http.H
 		// context canceled: proceed to shutdown
 	}
 
-	// Graceful HTTP shutdown.
-	shutdownContext, shutdownCancel := context.WithTimeout(parentContext, httpShutdownTimeout)
+	// Graceful HTTP shutdown. Detached from parentContext on purpose: on SIGINT/SIGTERM it is
+	// already done, and Shutdown given a done context returns at once instead of waiting for
+	// in-flight scrapes.
+	shutdownContext, shutdownCancel := context.WithTimeout(
+		context.WithoutCancel(parentContext),
+		httpShutdownTimeout,
+	)
 	defer shutdownCancel()
 
 	shutdownErr := httpServer.Shutdown(shutdownContext)
