@@ -729,7 +729,7 @@ func restoreCollectorGlobals(t *testing.T) {
 	t.Helper()
 
 	desired, schedulable := desiredReplicasGauge, schedulableReplicasGauge
-	replicasState, running, atDesired := replicasStateGauge, runningReplicasGauge, atDesiredGauge
+	replicasState := replicasStateCollector
 	health, buildInfo := exporterHealthGauge, buildInfoGauge
 	nodesByState := nodesByStateGauge
 	pollDuration, polls, pollErrors, reconnects := pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter,
@@ -743,7 +743,7 @@ func restoreCollectorGlobals(t *testing.T) {
 
 	t.Cleanup(func() {
 		desiredReplicasGauge, schedulableReplicasGauge = desired, schedulable
-		replicasStateGauge, runningReplicasGauge, atDesiredGauge = replicasState, running, atDesired
+		replicasStateCollector = replicasState
 		exporterHealthGauge, buildInfoGauge = health, buildInfo
 		nodesByStateGauge = nodesByState
 		pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter, eventsReconnectsTotalCounter = pollDuration,

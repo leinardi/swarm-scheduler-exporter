@@ -65,37 +65,19 @@ func installDesiredReplicasGauges(t *testing.T) *prometheus.GaugeVec {
 	return desiredGauge
 }
 
-// installReplicasStateGauges installs unregistered local gauges for the replicas-state family.
-func installReplicasStateGauges(
-	t *testing.T,
-) (runningGauge, atDesiredGaugeVec *prometheus.GaugeVec) {
+// installReplicasStateGauges installs a fresh unregistered replicas-state snapshot collector with
+// the base labels only, restoring the original on cleanup.
+func installReplicasStateGauges(t *testing.T) *replicasStateSnapshot {
 	t.Helper()
 
-	base := baseServiceLabels()
-	stateLabels := append(append([]string(nil), base...), labelState)
+	families := newReplicasStateSnapshot(nil)
 
-	rsg := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_replicas_state", Help: "test"},
-		stateLabels,
-	)
-	rrg := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{Name: "test_running_replicas", Help: "test"},
-		base,
-	)
-	adg := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_at_desired", Help: "test"}, base)
+	previous := replicasStateCollector
+	replicasStateCollector = families
 
-	prevRSG, prevRRG, prevADG := replicasStateGauge, runningReplicasGauge, atDesiredGauge
-	replicasStateGauge = rsg
-	runningReplicasGauge = rrg
-	atDesiredGauge = adg
+	t.Cleanup(func() { replicasStateCollector = previous })
 
-	t.Cleanup(func() {
-		replicasStateGauge = prevRSG
-		runningReplicasGauge = prevRRG
-		atDesiredGauge = prevADG
-	})
-
-	return rrg, adg
+	return families
 }
 
 // installServiceUpdateGauges installs unregistered local gauges for the service-update family.
@@ -201,6 +183,26 @@ func snapshotValue(
 	value, found := gatherSeries(t, collector)[seriesID(fqName, labels)]
 
 	return value, found
+}
+
+// Family names of the replicas-state snapshot, as the tests read them back.
+const (
+	replicasStateFQName   = "swarm_task_replicas_state"
+	runningReplicasFQName = "swarm_service_running_replicas"
+	atDesiredFQName       = "swarm_service_at_desired"
+)
+
+// familySeries returns the series of family fqName among series gathered by gatherSeries.
+func familySeries(series map[string]float64, fqName string) map[string]float64 {
+	family := make(map[string]float64)
+
+	for id, value := range series {
+		if strings.HasPrefix(id, fqName+"{") {
+			family[id] = value
+		}
+	}
+
+	return family
 }
 
 // seriesID formats a series as fqName{name="value",...} with label names sorted and values
