@@ -48,10 +48,11 @@ type customLabelDef struct {
 type serviceMetadata struct {
 	stack                string            // Docker stack name from label "com.docker.stack.namespace"
 	service              string            // Service visible name (Annotations.Name)
-	serviceMode          string            // "replicated" or "global"
+	serviceMode          string            // "replicated", "global", "replicated-job" or "global-job"
 	customLabels         map[string]string // key: sanitized name; value: service label value
 	desiredReplicas      float64           // last computed desired replicas for this service
-	configuredReplicas   float64           // replicated: configured replica count (from Spec)
+	configuredReplicas   float64           // replicated: configured replicas; replicated-job: total completions
+	jobIteration         uint64            // jobs: JobStatus.JobIteration.Index of the current run
 	constraints          []string          // placement constraint expressions (e.g. "node.hostname == pollux")
 	platforms            []swarm.Platform  // placement platform requirements
 	restartConditionNone bool              // true when RestartPolicy.Condition=="none" (one-shot/cronjob services)
@@ -122,8 +123,9 @@ func getAllServiceIDs() []string {
 	return ids
 }
 
-// getGlobalServiceIDs returns only global-mode service IDs from the cache.
-func getGlobalServiceIDs() []string {
+// getNodeDependentServiceIDs returns the IDs of the cached services whose desired count is the
+// eligible-node count, so it changes with the nodes: global and global-job services.
+func getNodeDependentServiceIDs() []string {
 	metadataMu.RLock()
 	defer metadataMu.RUnlock()
 
@@ -131,7 +133,7 @@ func getGlobalServiceIDs() []string {
 
 	for serviceID := range metadataCache {
 		md := metadataCache[serviceID]
-		if md.serviceMode == "global" {
+		if md.serviceMode == serviceModeGlobal || md.serviceMode == serviceModeGlobalJob {
 			ids = append(ids, serviceID)
 		}
 	}
@@ -198,8 +200,15 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 		customLabels: make(map[string]string, len(customLabelDefs)),
 	}
 
-	if svc.Spec.Mode.Replicated != nil {
+	switch {
+	case svc.Spec.Mode.Replicated != nil:
 		metadata.configuredReplicas = float64(*svc.Spec.Mode.Replicated.Replicas)
+	case svc.Spec.Mode.ReplicatedJob != nil:
+		metadata.configuredReplicas = jobTotalCompletions(svc.Spec.Mode.ReplicatedJob)
+	}
+
+	if svc.JobStatus != nil {
+		metadata.jobIteration = svc.JobStatus.JobIteration.Index
 	}
 
 	if svc.Spec.TaskTemplate.Placement != nil {
@@ -243,11 +252,37 @@ func buildMetadata(svc *swarm.Service) serviceMetadata {
 // serviceMode returns the effective mode of a Swarm service as a string.
 // This simplifies downstream label handling and Prometheus group-bys.
 func serviceMode(svc *swarm.Service) string {
-	if svc.Spec.Mode.Replicated != nil {
+	switch {
+	case svc.Spec.Mode.Replicated != nil:
 		return serviceModeReplicated
+	case svc.Spec.Mode.ReplicatedJob != nil:
+		return serviceModeReplicatedJob
+	case svc.Spec.Mode.GlobalJob != nil:
+		return serviceModeGlobalJob
+	default:
+		return serviceModeGlobal
+	}
+}
+
+// isJobMode reports whether mode is one of the job modes, whose tasks run to completion
+// instead of being kept running.
+func isJobMode(mode string) bool {
+	return mode == serviceModeReplicatedJob || mode == serviceModeGlobalJob
+}
+
+// jobTotalCompletions returns how many tasks a replicated job must complete, with the defaults
+// documented on swarm.ReplicatedJob: TotalCompletions, else MaxConcurrent, else 1. The daemon
+// fills both in on create, so the fallbacks only guard against a spec that lacks them.
+func jobTotalCompletions(job *swarm.ReplicatedJob) float64 {
+	if job.TotalCompletions != nil {
+		return float64(*job.TotalCompletions)
 	}
 
-	return serviceModeGlobal
+	if job.MaxConcurrent != nil {
+		return float64(*job.MaxConcurrent)
+	}
+
+	return 1
 }
 
 // --- Synchronized accessors for metadataCache ---

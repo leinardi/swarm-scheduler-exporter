@@ -980,7 +980,7 @@ func refreshNodesAndRecomputeGlobals(
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
 
-	globalIDs := getGlobalServiceIDs()
+	globalIDs := getNodeDependentServiceIDs()
 	for index := range globalIDs {
 		serviceID := globalIDs[index]
 
