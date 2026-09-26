@@ -21,7 +21,7 @@ go-test-integration: go-build ## Run the DinD Swarm integration tests (requires 
 	  -tags=integration \
 	  -timeout=$(INTEGRATION_TIMEOUT) \
 	  -v \
-	  $(if $(RUN),-run $(RUN),) \
+	  $(if $(RUN),-run '$(RUN)',) \
 	  $(INTEGRATION_PKG) \
 	  $(if $(filter 1,$(UPDATE)),-args -update,)
 

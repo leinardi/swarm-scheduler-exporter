@@ -47,7 +47,7 @@ const (
 	// taskReapTimeout bounds the wait for a removed service's tasks to disappear.
 	taskReapTimeout = 60 * time.Second
 	// nodesSettleTimeout bounds the wait for every node to be Ready and Active again.
-	nodesSettleTimeout = 90 * time.Second //nolint:unused // shared scenario helper, not every scenario uses it
+	nodesSettleTimeout = 90 * time.Second
 )
 
 // stopFast is the default workload: it idles, and exits promptly on SIGTERM. A bare sleep would run
@@ -159,8 +159,6 @@ func serviceSpec(stack, name string, opts *serviceOpts) swarm.ServiceSpec {
 }
 
 // updateService applies mutate to the service's current spec and submits it.
-//
-//nolint:unused // shared scenario helper, not every scenario uses it
 func updateService(t *testing.T, serviceID string, mutate func(*swarm.ServiceSpec)) {
 	t.Helper()
 
@@ -192,8 +190,6 @@ func updateService(t *testing.T, serviceID string, mutate func(*swarm.ServiceSpe
 }
 
 // scaleService sets a replicated service's replica count.
-//
-//nolint:unused // shared scenario helper, not every scenario uses it
 func scaleService(t *testing.T, serviceID string, replicas uint64) {
 	t.Helper()
 
@@ -204,8 +200,6 @@ func scaleService(t *testing.T, serviceID string, replicas uint64) {
 
 // removeService removes the service now, inside the test, and waits for its tasks to be reaped.
 // The cleanup registered by deployService then finds nothing left to do.
-//
-//nolint:unused // shared scenario helper, not every scenario uses it
 func removeService(t *testing.T, serviceID string) {
 	t.Helper()
 
@@ -352,8 +346,6 @@ func describeTasks(tasks []taskInfo) string {
 // --- Nodes ---
 
 // updateNode applies mutate to the node's current spec and submits it.
-//
-//nolint:unused // shared scenario helper, not every scenario uses it
 func updateNode(t *testing.T, nodeID string, mutate func(*swarm.NodeSpec)) {
 	t.Helper()
 
@@ -363,7 +355,6 @@ func updateNode(t *testing.T, nodeID string, mutate func(*swarm.NodeSpec)) {
 	}
 }
 
-//nolint:unused // shared scenario helper, not every scenario uses it
 func updateNodeSpec(ctx context.Context, nodeID string, mutate func(*swarm.NodeSpec)) error {
 	callCtx, cancel := opCtx(ctx)
 	defer cancel()
@@ -390,8 +381,6 @@ func updateNodeSpec(ctx context.Context, nodeID string, mutate func(*swarm.NodeS
 
 // waitNodesReadyActive waits until every cluster node is Ready and Active, the state disruptive
 // tests must leave the cluster in.
-//
-//nolint:unused // shared scenario helper, not every scenario uses it
 func waitNodesReadyActive(ctx context.Context) error {
 	return pollUntil(ctx, nodesSettleTimeout, func() error {
 		callCtx, cancel := opCtx(ctx)

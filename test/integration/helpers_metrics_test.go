@@ -52,6 +52,7 @@ const (
 	metricHealth         = "swarm_exporter_health"
 	metricBuildInfo      = "swarm_exporter_build_info"
 	metricContainerState = "swarm_container_state"
+	metricPollsTotal     = "swarm_exporter_polls_total"
 
 	labelStack   = "stack"
 	labelService = "service"

@@ -64,6 +64,43 @@ func eventually(t *testing.T, timeout time.Duration, check func(ctx context.Cont
 	}
 }
 
+// waitForFreshPoll waits until the exporter has completed a poll that started after this call, so
+// the next scrape reflects the Swarm state as of now. A poll that was already running when this
+// was called can finish first, hence the second one.
+func waitForFreshPoll(t *testing.T, baseURL string) {
+	t.Helper()
+
+	start := -1.0
+
+	eventually(t, 30*time.Second, func(ctx context.Context) error {
+		scraped, err := scrapeMetrics(ctx, baseURL)
+		if err != nil {
+			return err
+		}
+
+		polls, ok := scraped.value(metricPollsTotal, nil)
+		if !ok {
+			return fmt.Errorf("no %s series: %w", metricPollsTotal, errNotYet)
+		}
+
+		if start < 0 {
+			start = polls
+		}
+
+		if polls < start+2 {
+			return fmt.Errorf(
+				"%s at %g, waiting for %g: %w",
+				metricPollsTotal,
+				polls,
+				start+2,
+				errNotYet,
+			)
+		}
+
+		return nil
+	})
+}
+
 // metricWant is one expectation on a scrape.
 type metricWant struct {
 	name   string
@@ -83,11 +120,6 @@ func wantSum(name string, labels map[string]string, value float64) metricWant {
 
 func wantService(name string, svc serviceKey, value float64) metricWant {
 	return metricWant{name: name, labels: svc.labels(), value: value}
-}
-
-//nolint:unused // shared scenario helper, not every scenario uses it
-func wantNoService(name string, svc serviceKey) metricWant {
-	return metricWant{name: name, labels: svc.labels(), absent: true}
 }
 
 // check evaluates the expectation against one scrape and returns the actual value as shown in
