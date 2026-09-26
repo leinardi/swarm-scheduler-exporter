@@ -1,5 +1,11 @@
 version: "2"
 
+run:
+  # The integration harness and suite only compile under this tag; without it they would never be
+  # linted.
+  build-tags:
+    - integration
+
 linters:
   default: all
 
@@ -47,9 +53,15 @@ linters:
                 Docker SDK (github.com/moby/moby/client and api) access only in internal/collector
                 (through the DockerAPI interface) and cmd/swarm-scheduler-exporter — keeps the
                 exporter's Docker surface read-only.
+          # internal/testenv and test/integration are the integration harness and suite: they
+          # create, update and remove services, nodes and containers, but only in the throwaway
+          # DinD Swarm each run brings up, and they are confined by the integration build tag, so
+          # nothing in the exporter can import them. The exporter itself stays read-only.
           files:
             - "!**/internal/collector/**.go"
             - "!**/cmd/swarm-scheduler-exporter/**.go"
+            - "!**/internal/testenv/**.go"
+            - "!**/test/integration/**.go"
     dupl:
       threshold: 100
     funlen:
