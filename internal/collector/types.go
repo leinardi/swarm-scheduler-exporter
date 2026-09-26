@@ -315,18 +315,6 @@ func deleteServiceMetadata(serviceID string) {
 	delete(metadataCache, serviceID)
 }
 
-func getServiceModeCached(serviceID string) (string, bool) {
-	metadataMu.RLock()
-	defer metadataMu.RUnlock()
-
-	metadata, ok := metadataCache[serviceID]
-	if !ok {
-		return "", false
-	}
-
-	return metadata.serviceMode, true
-}
-
 // setServiceDesiredReplicas updates the cached desired replicas for a service.
 func setServiceDesiredReplicas(serviceID string, desired float64) {
 	metadataMu.Lock()
