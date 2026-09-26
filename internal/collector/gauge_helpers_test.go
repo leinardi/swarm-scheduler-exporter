@@ -25,6 +25,9 @@
 package collector
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -149,4 +152,71 @@ func serviceLabels(stack, service, mode string) prometheus.Labels {
 		labelServiceMode: mode,
 		labelDisplayName: displayName(stack, service),
 	}
+}
+
+// gatherSeries registers collector on a throwaway pedantic registry, which also fails a Collect
+// that emits a metric its Describe did not announce, and returns every gathered series keyed by
+// seriesID. Any gather error fails the test.
+func gatherSeries(t *testing.T, collector prometheus.Collector) map[string]float64 {
+	t.Helper()
+
+	registry := prometheus.NewPedanticRegistry()
+
+	registerErr := registry.Register(collector)
+	if registerErr != nil {
+		t.Fatalf("register collector: %v", registerErr)
+	}
+
+	families, gatherErr := registry.Gather()
+	if gatherErr != nil {
+		t.Fatalf("gather: %v", gatherErr)
+	}
+
+	series := make(map[string]float64)
+
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			labels := prometheus.Labels{}
+			for _, labelPair := range metric.GetLabel() {
+				labels[labelPair.GetName()] = labelPair.GetValue()
+			}
+
+			series[seriesID(family.GetName(), labels)] = metric.GetGauge().GetValue()
+		}
+	}
+
+	return series
+}
+
+// snapshotValue returns the value of the series of family fqName with exactly labels, as gathered
+// from collector by gatherSeries, and whether that series exists.
+func snapshotValue(
+	t *testing.T,
+	collector prometheus.Collector,
+	fqName string,
+	labels prometheus.Labels,
+) (float64, bool) {
+	t.Helper()
+
+	value, found := gatherSeries(t, collector)[seriesID(fqName, labels)]
+
+	return value, found
+}
+
+// seriesID formats a series as fqName{name="value",...} with label names sorted and values
+// quoted, so two different series never share an ID.
+func seriesID(fqName string, labels prometheus.Labels) string {
+	names := make([]string, 0, len(labels))
+	for name := range labels {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	pairs := make([]string, 0, len(names))
+	for _, name := range names {
+		pairs = append(pairs, fmt.Sprintf("%s=%q", name, labels[name]))
+	}
+
+	return fqName + "{" + strings.Join(pairs, ",") + "}"
 }
