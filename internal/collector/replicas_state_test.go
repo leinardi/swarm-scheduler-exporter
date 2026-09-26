@@ -803,12 +803,14 @@ func TestUpdateReplicasStateGauge_OnePublishUpdatesAllFamilies(t *testing.T) {
 	}
 }
 
-// TestUpdateReplicasStateGauge_ConcurrentScrapes_SeeWholeSnapshots is -race coverage for
-// updates and scrapes running together. It cannot reliably catch a partial publish on its own:
-// that is pinned by TestUpdateReplicasStateGauge_BuildDoesNotPublish.
-func TestUpdateReplicasStateGauge_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
+// TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots is -race coverage for updates and
+// scrapes running together: UpdateReplicasStateGauge from the poller, and UpdateNodesByStateFromSlice
+// from two goroutines as concurrent event workers call it. It cannot reliably catch a partial
+// publish on its own: that is pinned by the BuildDoesNotPublish tests.
+func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
 	resetCollectorState(t)
 	families := installReplicasStateGauges(t)
+	nodesFamily := installNodesByStateGauge(t)
 
 	countersA := replicasStateCounters(t, 1, 1, "a1", "a2", "a3")
 	countersB := replicasStateCounters(t, 2, 3, "b1", "b2")
@@ -816,13 +818,23 @@ func TestUpdateReplicasStateGauge_ConcurrentScrapes_SeeWholeSnapshots(t *testing
 	expectedA := expectedReplicasStateSeries(t, countersA)
 	expectedB := expectedReplicasStateSeries(t, countersB)
 
+	nodesA := testNodes(3, swarm.NodeRoleWorker)
+	nodesB := append(testNodes(2, swarm.NodeRoleManager), testNodes(1, swarm.NodeRoleWorker)...)
+
+	expectedNodesA := map[string]float64{nodeSeriesID("worker", "active", "ready"): 3}
+	expectedNodesB := map[string]float64{
+		nodeSeriesID("manager", "active", "ready"): 2,
+		nodeSeriesID("worker", "active", "ready"):  1,
+	}
+
 	UpdateReplicasStateGauge(countersA)
+	UpdateNodesByStateFromSlice(nodesA)
 
 	stop := make(chan struct{})
 
-	var updater sync.WaitGroup
+	var updaters sync.WaitGroup
 
-	updater.Go(func() {
+	alternate := func(updateA, updateB func()) {
 		for index := 0; ; index++ {
 			select {
 			case <-stop:
@@ -831,16 +843,32 @@ func TestUpdateReplicasStateGauge_ConcurrentScrapes_SeeWholeSnapshots(t *testing
 			}
 
 			if index%2 == 0 {
-				UpdateReplicasStateGauge(countersB)
+				updateB()
 			} else {
-				UpdateReplicasStateGauge(countersA)
+				updateA()
 			}
 		}
+	}
+
+	updaters.Go(func() {
+		alternate(
+			func() { UpdateReplicasStateGauge(countersA) },
+			func() { UpdateReplicasStateGauge(countersB) },
+		)
 	})
+
+	for range 2 {
+		updaters.Go(func() {
+			alternate(
+				func() { UpdateNodesByStateFromSlice(nodesA) },
+				func() { UpdateNodesByStateFromSlice(nodesB) },
+			)
+		})
+	}
 
 	defer func() {
 		close(stop)
-		updater.Wait()
+		updaters.Wait()
 	}()
 
 	const scrapes = 200
@@ -848,7 +876,18 @@ func TestUpdateReplicasStateGauge_ConcurrentScrapes_SeeWholeSnapshots(t *testing
 	for range scrapes {
 		gathered := gatherSeries(t, families)
 		if !maps.Equal(gathered, expectedA) && !maps.Equal(gathered, expectedB) {
-			t.Fatalf("scrape saw %v, want exactly snapshot A or B", gathered)
+			t.Fatalf("replicas scrape saw %v, want exactly snapshot A or B", gathered)
+		}
+
+		gatheredNodes := gatherSeries(t, nodesFamily)
+		if !maps.Equal(gatheredNodes, expectedNodesA) &&
+			!maps.Equal(gatheredNodes, expectedNodesB) {
+			t.Fatalf(
+				"nodes scrape saw %v, want exactly %v or %v",
+				gatheredNodes,
+				expectedNodesA,
+				expectedNodesB,
+			)
 		}
 	}
 }

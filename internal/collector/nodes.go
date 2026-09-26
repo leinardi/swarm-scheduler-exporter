@@ -31,6 +31,8 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 )
 
 const (
@@ -39,18 +41,21 @@ const (
 	labelNodeStatus       = "status"
 )
 
-var nodesByStateGauge *prometheus.GaugeVec
+var nodesByStateGauge *snapshotFamily
 
 // ConfigureNodesByStateGauge registers swarm_cluster_nodes_by_state.
 func ConfigureNodesByStateGauge() {
-	nodesByStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusClusterSubsystem,
-		Name:        "nodes_by_state",
-		Help:        "Number of Swarm nodes grouped by role, availability, and status.",
-		ConstLabels: nil,
-	}, []string{labelNodeRole, labelNodeAvailability, labelNodeStatus})
+	nodesByStateGauge = newNodesByStateFamily()
 	prometheus.MustRegister(nodesByStateGauge)
+}
+
+// newNodesByStateFamily returns the swarm_cluster_nodes_by_state collector with nothing published.
+func newNodesByStateFamily() *snapshotFamily {
+	return newSnapshotFamily(
+		prometheus.BuildFQName(prometheusNamespace, prometheusClusterSubsystem, "nodes_by_state"),
+		"Number of Swarm nodes grouped by role, availability, and status.",
+		[]string{labelNodeRole, labelNodeAvailability, labelNodeStatus},
+	)
 }
 
 // UpdateNodesByState refreshes the nodes list from Docker and updates the gauge.
@@ -68,11 +73,28 @@ func UpdateNodesByState(ctx context.Context, cli DockerAPI) error {
 	return nil
 }
 
-// UpdateNodesByStateFromSlice updates the gauge using a pre-fetched snapshot.
+// UpdateNodesByStateFromSlice publishes the gauge from a pre-fetched snapshot. The whole set is
+// built first and replaces the previous one in a single swap: a scrape never sees it half
+// rebuilt, and concurrent refreshes from the event workers each publish a complete set (the last
+// one wins) instead of interleaving their writes. If the build fails, the previous set stays.
 func UpdateNodesByStateFromSlice(nodes []swarm.Node) {
-	// Reset to avoid ghost series for statuses we no longer see.
-	nodesByStateGauge.Reset()
+	if nodesByStateGauge == nil {
+		return
+	}
 
+	metrics, buildErr := buildNodesByState(nodesByStateGauge, nodes).build()
+	if buildErr != nil {
+		logger.L().Error("build nodes by state snapshot; keeping previous", "err", buildErr)
+
+		return
+	}
+
+	nodesByStateGauge.publish(metrics)
+}
+
+// buildNodesByState records the node count per role, availability and status without
+// publishing it. Combinations with no node get no series, so statuses no longer seen disappear.
+func buildNodesByState(family *snapshotFamily, nodes []swarm.Node) *snapshotBuilder {
 	// Aggregate counts: role × availability × status
 	type key struct {
 		role         string
@@ -90,12 +112,15 @@ func UpdateNodesByStateFromSlice(nodes []swarm.Node) {
 		counts[key{role: role, availability: availability, status: status}]++
 	}
 
-	// Write out the series
+	builder := newSnapshotBuilder()
+
 	for k, v := range counts {
-		nodesByStateGauge.With(prometheus.Labels{
+		builder.set(family.desc, family.labelNames, prometheus.Labels{
 			labelNodeRole:         k.role,
 			labelNodeAvailability: k.availability,
 			labelNodeStatus:       k.status,
-		}).Set(v)
+		}, v)
 	}
+
+	return builder
 }

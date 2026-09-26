@@ -29,28 +29,10 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// installLocalNodeGauge sets nodesByStateGauge to a fresh, unregistered GaugeVec
-// for the duration of the test, then restores the original on cleanup.
-func installLocalNodeGauge(t *testing.T) *prometheus.GaugeVec {
-	t.Helper()
-
-	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "test_swarm_cluster_nodes_by_state",
-		Help: "test",
-	}, []string{"role", "availability", "status"})
-	prev := nodesByStateGauge
-	nodesByStateGauge = g
-
-	t.Cleanup(func() { nodesByStateGauge = prev })
-
-	return g
-}
-
 func TestUpdateNodesByStateFromSlice_Aggregation(t *testing.T) {
-	g := installLocalNodeGauge(t)
+	family := installNodesByStateGauge(t)
 
 	nodes := []swarm.Node{
 		{
@@ -78,23 +60,25 @@ func TestUpdateNodesByStateFromSlice_Aggregation(t *testing.T) {
 
 	UpdateNodesByStateFromSlice(nodes)
 
-	workerReady := testutil.ToFloat64(g.With(prometheus.Labels{
-		"role": "worker", "availability": "active", "status": "ready",
-	}))
+	gathered := gatherSeries(t, family)
+
+	if got := len(gathered); got != 2 {
+		t.Errorf("series = %d, want 2", got)
+	}
+
+	workerReady := gathered[nodeSeriesID("worker", "active", "ready")]
 	if workerReady != 2 {
 		t.Errorf("worker/active/ready = %v, want 2", workerReady)
 	}
 
-	mgrDown := testutil.ToFloat64(g.With(prometheus.Labels{
-		"role": "manager", "availability": "drain", "status": "down",
-	}))
+	mgrDown := gathered[nodeSeriesID("manager", "drain", "down")]
 	if mgrDown != 1 {
 		t.Errorf("manager/drain/down = %v, want 1", mgrDown)
 	}
 }
 
 func TestUpdateNodesByStateFromSlice_ResetsBetweenCalls(t *testing.T) {
-	g := installLocalNodeGauge(t)
+	family := installNodesByStateGauge(t)
 
 	setA := []swarm.Node{
 		{
@@ -118,29 +102,74 @@ func TestUpdateNodesByStateFromSlice_ResetsBetweenCalls(t *testing.T) {
 	UpdateNodesByStateFromSlice(setA)
 	UpdateNodesByStateFromSlice(setB)
 
-	// worker entry from setA should be gone after setB (Reset was called).
-	workerCount := testutil.ToFloat64(g.With(prometheus.Labels{
-		"role": "worker", "availability": "active", "status": "ready",
-	}))
-	if workerCount != 0 {
-		t.Errorf("worker count should be 0 after reset, got %v", workerCount)
+	// The publish of setB replaces setA's set: its worker series is gone.
+	gathered := gatherSeries(t, family)
+
+	if _, found := gathered[nodeSeriesID("worker", "active", "ready")]; found {
+		t.Errorf("worker series from setA still present after setB: %v", gathered)
 	}
 
-	mgrCount := testutil.ToFloat64(g.With(prometheus.Labels{
-		"role": "manager", "availability": "active", "status": "ready",
-	}))
-	if mgrCount != 1 {
-		t.Errorf("manager count should be 1, got %v", mgrCount)
+	mgrCount, found := gathered[nodeSeriesID("manager", "active", "ready")]
+	if !found || mgrCount != 1 {
+		t.Errorf("manager count = %v (found %v), want 1", mgrCount, found)
 	}
 }
 
 func TestUpdateNodesByStateFromSlice_Empty(t *testing.T) {
-	g := installLocalNodeGauge(t)
+	family := installNodesByStateGauge(t)
 
 	UpdateNodesByStateFromSlice(nil)
-	// Gauge should exist but have nothing — no panic, metric count = 0.
-	count := testutil.CollectAndCount(g)
+	// Nothing to publish — no panic, no series.
+	count := len(gatherSeries(t, family))
 	if count != 0 {
 		t.Errorf("expected 0 series for empty nodes, got %d", count)
 	}
+}
+
+// nodeSeriesID is the seriesID of a nodes_by_state series.
+func nodeSeriesID(role, availability, status string) string {
+	return seriesID(nodesByStateFQName, prometheus.Labels{
+		labelNodeRole: role, labelNodeAvailability: availability, labelNodeStatus: status,
+	})
+}
+
+func testNodes(count int, role swarm.NodeRole) []swarm.Node {
+	nodes := make([]swarm.Node, count)
+	for index := range nodes {
+		nodes[index] = swarm.Node{
+			Spec:   swarm.NodeSpec{Role: role, Availability: swarm.NodeAvailabilityActive},
+			Status: swarm.NodeStatus{State: swarm.NodeStateReady},
+		}
+	}
+
+	return nodes
+}
+
+// TestUpdateNodesByStateFromSlice_BuildDoesNotPublish checks that a scrape sees the whole
+// previous set while the next one is being built (#72).
+func TestUpdateNodesByStateFromSlice_BuildDoesNotPublish(t *testing.T) {
+	family := installNodesByStateGauge(t)
+
+	expectedA := map[string]float64{
+		nodeSeriesID("worker", "active", "ready"): 3,
+	}
+	expectedB := map[string]float64{
+		nodeSeriesID("manager", "active", "ready"): 2,
+	}
+
+	UpdateNodesByStateFromSlice(testNodes(3, swarm.NodeRoleWorker))
+	assertGathered(t, family, expectedA)
+
+	builder := buildNodesByState(family, testNodes(2, swarm.NodeRoleManager))
+	assertGathered(t, family, expectedA)
+
+	metrics, buildErr := builder.build()
+	if buildErr != nil {
+		t.Fatalf("build B: %v", buildErr)
+	}
+
+	assertGathered(t, family, expectedA)
+
+	family.publish(metrics)
+	assertGathered(t, family, expectedB)
 }

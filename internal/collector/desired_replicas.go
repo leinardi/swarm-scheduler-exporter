@@ -119,7 +119,7 @@ func ConfigureDesiredReplicasGauge() {
 }
 
 // InitDesiredReplicasGauge seeds the gauge with current desired replica counts
-// by listing services and nodes once at startup (or after node changes).
+// by listing services and nodes once, at startup.
 // It returns a time anchor captured immediately before the first API call,
 // which should be used as the initial "Since" value when starting the events stream.
 func InitDesiredReplicasGauge(
@@ -158,10 +158,9 @@ func InitDesiredReplicasGauge(
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes)
 
-	// Reset service replica vectors so removed services are dropped.
-	desiredReplicasGauge.Reset()
-	schedulableReplicasGauge.Reset()
-
+	// No Reset before seeding: this runs once, at startup, on empty vectors, and a Reset here
+	// would let a scrape see the families empty. Removed services are dropped by the Delete
+	// calls in processEvent.
 	for index := range services { // avoid copying large struct
 		service := &services[index]
 		builtMetadata := buildMetadata(service)

@@ -80,6 +80,36 @@ func installReplicasStateGauges(t *testing.T) *replicasStateSnapshot {
 	return families
 }
 
+// installNodesByStateGauge installs a fresh unregistered nodes-by-state snapshot collector,
+// restoring the original on cleanup.
+func installNodesByStateGauge(t *testing.T) *snapshotFamily {
+	t.Helper()
+
+	family := newNodesByStateFamily()
+
+	previous := nodesByStateGauge
+	nodesByStateGauge = family
+
+	t.Cleanup(func() { nodesByStateGauge = previous })
+
+	return family
+}
+
+// installContainersStateGauge installs a fresh unregistered container-state snapshot collector
+// and enables container metrics, restoring the originals on cleanup.
+func installContainersStateGauge(t *testing.T) *snapshotFamily {
+	t.Helper()
+
+	family := newContainersStateFamily()
+
+	previous, previousEnabled := containersStateGauge, containersEnabled
+	containersStateGauge, containersEnabled = family, true
+
+	t.Cleanup(func() { containersStateGauge, containersEnabled = previous, previousEnabled })
+
+	return family
+}
+
 // installServiceUpdateGauges installs unregistered local gauges for the service-update family.
 func installServiceUpdateGauges(
 	t *testing.T,
@@ -185,11 +215,13 @@ func snapshotValue(
 	return value, found
 }
 
-// Family names of the replicas-state snapshot, as the tests read them back.
+// Family names of the snapshot collectors, as the tests read them back.
 const (
 	replicasStateFQName   = "swarm_task_replicas_state"
 	runningReplicasFQName = "swarm_service_running_replicas"
 	atDesiredFQName       = "swarm_service_at_desired"
+	nodesByStateFQName    = "swarm_cluster_nodes_by_state"
+	containerStateFQName  = "swarm_container_state"
 )
 
 // familySeries returns the series of family fqName among series gathered by gatherSeries.

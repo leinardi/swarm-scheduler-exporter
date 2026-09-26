@@ -85,6 +85,26 @@ func (collector *snapshotCollector) publish(metrics []prometheus.Metric) {
 	collector.current.Store(&metrics)
 }
 
+// snapshotFamily is a snapshot collector of a single gauge family, with the label names its
+// descriptor was built with.
+type snapshotFamily struct {
+	*snapshotCollector
+
+	desc       *prometheus.Desc
+	labelNames []string
+}
+
+// newSnapshotFamily returns a single-family snapshot collector with nothing published.
+func newSnapshotFamily(fqName, help string, labelNames []string) *snapshotFamily {
+	desc := prometheus.NewDesc(fqName, help, labelNames, nil)
+
+	return &snapshotFamily{
+		snapshotCollector: newSnapshotCollector(desc),
+		desc:              desc,
+		labelNames:        labelNames,
+	}
+}
+
 // snapshotSample is one series of a family: its label values, in label-name order, and value.
 type snapshotSample struct {
 	labelValues []string
