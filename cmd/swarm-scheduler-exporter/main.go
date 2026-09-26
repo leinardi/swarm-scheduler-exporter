@@ -216,19 +216,38 @@ func run() int {
 	}
 	httpMux := server.NewMuxWithHealth(isHealthy)
 
-	runError := runHTTPServer(rootContext, *listenAddr, httpMux)
-	if runError != nil && !errors.Is(runError, http.ErrServerClosed) &&
-		!errors.Is(runError, context.Canceled) {
-		loggerInstance.Error("http server error", "err", runError)
-	}
-
-	// Wait for workers to exit.
-	workerGroup.Wait()
-
-	return 0
+	return serveUntilDone(rootContext, cancelRoot, &workerGroup, *listenAddr, httpMux)
 }
 
 // --- helpers to reduce main() complexity ---
+
+// serveUntilDone serves handler on address until rootContext ends or the server fails, then
+// cancels rootContext so the workers return, and waits for them. It returns the exit code:
+// 0 on a requested shutdown, 1 when the server failed on its own (e.g. the address is in use).
+func serveUntilDone(
+	rootContext context.Context,
+	cancelRoot context.CancelFunc,
+	workerGroup *sync.WaitGroup,
+	address string,
+	handler http.Handler,
+) int {
+	exitCode := 0
+
+	runError := runHTTPServer(rootContext, address, handler)
+	if runError != nil && !errors.Is(runError, http.ErrServerClosed) &&
+		!errors.Is(runError, context.Canceled) {
+		logger.L().Error("http server error", "err", runError)
+
+		exitCode = 1
+	}
+
+	// Stop the workers: on a server failure rootContext is still live, and nothing else would
+	// end them. A non-zero exit then lets the orchestrator restart the exporter.
+	cancelRoot()
+	workerGroup.Wait()
+
+	return exitCode
+}
 
 // ErrUnsupportedAPIVersion is returned when DOCKER_API_VERSION pins a version outside the range
 // the Docker client supports.

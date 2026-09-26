@@ -25,8 +25,13 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"net"
+	"net/http"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/client"
 
@@ -164,5 +169,145 @@ func TestValidateClientAPIVersion(t *testing.T) {
 				t.Errorf("error %v does not wrap ErrUnsupportedAPIVersion", err)
 			}
 		})
+	}
+}
+
+// serveUntilDoneBound is how long serveUntilDone gets to return once its server has stopped.
+const serveUntilDoneBound = 5 * time.Second
+
+// waitExitCode returns serveUntilDone's exit code from exitCodes, failing the test if it does not
+// arrive within serveUntilDoneBound.
+func waitExitCode(t *testing.T, exitCodes <-chan int, reason string) int {
+	t.Helper()
+
+	select {
+	case exitCode := <-exitCodes:
+		return exitCode
+	case <-time.After(serveUntilDoneBound):
+		t.Fatalf("serveUntilDone did not return within %s after %s", serveUntilDoneBound, reason)
+
+		return 0
+	}
+}
+
+// freeLocalAddress returns a loopback address on a port that was free when probed.
+func freeLocalAddress(t *testing.T) string {
+	t.Helper()
+
+	probe, listenErr := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("probe a free port: %v", listenErr)
+	}
+
+	address := probe.Addr().String()
+
+	closeErr := probe.Close()
+	if closeErr != nil {
+		t.Fatalf("release the probed port: %v", closeErr)
+	}
+
+	return address
+}
+
+// waitListening polls address until it accepts a TCP connection, failing the test if it does not
+// within serveUntilDoneBound.
+func waitListening(t *testing.T, address string) {
+	t.Helper()
+
+	deadline := time.Now().Add(serveUntilDoneBound)
+	dialer := new(net.Dialer)
+
+	for {
+		conn, dialErr := dialer.DialContext(t.Context(), "tcp", address)
+		if dialErr == nil {
+			_ = conn.Close()
+
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("%s not listening within %s: %v", address, serveUntilDoneBound, dialErr)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("wait for %s: %v", address, t.Context().Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestServeUntilDone_ListenFailure(t *testing.T) {
+	blocker, listenErr := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if listenErr != nil {
+		t.Fatalf("occupy a port: %v", listenErr)
+	}
+
+	t.Cleanup(func() { _ = blocker.Close() })
+
+	rootContext, cancelRoot := context.WithCancel(t.Context())
+	t.Cleanup(cancelRoot)
+
+	// Stands in for the event listener and the poller: it only returns once rootContext ends.
+	var workerGroup sync.WaitGroup
+
+	workerDone := make(chan struct{})
+
+	workerGroup.Go(func() {
+		<-rootContext.Done()
+		close(workerDone)
+	})
+
+	exitCodes := make(chan int, 1)
+
+	go func() {
+		exitCodes <- serveUntilDone(
+			rootContext,
+			cancelRoot,
+			&workerGroup,
+			blocker.Addr().String(),
+			http.NotFoundHandler(),
+		)
+	}()
+
+	exitCode := waitExitCode(t, exitCodes, "a bind failure")
+	if exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+
+	select {
+	case <-workerDone:
+	default:
+		t.Error("worker still running after serveUntilDone returned")
+	}
+}
+
+func TestServeUntilDone_CancelledExitsZero(t *testing.T) {
+	rootContext, cancelRoot := context.WithCancel(t.Context())
+	t.Cleanup(cancelRoot)
+
+	var workerGroup sync.WaitGroup
+
+	workerGroup.Go(func() { <-rootContext.Done() })
+
+	address := freeLocalAddress(t)
+	exitCodes := make(chan int, 1)
+
+	go func() {
+		exitCodes <- serveUntilDone(
+			rootContext,
+			cancelRoot,
+			&workerGroup,
+			address,
+			http.NotFoundHandler(),
+		)
+	}()
+
+	waitListening(t, address)
+	cancelRoot()
+
+	exitCode := waitExitCode(t, exitCodes, "cancellation")
+	if exitCode != 0 {
+		t.Errorf("exit code = %d, want 0", exitCode)
 	}
 }
