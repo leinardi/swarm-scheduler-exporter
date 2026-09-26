@@ -7,6 +7,35 @@ Install [`pre-commit`](https://pre-commit.com/), then install the hooks once wit
 
 `make check` runs the full pre-commit suite on every file, and `make check-stage` runs it on the staged files only.
 
+## Integration tests
+
+`make go-test-integration` builds the exporter and runs it against a throwaway Swarm: one manager and two workers, each a
+privileged `docker:dind` container on your Docker daemon, joined over a dedicated bridge network. The tests live in
+`test/integration` behind the `integration` build tag, the harness in `internal/testenv`. The same suite runs on every pull
+request (`.github/workflows/integration.yaml`).
+
+Prerequisites: a Docker daemon that allows privileged containers. The host may itself be a Swarm node: the test Swarm lives
+entirely inside the DinD containers, and nothing on the host daemon is touched except the labelled containers and network the run
+creates and removes. The nodes never pull from a registry: the workload image is pulled once on the host and loaded into each of
+them.
+
+```sh
+make go-test-integration                            # the whole suite
+make go-test-integration RUN='^TestNode_'           # only the tests matching a regexp
+make go-test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden files under test/integration/testdata
+make go-vet-integration                             # go vet, including the integration-tagged code
+```
+
+- `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails, and prints the manager's address
+  (`DOCKER_HOST=tcp://127.0.0.1:<port> docker node ls`) and the command that removes it.
+- `SSE_IT_WORKERS` changes the number of workers, `SSE_IT_DIND_IMAGE` the `docker:dind` image, and `SSE_IT_SUITE_TIMEOUT`
+  (default `12m`) the deadline after which every waiting test fails and teardown runs.
+
+Every container and network a run creates carries the `swarm-scheduler-exporter.it.envid` label. At start-up the run logs a
+cleanup command for its own resources (`docker ps -aq --filter label=swarm-scheduler-exporter.it.envid=<id> | xargs -r docker rm -fv; …`),
+so a run killed half-way can still be cleaned up by hand, and each run removes environments older than an hour. `make
+sweep-test-leaks` removes every labelled environment, whatever its age — do not run it while another run is in progress.
+
 ## Commit messages
 
 All commits must follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) with a scope:
