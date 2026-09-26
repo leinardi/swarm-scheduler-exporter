@@ -139,12 +139,14 @@ func (w *metricWant) check(scraped *scrape) (string, bool) {
 		}
 
 		return fmt.Sprintf("%d series", len(found)), false
-	case len(found) == 0:
-		return "absent", false
 	case w.sum:
+		// A family that only emits the combinations present (nodes_by_state) drops a series
+		// rather than zeroing it, so no series sums to zero.
 		total := scraped.sum(w.name, w.labels)
 
 		return formatValue(total), total == w.value
+	case len(found) == 0:
+		return "absent", false
 	case len(found) > 1:
 		return fmt.Sprintf("%d series", len(found)), false
 	case w.positive:
