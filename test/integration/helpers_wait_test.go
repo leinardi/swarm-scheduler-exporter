@@ -103,11 +103,12 @@ func waitForFreshPoll(t *testing.T, baseURL string) {
 
 // metricWant is one expectation on a scrape.
 type metricWant struct {
-	name   string
-	labels map[string]string
-	value  float64
-	sum    bool // compare the sum over every matching series instead of a single series
-	absent bool // expect no matching series at all
+	name     string
+	labels   map[string]string
+	value    float64
+	sum      bool // compare the sum over every matching series instead of a single series
+	absent   bool // expect no matching series at all
+	positive bool // expect a single series with any value above zero (value is ignored)
 }
 
 func want(name string, labels map[string]string, value float64) metricWant {
@@ -116,6 +117,10 @@ func want(name string, labels map[string]string, value float64) metricWant {
 
 func wantSum(name string, labels map[string]string, value float64) metricWant {
 	return metricWant{name: name, labels: labels, value: value, sum: true}
+}
+
+func wantPositive(name string, labels map[string]string) metricWant {
+	return metricWant{name: name, labels: labels, positive: true}
 }
 
 func wantService(name string, svc serviceKey, value float64) metricWant {
@@ -142,6 +147,8 @@ func (w *metricWant) check(scraped *scrape) (string, bool) {
 		return formatValue(total), total == w.value
 	case len(found) > 1:
 		return fmt.Sprintf("%d series", len(found)), false
+	case w.positive:
+		return formatValue(found[0].value), found[0].value > 0
 	default:
 		return formatValue(found[0].value), found[0].value == w.value
 	}
@@ -153,6 +160,8 @@ func (w *metricWant) expected() string {
 		return "absent"
 	case w.sum:
 		return "sum " + formatValue(w.value)
+	case w.positive:
+		return "> 0"
 	default:
 		return formatValue(w.value)
 	}

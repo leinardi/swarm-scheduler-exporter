@@ -37,6 +37,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 	dockerclient "github.com/moby/moby/client"
 )
@@ -66,6 +67,7 @@ type serviceOpts struct {
 	constraints      []string
 	restartCondition swarm.RestartPolicyCondition // Swarm's default (any) when empty
 	updateConfig     *swarm.UpdateConfig
+	healthcheck      *container.HealthConfig
 	labels           map[string]string // extra service labels, e.g. for -label
 }
 
@@ -132,6 +134,7 @@ func serviceSpec(stack, name string, opts *serviceOpts) swarm.ServiceSpec {
 				Env:             opts.env,
 				Labels:          map[string]string{stackNamespaceLabel: stack},
 				StopGracePeriod: &stopGrace,
+				Healthcheck:     opts.healthcheck,
 			},
 			Placement: &swarm.Placement{Constraints: opts.constraints},
 		},
@@ -281,8 +284,6 @@ func (ti taskInfo) String() string {
 }
 
 // taskPlacement returns every task of the service — retired ones included — oldest first.
-//
-//nolint:unused // shared scenario helper, not every scenario uses it
 func taskPlacement(t *testing.T, serviceID string) []taskInfo {
 	t.Helper()
 
