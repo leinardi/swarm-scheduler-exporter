@@ -29,7 +29,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -50,16 +49,9 @@ const (
 	exporterReadyTimeout = 60 * time.Second
 	// exporterStopTimeout is how long a SIGTERMed exporter gets before it is killed.
 	exporterStopTimeout = 15 * time.Second
-
-	// The exporter logs a failed listen as this message, with the listen error in "err". It does
-	// not exit afterwards (it keeps waiting for its workers), so the log line is the only prompt
-	// signal of a lost port race.
-	httpServerErrorMsg = "http server error"
-	addrInUseText      = "address already in use"
 )
 
 var (
-	errBindFailed     = errors.New("exporter could not bind its port")
 	errExporterExited = errors.New("exporter exited")
 	errStopTimeout    = errors.New("exporter did not exit")
 )
@@ -74,8 +66,8 @@ var occupyFirstProbedPort bool
 // enough — it can turn 200 before the event listener has seeded the metadata cache.
 //
 // The child gets -listen-addr on a probed free port, -poll-delay 1s and -log-format json, then
-// args. The port can be taken between the probe and the child's bind; a bind failure (or any exit)
-// is detected and retried on a new port, up to exporterAttempts times. The exporter is stopped
+// args. The port can be taken between the probe and the child's bind; the exporter then exits
+// non-zero, and that exit (like any other) is detected and retried on a new port, up to exporterAttempts times. The exporter is stopped
 // with SIGTERM when the test ends, and its output is logged if the test failed.
 func startExporter(t *testing.T, services []serviceKey, args ...string) string {
 	t.Helper()
@@ -134,7 +126,7 @@ func startExporter(t *testing.T, services []serviceKey, args ...string) string {
 			return baseURL
 		}
 
-		if !errors.Is(err, errBindFailed) && !errors.Is(err, errExporterExited) {
+		if !errors.Is(err, errExporterExited) {
 			t.Fatalf("exporter not ready: %v", err)
 		}
 
@@ -231,8 +223,8 @@ func launchExporter(ctx context.Context, port int, args []string) (*exporterProc
 	return proc, nil
 }
 
-// waitReady waits for the exporter to be healthy and seeded. It returns errBindFailed or
-// errExporterExited, which the caller retries, as soon as either happens.
+// waitReady waits for the exporter to be healthy and seeded. It returns errExporterExited, which
+// the caller retries, as soon as the exporter exits (a lost port race ends that way too).
 func (p *exporterProc) waitReady(ctx context.Context, baseURL string, services []serviceKey) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -243,12 +235,10 @@ func (p *exporterProc) waitReady(ctx context.Context, baseURL string, services [
 	for {
 		lastErr := p.readiness(ctx, baseURL, services)
 
-		// A foreign server that grabbed the port could answer; the bind failure is logged long
-		// before seeded metrics could appear, so checking it after a successful probe settles
-		// whose metrics those were.
+		// A foreign process that grabbed the port could answer, but it cannot have served seeded
+		// exporter metrics before our exporter, failing to bind, exited: checking the exit after
+		// a successful probe settles whose metrics those were.
 		select {
-		case <-p.output.bindFailed:
-			return errBindFailed
 		case <-p.exited:
 			return errExporterExited
 		default:
@@ -259,8 +249,6 @@ func (p *exporterProc) waitReady(ctx context.Context, baseURL string, services [
 		}
 
 		select {
-		case <-p.output.bindFailed:
-			return errBindFailed
 		case <-p.exited:
 			return errExporterExited
 		case <-ctx.Done():
@@ -338,17 +326,15 @@ func (p *exporterProc) stop(ctx context.Context) error {
 	return fmt.Errorf("%w within %s of SIGTERM; killed", errStopTimeout, exporterStopTimeout)
 }
 
-// outputWatcher collects the child's output and scans it line by line for the bind failure.
+// outputWatcher collects the child's output. The mutex orders exec's writes against String, which
+// the test goroutine calls while the child is still running.
 type outputWatcher struct {
-	mu         sync.Mutex
-	all        bytes.Buffer
-	partial    []byte
-	bindFailed chan struct{}
-	bindOnce   sync.Once
+	mu  sync.Mutex
+	all bytes.Buffer
 }
 
 func newOutputWatcher() *outputWatcher {
-	return &outputWatcher{bindFailed: make(chan struct{})}
+	return &outputWatcher{}
 }
 
 func (w *outputWatcher) Write(chunk []byte) (int, error) {
@@ -356,17 +342,6 @@ func (w *outputWatcher) Write(chunk []byte) (int, error) {
 	defer w.mu.Unlock()
 
 	w.all.Write(chunk)
-	w.partial = append(w.partial, chunk...)
-
-	for {
-		end := bytes.IndexByte(w.partial, '\n')
-		if end < 0 {
-			break
-		}
-
-		w.scanLine(w.partial[:end])
-		w.partial = w.partial[end+1:]
-	}
 
 	return len(chunk), nil
 }
@@ -376,19 +351,4 @@ func (w *outputWatcher) String() string {
 	defer w.mu.Unlock()
 
 	return w.all.String()
-}
-
-func (w *outputWatcher) scanLine(line []byte) {
-	var entry struct {
-		Msg string `json:"msg"`
-		Err string `json:"err"`
-	}
-
-	if json.Unmarshal(line, &entry) != nil {
-		return
-	}
-
-	if entry.Msg == httpServerErrorMsg && strings.Contains(entry.Err, addrInUseText) {
-		w.bindOnce.Do(func() { close(w.bindFailed) })
-	}
 }
