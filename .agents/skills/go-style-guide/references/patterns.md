@@ -148,11 +148,16 @@ for index := range services { // avoid copying large struct
 
 ### Server with explicit timeouts, graceful shutdown
 
-`runHTTPServer` in `main.go`:
+`runHTTPServer` in `main.go` binds the address, then `serveHTTP` serves on the listener:
 
 ```go
+listener, listenErr := new(net.ListenConfig).Listen(parentContext, "tcp", address)
+if listenErr != nil {
+    return fmt.Errorf("http listen: %w", listenErr)
+}
+
+// serveHTTP(parentContext, listener, handler):
 httpServer := &http.Server{
-    Addr:              address,
     Handler:           handler,
     ReadHeaderTimeout: 5 * time.Second,
     ReadTimeout:       10 * time.Second,
@@ -163,7 +168,7 @@ httpServer := &http.Server{
 errorChannel := make(chan error, 1)
 
 go func() {
-    errorChannel <- httpServer.ListenAndServe()
+    errorChannel <- httpServer.Serve(listener)
 }()
 
 var resultError error
@@ -173,7 +178,10 @@ case resultError = <-errorChannel:
 case <-parentContext.Done():
 }
 
-shutdownContext, shutdownCancel := context.WithTimeout(parentContext, httpShutdownTimeout)
+shutdownContext, shutdownCancel := context.WithTimeout(
+    context.WithoutCancel(parentContext),
+    httpShutdownTimeout,
+)
 defer shutdownCancel()
 
 shutdownErr := httpServer.Shutdown(shutdownContext)
@@ -182,10 +190,9 @@ if shutdownErr != nil {
 }
 ```
 
-Note that the shutdown context above derives from `parentContext`, which is already done when
-shutdown was triggered by a signal, so `Shutdown` does not actually wait up to
-`httpShutdownTimeout` for in-flight scrapes. New code that needs a real drain derives the
-timeout from `context.WithoutCancel(parentContext)` instead.
+The shutdown context is detached from `parentContext` because that context is already done when
+shutdown was triggered by a signal, and `Shutdown` given a done context returns at once instead
+of waiting up to `httpShutdownTimeout` for in-flight scrapes.
 
 ### Handler and mux construction
 
