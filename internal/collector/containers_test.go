@@ -27,9 +27,11 @@ package collector
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var errInspectFailed = errors.New("inspect failed")
@@ -496,4 +498,99 @@ func TestPollContainersState_InspectCapHonored(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("inspect calls = %d, want 1 (cap=1)", calls)
 	}
+}
+
+// ---- UpdateContainersStateGauge ----
+
+// containerRow is a row as PollContainersState returns it, for a plain container.
+func containerRow(name, state, exitCode string) prometheus.Labels {
+	return prometheus.Labels{
+		"project":        "",
+		labelStack:       "",
+		labelService:     "",
+		labelContainer:   name,
+		"orchestrator":   orchestratorNone,
+		labelDisplayName: name,
+		labelState:       state,
+		"exit_code":      exitCode,
+	}
+}
+
+// containerStateSeriesID is the seriesID of the state series of row.
+func containerStateSeriesID(row prometheus.Labels, state string) string {
+	labels := prometheus.Labels{}
+	maps.Copy(labels, row)
+
+	labels[labelState] = state
+
+	return seriesID(containerStateFQName, labels)
+}
+
+// expectedContainerSeries is the one-hot set rows publish: every known state per row, 1 for its own.
+func expectedContainerSeries(rows ...prometheus.Labels) map[string]float64 {
+	expected := make(map[string]float64)
+
+	for _, row := range rows {
+		for _, state := range knownContainerStates {
+			value := 0.0
+			if row[labelState] == state {
+				value = 1
+			}
+
+			expected[containerStateSeriesID(row, state)] = value
+		}
+	}
+
+	return expected
+}
+
+func TestUpdateContainersStateGauge_OneHotPerContainer(t *testing.T) {
+	family := installContainersStateGauge(t)
+
+	running := containerRow("web", containerStateRunning, "")
+	exited := containerRow("job", containerStateExited, "1")
+
+	UpdateContainersStateGauge([]prometheus.Labels{running, exited})
+
+	assertGathered(t, family, expectedContainerSeries(running, exited))
+}
+
+func TestUpdateContainersStateGauge_Disabled_PublishesNothing(t *testing.T) {
+	family := installContainersStateGauge(t)
+	containersEnabled = false
+
+	UpdateContainersStateGauge([]prometheus.Labels{containerRow("web", containerStateRunning, "")})
+
+	assertGathered(t, family, map[string]float64{})
+}
+
+// TestUpdateContainersStateGauge_BuildDoesNotPublish checks that a scrape sees the whole
+// previous set while the next one is being built (#72).
+func TestUpdateContainersStateGauge_BuildDoesNotPublish(t *testing.T) {
+	family := installContainersStateGauge(t)
+
+	rowsA := []prometheus.Labels{
+		containerRow("a1", containerStateRunning, ""),
+		containerRow("a2", containerStateExited, "137"),
+	}
+	rowsB := []prometheus.Labels{containerRow("b1", containerStateHealthy, "")}
+
+	expectedA := expectedContainerSeries(rowsA...)
+	expectedB := expectedContainerSeries(rowsB...)
+
+	UpdateContainersStateGauge(rowsA)
+	assertGathered(t, family, expectedA)
+
+	builder := buildContainersState(family, rowsB)
+	assertGathered(t, family, expectedA)
+
+	metrics, buildErr := builder.build()
+	if buildErr != nil {
+		t.Fatalf("build B: %v", buildErr)
+	}
+
+	assertGathered(t, family, expectedA)
+
+	family.publish(metrics)
+	assertGathered(t, family, expectedB)
 }

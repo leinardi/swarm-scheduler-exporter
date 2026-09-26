@@ -103,7 +103,7 @@ var (
 	//                Else fallback to container name.
 	//   state        (see knownContainerStates)
 	//   exit_code    string exit code when state="exited", else ""
-	containersStateGauge *prometheus.GaugeVec
+	containersStateGauge *snapshotFamily
 )
 
 // inspectNeed enumerates enrichment needs per container.
@@ -130,6 +130,12 @@ func ConfigureContainersStateGauge() {
 		return
 	}
 
+	containersStateGauge = newContainersStateFamily()
+	prometheus.MustRegister(containersStateGauge)
+}
+
+// newContainersStateFamily returns the swarm_container_state collector with nothing published.
+func newContainersStateFamily() *snapshotFamily {
 	baseLabels := []string{
 		"project",
 		labelStack,
@@ -141,15 +147,11 @@ func ConfigureContainersStateGauge() {
 		"exit_code",
 	}
 
-	containersStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   labelContainer,
-		Name:        labelState,
-		Help:        "Container state info (exactly one state=1 per container). Includes exit_code for exited.",
-		ConstLabels: nil,
-	}, labelutil.SanitizeLabelNames(baseLabels))
-
-	prometheus.MustRegister(containersStateGauge)
+	return newSnapshotFamily(
+		prometheus.BuildFQName(prometheusNamespace, labelContainer, labelState),
+		"Container state info (exactly one state=1 per container). Includes exit_code for exited.",
+		labelutil.SanitizeLabelNames(baseLabels),
+	)
 }
 
 // EnableContainersMetrics toggles the container collector (wired from main).
@@ -257,14 +259,29 @@ func PollContainersState(
 	return out, nil
 }
 
-// UpdateContainersStateGauge emits one-hot state series per container.
-// It resets the vector first to drop vanished containers.
+// UpdateContainersStateGauge publishes one-hot state series per container. The whole set is
+// built first and replaces the previous one in a single swap, so vanished containers are dropped
+// without a scrape ever seeing the family empty or half rebuilt. If the build fails, the previous
+// set stays.
 func UpdateContainersStateGauge(rows []prometheus.Labels) {
 	if !containersEnabled || containersStateGauge == nil {
 		return
 	}
 
-	containersStateGauge.Reset()
+	metrics, buildErr := buildContainersState(containersStateGauge, rows).build()
+	if buildErr != nil {
+		logger.L().Error("build container state snapshot; keeping previous", "err", buildErr)
+
+		return
+	}
+
+	containersStateGauge.publish(metrics)
+}
+
+// buildContainersState records the one-hot state series of every container in rows without
+// publishing them.
+func buildContainersState(family *snapshotFamily, rows []prometheus.Labels) *snapshotBuilder {
+	builder := newSnapshotBuilder()
 
 	for rowIdx := range rows {
 		// We expect these prefilled:
@@ -290,9 +307,11 @@ func UpdateContainersStateGauge(rows []prometheus.Labels) {
 				value = 1.0
 			}
 
-			containersStateGauge.With(labelutil.SanitizeMetricLabels(lbls)).Set(value)
+			builder.set(family.desc, family.labelNames, labelutil.SanitizeMetricLabels(lbls), value)
 		}
 	}
+
+	return builder
 }
 
 // --- helpers ---

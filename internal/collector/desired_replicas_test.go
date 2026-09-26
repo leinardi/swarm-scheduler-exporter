@@ -399,7 +399,7 @@ func TestProcessEvent_NodeUpdate_TriggersNodeListRefresh(t *testing.T) {
 	resetCollectorState(t)
 	installDesiredReplicasGauges(t)
 	installServiceUpdateGauges(t)
-	installLocalNodeGauge(t)
+	installNodesByStateGauge(t)
 
 	fd := &fakeDocker{nodes: []swarm.Node{makeSchedulableNode("n1", "h1")}}
 
@@ -500,7 +500,7 @@ func TestRefreshNodesAndRecomputeGlobals_RecomputesGlobalService(t *testing.T) {
 	resetCollectorState(t)
 	desired := installDesiredReplicasGauges(t)
 	installServiceUpdateGauges(t)
-	installLocalNodeGauge(t)
+	installNodesByStateGauge(t)
 
 	// Seed a global service.
 	glbSvc := makeGlobalService("glb1", "stack", "worker")
@@ -535,7 +535,7 @@ func TestRefreshNodesAndRecomputeGlobals_GoneService_SkippedNotError(t *testing.
 	resetCollectorState(t)
 	installDesiredReplicasGauges(t)
 	installServiceUpdateGauges(t)
-	installLocalNodeGauge(t)
+	installNodesByStateGauge(t)
 
 	// Seed a global service that has disappeared from Docker.
 	glbMd := makeTestMetadata("stack", "gone", serviceModeGlobal)

@@ -263,24 +263,37 @@ const (
     labelNodeStatus       = "status"
 )
 
-var nodesByStateGauge *prometheus.GaugeVec
+var nodesByStateGauge *snapshotFamily
 
 func ConfigureNodesByStateGauge() {
-    nodesByStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-        Namespace:   prometheusNamespace,
-        Subsystem:   prometheusClusterSubsystem,
-        Name:        "nodes_by_state",
-        Help:        "Number of Swarm nodes grouped by role, availability, and status.",
-        ConstLabels: nil,
-    }, []string{labelNodeRole, labelNodeAvailability, labelNodeStatus})
+    nodesByStateGauge = newNodesByStateFamily()
     prometheus.MustRegister(nodesByStateGauge)
+}
+
+func newNodesByStateFamily() *snapshotFamily {
+    return newSnapshotFamily(
+        prometheus.BuildFQName(prometheusNamespace, prometheusClusterSubsystem, "nodes_by_state"),
+        "Number of Swarm nodes grouped by role, availability, and status.",
+        []string{labelNodeRole, labelNodeAvailability, labelNodeStatus},
+    )
 }
 ```
 
-### Nil guard before `Configure…` has run
+A family updated one series at a time is a `GaugeVec`, with `ConstLabels: nil` set explicitly
+(`desired_replicas.go`):
 
-`UpdateNodesByStateFromSlice` and `UpdateReplicasStateGauge` call `Reset()` without this guard.
-They predate the rule and are not a precedent.
+```go
+desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+    Namespace:   prometheusNamespace,
+    Subsystem:   prometheusServiceSubsystem,
+    Name:        "desired_replicas",
+    Help:        "Number of desired replicas for a Swarm service (...).",
+    ConstLabels: nil,
+}, labelutil.SanitizeLabelNames(baseLabels))
+prometheus.MustRegister(desiredReplicasGauge)
+```
+
+### Nil guard before `Configure…` has run
 
 ```go
 func ObservePollDuration(duration time.Duration) {
@@ -292,16 +305,33 @@ func ObservePollDuration(duration time.Duration) {
 }
 ```
 
-### Reset before re-emission
+### Publish rebuilt sets as a snapshot
 
-A gauge describing the current members of a dynamic set drops what is no longer there
-(`UpdateNodesByStateFromSlice`):
+A family whose full set is recomputed on every update is built off to the side and swapped in
+whole, so series that are gone disappear without a scrape ever seeing the family empty or half
+rebuilt (`UpdateNodesByStateFromSlice`):
 
 ```go
-// Reset to avoid ghost series for statuses we no longer see.
-nodesByStateGauge.Reset()
-// then re-emit every current series
+func UpdateNodesByStateFromSlice(nodes []swarm.Node) {
+    if nodesByStateGauge == nil {
+        return
+    }
+
+    metrics, buildErr := buildNodesByState(nodesByStateGauge, nodes).build()
+    if buildErr != nil {
+        logger.L().Error("build nodes by state snapshot; keeping previous", "err", buildErr)
+
+        return
+    }
+
+    nodesByStateGauge.publish(metrics)
+}
 ```
+
+The build function is pure: it only records series on a `snapshotBuilder`
+(`builder.set(family.desc, family.labelNames, labels, value)`) and never touches what is
+published. Do not `Reset()` a `GaugeVec` and re-`Set` it: the vec is locked per operation, not
+across the rebuild.
 
 ### Exhaustive zero emission
 
@@ -314,7 +344,7 @@ var knownTaskStates = []string{
 
 for _, state := range knownTaskStates {
     labels[labelState] = state
-    gauge.With(labels).Set(counts[state]) // 0 for states with no tasks
+    builder.set(families.stateDesc, families.stateLabelNames, labels, counts[state]) // 0 for states with no tasks
 }
 ```
 

@@ -41,9 +41,7 @@ func TestConfigureDesiredReplicasGauge_RegistersWithoutPanic(t *testing.T) {
 func TestConfigureReplicasStateGauge_RegistersWithoutPanic(t *testing.T) {
 	ConfigureReplicasStateGauge()
 	t.Cleanup(func() {
-		prometheus.Unregister(replicasStateGauge)
-		prometheus.Unregister(runningReplicasGauge)
-		prometheus.Unregister(atDesiredGauge)
+		prometheus.Unregister(replicasStateCollector)
 	})
 }
 

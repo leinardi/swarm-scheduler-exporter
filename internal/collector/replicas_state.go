@@ -88,14 +88,26 @@ var retiredDesiredStates = map[swarm.TaskState]struct{}{
 	swarm.TaskStateOrphaned: {},
 }
 
-// replicasStateGauge is the gauge vector exported at /metrics.
-var replicasStateGauge *prometheus.GaugeVec
+// replicasStateCollector exposes the three families computed from one poll: replicas_state,
+// running_replicas and at_desired. They share one snapshot, so a scrape never pairs the
+// running_replicas of one poll with the at_desired of another.
+var replicasStateCollector *replicasStateSnapshot
 
-// runningReplicasGauge exposes the current number of running tasks per service.
-var runningReplicasGauge *prometheus.GaugeVec
+// replicasStateSnapshot is the snapshot collector of the replicas-state families, with their
+// descriptors and the label names each was built with.
+type replicasStateSnapshot struct {
+	*snapshotCollector
 
-// atDesiredGauge exposes 1 if running_replicas == desired_replicas, else 0.
-var atDesiredGauge *prometheus.GaugeVec
+	// stateDesc is swarm_task_replicas_state: tasks per service per task state.
+	stateDesc *prometheus.Desc
+	// runningDesc is swarm_service_running_replicas: running tasks per service.
+	runningDesc *prometheus.Desc
+	// atDesiredDesc is swarm_service_at_desired: 1 if running == desired replicas, else 0.
+	atDesiredDesc *prometheus.Desc
+
+	stateLabelNames   []string
+	serviceLabelNames []string
+}
 
 var atDesiredLogState sync.Map // map[string]string (serviceID -> "running|desired")
 
@@ -118,53 +130,64 @@ type latestKey struct {
 	nodeID    string // for global; empty for replicated
 }
 
-// ConfigureReplicasStateGauge registers the "swarm_task_replicas_state" gauge
-// with base labels (stack, service, service_mode, state) plus any custom labels.
+// ConfigureReplicasStateGauge registers the "swarm_task_replicas_state",
+// "swarm_service_running_replicas" and "swarm_service_at_desired" gauges with base labels
+// (stack, service, service_mode, display_name; plus state for replicas_state) and any custom
+// labels.
 func ConfigureReplicasStateGauge() {
-	baseLabels := append([]string{
+	replicasStateCollector = newReplicasStateSnapshot(getSanitizedCustomLabelNames())
+	prometheus.MustRegister(replicasStateCollector)
+}
+
+// newReplicasStateSnapshot builds the descriptors of the replicas-state families, with
+// customLabelNames appended after the base labels, and a collector with nothing published.
+func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot {
+	stateLabelNames := labelutil.SanitizeLabelNames(append([]string{
 		labelStack,
 		labelService,
 		labelServiceMode,
 		labelDisplayName,
 		labelState,
-	}, getSanitizedCustomLabelNames()...)
+	}, customLabelNames...))
 
-	replicasStateGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: prometheusNamespace,
-		Subsystem: prometheusTaskSubsystem,
-		Name:      "replicas_state",
-		Help: "Number of tasks per Swarm service segmented by task state " +
-			"(current task per slot for replicated services or node for global services).",
-		ConstLabels: nil,
-	}, labelutil.SanitizeLabelNames(baseLabels))
-	prometheus.MustRegister(replicasStateGauge)
-
-	// New: running replicas (no "state" label)
-	runningBase := append([]string{
+	serviceLabelNames := labelutil.SanitizeLabelNames(append([]string{
 		labelStack,
 		labelService,
 		labelServiceMode,
 		labelDisplayName,
-	}, getSanitizedCustomLabelNames()...)
-	runningReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: prometheusNamespace,
-		Subsystem: prometheusServiceSubsystem,
-		Name:      "running_replicas",
-		Help: "Current number of running tasks per Swarm service " +
-			"(current task per slot for replicated services or node for global services).",
-		ConstLabels: nil,
-	}, labelutil.SanitizeLabelNames(runningBase))
-	prometheus.MustRegister(runningReplicasGauge)
+	}, customLabelNames...))
 
-	// New: at_desired (0/1)
-	atDesiredGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusServiceSubsystem,
-		Name:        "at_desired",
-		Help:        "Service is at desired replicas (1) or not (0).",
-		ConstLabels: nil,
-	}, labelutil.SanitizeLabelNames(runningBase))
-	prometheus.MustRegister(atDesiredGauge)
+	stateDesc := prometheus.NewDesc(
+		prometheus.BuildFQName(prometheusNamespace, prometheusTaskSubsystem, "replicas_state"),
+		"Number of tasks per Swarm service segmented by task state "+
+			"(current task per slot for replicated services or node for global services).",
+		stateLabelNames,
+		nil,
+	)
+
+	runningDesc := prometheus.NewDesc(
+		prometheus.BuildFQName(prometheusNamespace, prometheusServiceSubsystem, "running_replicas"),
+		"Current number of running tasks per Swarm service "+
+			"(current task per slot for replicated services or node for global services).",
+		serviceLabelNames,
+		nil,
+	)
+
+	atDesiredDesc := prometheus.NewDesc(
+		prometheus.BuildFQName(prometheusNamespace, prometheusServiceSubsystem, "at_desired"),
+		"Service is at desired replicas (1) or not (0).",
+		serviceLabelNames,
+		nil,
+	)
+
+	return &replicasStateSnapshot{
+		snapshotCollector: newSnapshotCollector(stateDesc, runningDesc, atDesiredDesc),
+		stateDesc:         stateDesc,
+		runningDesc:       runningDesc,
+		atDesiredDesc:     atDesiredDesc,
+		stateLabelNames:   stateLabelNames,
+		serviceLabelNames: serviceLabelNames,
+	}
 }
 
 // PollReplicasState lists tasks and aggregates them by state per service,
@@ -296,21 +319,33 @@ func addServicesWithoutTasks(replicasByService serviceCounter, queriedServiceIDs
 	}
 }
 
-// UpdateReplicasStateGauge writes the aggregated state counters into the
-// "swarm_service_replicas_state" gauge. It resets the vector first so series
-// for services that disappeared are removed. For each service present in the
-// current snapshot, it emits ALL known states, setting 0 where absent.
+// UpdateReplicasStateGauge publishes the aggregated state counters as the replicas_state,
+// running_replicas and at_desired families. The whole set is built first and replaces the
+// previous one in a single swap, so services that disappeared are dropped without a scrape ever
+// seeing the families empty or half rebuilt. If the build fails, the previous set stays.
 func UpdateReplicasStateGauge(counterByService serviceCounter) {
-	// Drop all previous label sets for these vectors.
-	replicasStateGauge.Reset()
-
-	if runningReplicasGauge != nil {
-		runningReplicasGauge.Reset()
+	if replicasStateCollector == nil {
+		return
 	}
 
-	if atDesiredGauge != nil {
-		atDesiredGauge.Reset()
+	metrics, buildErr := buildReplicasState(replicasStateCollector, counterByService).build()
+	if buildErr != nil {
+		logger.L().Error("build replicas state snapshot; keeping previous", "err", buildErr)
+
+		return
 	}
+
+	replicasStateCollector.publish(metrics)
+}
+
+// buildReplicasState records the series of every service in counterByService, for all three
+// families, without publishing them. For each service it emits ALL known states, setting 0
+// where absent.
+func buildReplicasState(
+	families *replicasStateSnapshot,
+	counterByService serviceCounter,
+) *snapshotBuilder {
+	builder := newSnapshotBuilder()
 
 	for serviceID, taskCounterValue := range counterByService {
 		baseLabels := labelutil.SanitizeMetricLabels(taskCounterValue.labels)
@@ -323,27 +358,25 @@ func UpdateReplicasStateGauge(counterByService serviceCounter) {
 			labels[labelState] = state
 
 			value := taskCounterValue.states[state] // zero if missing
-			replicasStateGauge.With(labels).Set(value)
+			builder.set(families.stateDesc, families.stateLabelNames, labels, value)
 		}
 
-		if runningReplicasGauge != nil {
-			running := taskCounterValue.states[string(swarm.TaskStateRunning)]
-			runningReplicasGauge.With(baseLabels).Set(running)
-		}
+		running := taskCounterValue.states[string(swarm.TaskStateRunning)]
+		builder.set(families.runningDesc, families.serviceLabelNames, baseLabels, running)
 
-		setAtDesiredForService(serviceID, baseLabels, taskCounterValue)
+		setAtDesiredForService(builder, families, serviceID, baseLabels, taskCounterValue)
 	}
+
+	return builder
 }
 
 func setAtDesiredForService(
+	builder *snapshotBuilder,
+	families *replicasStateSnapshot,
 	serviceID string,
 	baseLabels prometheus.Labels,
 	taskCounterValue taskCounter,
 ) {
-	if atDesiredGauge == nil {
-		return
-	}
-
 	running := taskCounterValue.states[string(swarm.TaskStateRunning)]
 
 	desired, foundDesired := getServiceDesiredReplicas(serviceID)
@@ -356,7 +389,7 @@ func setAtDesiredForService(
 			"running", running,
 		)
 
-		atDesiredGauge.With(baseLabels).Set(0)
+		builder.set(families.atDesiredDesc, families.serviceLabelNames, baseLabels, 0)
 
 		return
 	}
@@ -368,7 +401,7 @@ func setAtDesiredForService(
 		logAtDesiredMismatchOncePerChange(serviceID, baseLabels, running, desired)
 	}
 
-	atDesiredGauge.With(baseLabels).Set(atDesired)
+	builder.set(families.atDesiredDesc, families.serviceLabelNames, baseLabels, atDesired)
 }
 
 func logAtDesiredMismatchOncePerChange(

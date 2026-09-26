@@ -27,13 +27,14 @@ package collector
 import (
 	"context"
 	"errors"
+	"maps"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 var errTaskListFailed = errors.New("docker down")
@@ -446,7 +447,7 @@ func TestPollReplicasState_TaskListError(t *testing.T) {
 
 func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
 	resetCollectorState(t)
-	rrg, adg := installReplicasStateGauges(t)
+	families := installReplicasStateGauges(t)
 
 	// A global service no node is eligible for: no tasks, desired 0.
 	unscheduledGlobal := makeTestMetadata("s", "glb", serviceModeGlobal)
@@ -481,16 +482,17 @@ func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
 
 	UpdateReplicasStateGauge(sc)
 
-	// Count before any With() call, which would create the series being asserted on.
-	if got := testutil.CollectAndCount(rrg); got != 3 {
+	gathered := gatherSeries(t, families)
+
+	if got := len(familySeries(gathered, runningReplicasFQName)); got != 3 {
 		t.Errorf("running_replicas series = %d, want 3", got)
 	}
 
-	if got := testutil.CollectAndCount(adg); got != 3 {
+	if got := len(familySeries(gathered, atDesiredFQName)); got != 3 {
 		t.Errorf("at_desired series = %d, want 3", got)
 	}
 
-	if got := testutil.CollectAndCount(replicasStateGauge); got != 3*len(knownTaskStates) {
+	if got := len(familySeries(gathered, replicasStateFQName)); got != 3*len(knownTaskStates) {
 		t.Errorf("replicas_state series = %d, want %d", got, 3*len(knownTaskStates))
 	}
 
@@ -504,12 +506,25 @@ func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
 	}
 	for _, tc := range cases {
 		lbls := serviceLabels("s", tc.service, tc.mode)
-		if got := testutil.ToFloat64(rrg.With(lbls)); got != tc.running {
-			t.Errorf("[%s] running_replicas = %v, want %v", tc.service, got, tc.running)
+		if got, found := gathered[seriesID(runningReplicasFQName, lbls)]; !found ||
+			got != tc.running {
+			t.Errorf(
+				"[%s] running_replicas = %v (found %v), want %v",
+				tc.service,
+				got,
+				found,
+				tc.running,
+			)
 		}
 
-		if got := testutil.ToFloat64(adg.With(lbls)); got != tc.atDesired {
-			t.Errorf("[%s] at_desired = %v, want %v", tc.service, got, tc.atDesired)
+		if got, found := gathered[seriesID(atDesiredFQName, lbls)]; !found || got != tc.atDesired {
+			t.Errorf(
+				"[%s] at_desired = %v (found %v), want %v",
+				tc.service,
+				got,
+				found,
+				tc.atDesired,
+			)
 		}
 	}
 }
@@ -553,7 +568,7 @@ func TestAddServicesWithoutTasks(t *testing.T) {
 
 func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {
 	resetCollectorState(t)
-	rrg, adg := installReplicasStateGauges(t)
+	families := installReplicasStateGauges(t)
 
 	md := makeTestMetadata("s", "sv", serviceModeReplicated)
 	setServiceMetadata("svc1", &md)
@@ -568,18 +583,30 @@ func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {
 
 	UpdateReplicasStateGauge(sc)
 
-	running := testutil.ToFloat64(rrg.With(prometheus.Labels{
-		labelStack: "s", labelService: "sv", labelServiceMode: serviceModeReplicated,
-		labelDisplayName: displayName("s", "sv"),
-	}))
+	running, found := snapshotValue(
+		t,
+		families,
+		runningReplicasFQName,
+		serviceLabels("s", "sv", serviceModeReplicated),
+	)
+	if !found {
+		t.Fatalf("running_replicas series missing")
+	}
+
 	if running != 3 {
 		t.Errorf("running_replicas = %v, want 3", running)
 	}
 
-	atDesired := testutil.ToFloat64(adg.With(prometheus.Labels{
-		labelStack: "s", labelService: "sv", labelServiceMode: serviceModeReplicated,
-		labelDisplayName: displayName("s", "sv"),
-	}))
+	atDesired, found := snapshotValue(
+		t,
+		families,
+		atDesiredFQName,
+		serviceLabels("s", "sv", serviceModeReplicated),
+	)
+	if !found {
+		t.Fatalf("at_desired series missing")
+	}
+
 	if atDesired != 1 {
 		t.Errorf("at_desired = %v, want 1 (running==desired)", atDesired)
 	}
@@ -587,7 +614,7 @@ func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {
 
 func TestUpdateReplicasStateGauge_NotAtDesired(t *testing.T) {
 	resetCollectorState(t)
-	_, adg := installReplicasStateGauges(t)
+	families := installReplicasStateGauges(t)
 
 	md := makeTestMetadata("s", "sv", serviceModeReplicated)
 	setServiceMetadata("svc1", &md)
@@ -600,10 +627,16 @@ func TestUpdateReplicasStateGauge_NotAtDesired(t *testing.T) {
 
 	UpdateReplicasStateGauge(sc)
 
-	atDesired := testutil.ToFloat64(adg.With(prometheus.Labels{
-		labelStack: "s", labelService: "sv", labelServiceMode: serviceModeReplicated,
-		labelDisplayName: displayName("s", "sv"),
-	}))
+	atDesired, found := snapshotValue(
+		t,
+		families,
+		atDesiredFQName,
+		serviceLabels("s", "sv", serviceModeReplicated),
+	)
+	if !found {
+		t.Fatalf("at_desired series missing")
+	}
+
 	if atDesired != 0 {
 		t.Errorf("at_desired = %v, want 0 (running != desired)", atDesired)
 	}
@@ -611,7 +644,7 @@ func TestUpdateReplicasStateGauge_NotAtDesired(t *testing.T) {
 
 func TestUpdateReplicasStateGauge_MissingDesiredCache_NoPanic(t *testing.T) {
 	resetCollectorState(t)
-	_, adg := installReplicasStateGauges(t)
+	families := installReplicasStateGauges(t)
 
 	// svc_nodesired not in metadata cache — getServiceDesiredReplicas returns false.
 	lbls := serviceLabels("s", "sv", serviceModeReplicated)
@@ -622,10 +655,16 @@ func TestUpdateReplicasStateGauge_MissingDesiredCache_NoPanic(t *testing.T) {
 	// Must not panic.
 	UpdateReplicasStateGauge(sc)
 
-	atDesired := testutil.ToFloat64(adg.With(prometheus.Labels{
-		labelStack: "s", labelService: "sv", labelServiceMode: serviceModeReplicated,
-		labelDisplayName: displayName("s", "sv"),
-	}))
+	atDesired, found := snapshotValue(
+		t,
+		families,
+		atDesiredFQName,
+		serviceLabels("s", "sv", serviceModeReplicated),
+	)
+	if !found {
+		t.Fatalf("at_desired series missing")
+	}
+
 	if atDesired != 0 {
 		t.Errorf("at_desired = %v, want 0 when desired cache missing", atDesired)
 	}
@@ -647,5 +686,208 @@ func TestServiceCounter_GetCreatesLazily(t *testing.T) {
 	_ = sc.get("svc2", labels)
 	if len(sc) != 2 {
 		t.Errorf("expected 2 entries after lazy create, got %d", len(sc))
+	}
+}
+
+// ---- Snapshot publication ----
+
+// replicasStateCounters returns a serviceCounter with one service per name in stack "s", each
+// with running tasks, after caching metadata and desired replicas for it.
+func replicasStateCounters(t *testing.T, running, desired float64, names ...string) serviceCounter {
+	t.Helper()
+
+	counters := make(serviceCounter, len(names))
+
+	for _, name := range names {
+		serviceID := "id_" + name
+		metadata := makeTestMetadata("s", name, serviceModeReplicated)
+		setServiceMetadata(serviceID, &metadata)
+		setServiceDesiredReplicas(serviceID, desired)
+
+		counter := newTaskCounter(serviceLabels("s", name, serviceModeReplicated))
+		for range int(running) {
+			counter.inc(string(swarm.TaskStateRunning))
+		}
+
+		counters[serviceID] = counter
+	}
+
+	return counters
+}
+
+// expectedReplicasStateSeries gathers what counters publish, from a separate collector.
+func expectedReplicasStateSeries(t *testing.T, counters serviceCounter) map[string]float64 {
+	t.Helper()
+
+	reference := newReplicasStateSnapshot(nil)
+
+	metrics, buildErr := buildReplicasState(reference, counters).build()
+	if buildErr != nil {
+		t.Fatalf("build reference snapshot: %v", buildErr)
+	}
+
+	reference.publish(metrics)
+
+	return gatherSeries(t, reference)
+}
+
+// TestUpdateReplicasStateGauge_BuildDoesNotPublish pins the fix for #72: while the next set is
+// being built, a scrape still sees the whole previous set, never an empty or partial one.
+func TestUpdateReplicasStateGauge_BuildDoesNotPublish(t *testing.T) {
+	resetCollectorState(t)
+	families := installReplicasStateGauges(t)
+
+	countersA := replicasStateCounters(t, 1, 1, "a1", "a2")
+	countersB := replicasStateCounters(t, 2, 3, "b1")
+
+	expectedA := expectedReplicasStateSeries(t, countersA)
+	expectedB := expectedReplicasStateSeries(t, countersB)
+
+	UpdateReplicasStateGauge(countersA)
+
+	if gathered := gatherSeries(t, families); !maps.Equal(gathered, expectedA) {
+		t.Fatalf("after publishing A gathered %v, want %v", gathered, expectedA)
+	}
+
+	builder := buildReplicasState(families, countersB)
+
+	if gathered := gatherSeries(t, families); !maps.Equal(gathered, expectedA) {
+		t.Fatalf("after building B gathered %v, want A %v", gathered, expectedA)
+	}
+
+	metrics, buildErr := builder.build()
+	if buildErr != nil {
+		t.Fatalf("build B: %v", buildErr)
+	}
+
+	if gathered := gatherSeries(t, families); !maps.Equal(gathered, expectedA) {
+		t.Fatalf("after build() of B gathered %v, want A %v", gathered, expectedA)
+	}
+
+	families.publish(metrics)
+
+	if gathered := gatherSeries(t, families); !maps.Equal(gathered, expectedB) {
+		t.Fatalf("after publishing B gathered %v, want %v", gathered, expectedB)
+	}
+}
+
+// TestUpdateReplicasStateGauge_OnePublishUpdatesAllFamilies checks that replicas_state,
+// running_replicas and at_desired all move to the new poll together.
+func TestUpdateReplicasStateGauge_OnePublishUpdatesAllFamilies(t *testing.T) {
+	resetCollectorState(t)
+	families := installReplicasStateGauges(t)
+
+	UpdateReplicasStateGauge(replicasStateCounters(t, 1, 2, "svc"))
+	UpdateReplicasStateGauge(replicasStateCounters(t, 2, 2, "svc"))
+
+	gathered := gatherSeries(t, families)
+	labels := serviceLabels("s", "svc", serviceModeReplicated)
+
+	stateLabels := prometheus.Labels{labelState: string(swarm.TaskStateRunning)}
+	maps.Copy(stateLabels, labels)
+
+	checks := []struct {
+		name string
+		id   string
+		want float64
+	}{
+		{name: "replicas_state running", id: seriesID(replicasStateFQName, stateLabels), want: 2},
+		{name: "running_replicas", id: seriesID(runningReplicasFQName, labels), want: 2},
+		{name: "at_desired", id: seriesID(atDesiredFQName, labels), want: 1},
+	}
+
+	for _, check := range checks {
+		if got, found := gathered[check.id]; !found || got != check.want {
+			t.Errorf("%s = %v (found %v), want %v", check.name, got, found, check.want)
+		}
+	}
+}
+
+// TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots is -race coverage for updates and
+// scrapes running together: UpdateReplicasStateGauge from the poller, and UpdateNodesByStateFromSlice
+// from two goroutines as concurrent event workers call it. It cannot reliably catch a partial
+// publish on its own: that is pinned by the BuildDoesNotPublish tests.
+func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
+	resetCollectorState(t)
+	families := installReplicasStateGauges(t)
+	nodesFamily := installNodesByStateGauge(t)
+
+	countersA := replicasStateCounters(t, 1, 1, "a1", "a2", "a3")
+	countersB := replicasStateCounters(t, 2, 3, "b1", "b2")
+
+	expectedA := expectedReplicasStateSeries(t, countersA)
+	expectedB := expectedReplicasStateSeries(t, countersB)
+
+	nodesA := testNodes(3, swarm.NodeRoleWorker)
+	nodesB := append(testNodes(2, swarm.NodeRoleManager), testNodes(1, swarm.NodeRoleWorker)...)
+
+	expectedNodesA := map[string]float64{nodeSeriesID("worker", "active", "ready"): 3}
+	expectedNodesB := map[string]float64{
+		nodeSeriesID("manager", "active", "ready"): 2,
+		nodeSeriesID("worker", "active", "ready"):  1,
+	}
+
+	UpdateReplicasStateGauge(countersA)
+	UpdateNodesByStateFromSlice(nodesA)
+
+	stop := make(chan struct{})
+
+	var updaters sync.WaitGroup
+
+	alternate := func(updateA, updateB func()) {
+		for index := 0; ; index++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+
+			if index%2 == 0 {
+				updateB()
+			} else {
+				updateA()
+			}
+		}
+	}
+
+	updaters.Go(func() {
+		alternate(
+			func() { UpdateReplicasStateGauge(countersA) },
+			func() { UpdateReplicasStateGauge(countersB) },
+		)
+	})
+
+	for range 2 {
+		updaters.Go(func() {
+			alternate(
+				func() { UpdateNodesByStateFromSlice(nodesA) },
+				func() { UpdateNodesByStateFromSlice(nodesB) },
+			)
+		})
+	}
+
+	defer func() {
+		close(stop)
+		updaters.Wait()
+	}()
+
+	const scrapes = 200
+
+	for range scrapes {
+		gathered := gatherSeries(t, families)
+		if !maps.Equal(gathered, expectedA) && !maps.Equal(gathered, expectedB) {
+			t.Fatalf("replicas scrape saw %v, want exactly snapshot A or B", gathered)
+		}
+
+		gatheredNodes := gatherSeries(t, nodesFamily)
+		if !maps.Equal(gatheredNodes, expectedNodesA) &&
+			!maps.Equal(gatheredNodes, expectedNodesB) {
+			t.Fatalf(
+				"nodes scrape saw %v, want exactly %v or %v",
+				gatheredNodes,
+				expectedNodesA,
+				expectedNodesB,
+			)
+		}
 	}
 }
