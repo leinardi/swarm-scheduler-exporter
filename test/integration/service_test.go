@@ -34,6 +34,9 @@ import (
 	"time"
 )
 
+// removalAbsencePolls is how many exporter polls must pass with no series for the removed service.
+const removalAbsencePolls = 3
+
 // TestService_Removed checks that removing a service deletes every one of its series rather than
 // leaving them at 0: a stale zero would read as "service down" forever.
 func TestService_Removed(t *testing.T) {
@@ -66,7 +69,7 @@ func TestService_Removed(t *testing.T) {
 
 	removeService(t, serviceID)
 
-	eventually(t, 60*time.Second, func(ctx context.Context) error {
+	noSeriesLeft := func(ctx context.Context) error {
 		scraped, err := scrapeMetrics(ctx, baseURL)
 		if err != nil {
 			return err
@@ -90,5 +93,11 @@ func TestService_Removed(t *testing.T) {
 		}
 
 		return nil
-	})
+	}
+
+	eventually(t, 60*time.Second, noSeriesLeft)
+
+	// Several families are reset and rewritten on every poll, so one scrape that lands mid-rewrite
+	// can miss series the exporter still reports: the absence has to hold across polls.
+	consistently(t, baseURL, removalAbsencePolls, noSeriesLeft)
 }

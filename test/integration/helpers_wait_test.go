@@ -101,6 +101,62 @@ func waitForFreshPoll(t *testing.T, baseURL string) {
 	})
 }
 
+// consistently checks a condition that must keep holding, such as "X is absent": it re-runs check
+// every pollInterval until the exporter has completed polls that started after the call,
+// and fails the test on the first error. eventually would be wrong here, since one passing scrape
+// proves little for an absence while one failing scrape proves the exporter reported X.
+func consistently(t *testing.T, baseURL string, polls int, check func(ctx context.Context) error) {
+	t.Helper()
+
+	ctx := testCtx(t)
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	deadline := time.NewTimer(time.Duration(polls+1) * 30 * time.Second)
+	defer deadline.Stop()
+
+	start := -1.0
+
+	for {
+		err := check(ctx)
+		if err != nil {
+			t.Fatalf("condition stopped holding: %v", err)
+		}
+
+		scraped, err := scrapeMetrics(ctx, baseURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		completed, ok := scraped.value(metricPollsTotal, nil)
+		if !ok {
+			t.Fatalf("no %s series", metricPollsTotal)
+		}
+
+		if start < 0 {
+			start = completed
+		}
+
+		// +1: the poll running when this started may have begun before it.
+		if completed >= start+float64(polls)+1 {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf(
+				"condition held, but the test ended before %d exporter polls: %v",
+				polls,
+				ctx.Err(),
+			)
+		case <-deadline.C:
+			t.Fatalf("condition held, but the exporter did not complete %d polls in time", polls)
+		case <-ticker.C:
+		}
+	}
+}
+
 // metricWant is one expectation on a scrape.
 type metricWant struct {
 	name     string

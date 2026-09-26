@@ -37,6 +37,9 @@ import (
 	dockerclient "github.com/moby/moby/client"
 )
 
+// containerAbsencePolls is how many consecutive exporter polls must leave the task container out.
+const containerAbsencePolls = 3
+
 // TestContainers_OptIn checks the opt-in container metrics against the manager's daemon: a plain
 // container is reported with -containers, while a Swarm task container on the same daemon is
 // reported only when -containers-include-swarm is set as well.
@@ -86,14 +89,25 @@ func TestContainers_OptIn(t *testing.T) {
 		"state":        "running",
 	}
 
-	// Both containers exist before the exporter starts, so the scrape that shows the plain one
-	// comes from a poll that also saw the task container, and skipped it.
+	// Both containers exist before the exporter starts, so every poll that reports the plain one
+	// also saw the task container, and must have skipped it.
 	defaultURL := startExporter(t, []serviceKey{pinned}, "-containers")
 
-	eventually(t, 60*time.Second, metricsMatch(defaultURL, stack,
-		want(metricContainerState, plain, 1),
-		wantAbsent(metricContainerState, task),
-	))
+	eventually(
+		t,
+		60*time.Second,
+		metricsMatch(defaultURL, stack, want(metricContainerState, plain, 1)),
+	)
+
+	// Absence has to hold, not just be seen once: the exporter resets the container gauge and
+	// re-adds its series one by one, so a scrape landing mid-rewrite can miss a container that
+	// the exporter does report.
+	consistently(
+		t,
+		defaultURL,
+		containerAbsencePolls,
+		metricsMatch(defaultURL, stack, wantAbsent(metricContainerState, task)),
+	)
 
 	includeURL := startExporter(t, []serviceKey{pinned}, "-containers", "-containers-include-swarm")
 
