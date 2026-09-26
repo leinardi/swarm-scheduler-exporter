@@ -514,7 +514,7 @@ func TestRefreshNodesAndRecomputeGlobals_RecomputesGlobalService(t *testing.T) {
 		serviceByID: map[string]swarm.Service{"glb1": glbSvc},
 	}
 
-	err := refreshNodesAndRecomputeGlobals(context.Background(), fd)
+	err := refreshNodesAndRecomputeNodeDependent(context.Background(), fd)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestRefreshNodesAndRecomputeGlobals_GoneService_SkippedNotError(t *testing.
 		serviceInspectErr: errdefs.ErrNotFound,
 	}
 
-	err := refreshNodesAndRecomputeGlobals(context.Background(), fd)
+	err := refreshNodesAndRecomputeNodeDependent(context.Background(), fd)
 	if err != nil {
 		t.Errorf("gone service during refresh should not error, got: %v", err)
 	}
@@ -705,5 +705,201 @@ func TestDispatchEvents_CancelledStreamCloseReportsCancellation(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want a context.Canceled wrap", err)
 		}
+	}
+}
+
+func makeReplicatedJobService(id, stack, name string, totalCompletions uint64) swarm.Service {
+	return swarm.Service{
+		ID: id,
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{
+				Name:   stack + "_" + name,
+				Labels: map[string]string{"com.docker.stack.namespace": stack},
+			},
+			Mode: swarm.ServiceMode{
+				ReplicatedJob: &swarm.ReplicatedJob{TotalCompletions: &totalCompletions},
+			},
+		},
+		JobStatus: &swarm.JobStatus{JobIteration: swarm.Version{Index: 1}},
+	}
+}
+
+func makeGlobalJobService(id, stack, name string) swarm.Service {
+	return swarm.Service{
+		ID: id,
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{
+				Name:   stack + "_" + name,
+				Labels: map[string]string{"com.docker.stack.namespace": stack},
+			},
+			Mode: swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}},
+		},
+		JobStatus: &swarm.JobStatus{JobIteration: swarm.Version{Index: 1}},
+	}
+}
+
+// seedService builds and caches the metadata of svc the way processEvent does, and returns it.
+func seedService(t *testing.T, svc *swarm.Service) serviceMetadata {
+	t.Helper()
+
+	md := buildMetadata(svc)
+	setServiceMetadata(svc.ID, &md)
+
+	return mustGetServiceMetadata(svc.ID)
+}
+
+func TestUpdateServiceReplicasGauge_ReplicatedJob_DesiredIsTotalCompletions(t *testing.T) {
+	resetCollectorState(t)
+	desired := installDesiredReplicasGauges(t)
+
+	// Two eligible nodes: a replicated job's target must not follow them.
+	setCachedNodes([]swarm.Node{makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2")})
+
+	svc := makeReplicatedJobService("job1", "stack", "migrate", 5)
+	md := seedService(t, &svc)
+
+	updateServiceReplicasGauge(context.Background(), &fakeDocker{}, &svc, &md)
+
+	lbls := serviceLabels("stack", "migrate", serviceModeReplicatedJob)
+
+	if got := testutil.ToFloat64(desired.With(lbls)); got != 5 {
+		t.Errorf("desired_replicas = %v, want 5 (TotalCompletions)", got)
+	}
+
+	if got := testutil.ToFloat64(schedulableReplicasGauge.With(lbls)); got != 0 {
+		t.Errorf("schedulable_replicas = %v, want 0 for a job", got)
+	}
+
+	if got, _ := getServiceDesiredReplicas("job1"); got != 5 {
+		t.Errorf("cached desired = %v, want 5", got)
+	}
+}
+
+func TestUpdateServiceReplicasGauge_GlobalJob_DesiredIsEligibleNodes(t *testing.T) {
+	resetCollectorState(t)
+	desired := installDesiredReplicasGauges(t)
+
+	setCachedNodes([]swarm.Node{makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2")})
+
+	svc := makeGlobalJobService("gjob1", "stack", "prune")
+	md := seedService(t, &svc)
+
+	updateServiceReplicasGauge(context.Background(), &fakeDocker{}, &svc, &md)
+
+	lbls := serviceLabels("stack", "prune", serviceModeGlobalJob)
+
+	if got := testutil.ToFloat64(desired.With(lbls)); got != 2 {
+		t.Errorf("desired_replicas = %v, want 2 (eligible nodes)", got)
+	}
+
+	if got := testutil.ToFloat64(schedulableReplicasGauge.With(lbls)); got != 0 {
+		t.Errorf("schedulable_replicas = %v, want 0 for a job", got)
+	}
+}
+
+func TestRefreshNodesAndRecomputeNodeDependent_GlobalJobOnly(t *testing.T) {
+	resetCollectorState(t)
+	desired := installDesiredReplicasGauges(t)
+	installNodesByStateGauge(t)
+
+	globalJob := makeGlobalJobService("gjob1", "stack", "prune")
+	replicatedJob := makeReplicatedJobService("rjob1", "stack", "migrate", 5)
+
+	seedService(t, &globalJob)
+	seedService(t, &replicatedJob)
+
+	fd := &fakeDocker{
+		nodes: []swarm.Node{
+			makeSchedulableNode("n1", "h1"),
+			makeSchedulableNode("n2", "h2"),
+			makeSchedulableNode("n3", "h3"),
+		},
+		serviceByID: map[string]swarm.Service{"gjob1": globalJob, "rjob1": replicatedJob},
+	}
+
+	err := refreshNodesAndRecomputeNodeDependent(context.Background(), fd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	globalLabels := serviceLabels("stack", "prune", serviceModeGlobalJob)
+	if got := testutil.ToFloat64(desired.With(globalLabels)); got != 3 {
+		t.Errorf("global-job desired_replicas = %v, want 3 (eligible nodes)", got)
+	}
+
+	if got := testutil.ToFloat64(schedulableReplicasGauge.With(globalLabels)); got != 0 {
+		t.Errorf("global-job schedulable_replicas = %v, want 0", got)
+	}
+
+	// The replicated job's target does not depend on the nodes: nothing was written for it.
+	replicatedLabels := serviceLabels("stack", "migrate", serviceModeReplicatedJob)
+	if desired.Delete(replicatedLabels) {
+		t.Error("replicated-job desired_replicas was recomputed on a node refresh")
+	}
+
+	if schedulableReplicasGauge.Delete(replicatedLabels) {
+		t.Error("replicated-job schedulable_replicas was recomputed on a node refresh")
+	}
+}
+
+func TestNodeEligible(t *testing.T) {
+	ready := makeSchedulableNode("n1", "host1")
+	drained := makeSchedulableNode("n2", "host2")
+	drained.Spec.Availability = swarm.NodeAvailabilityDrain
+
+	cases := []struct {
+		name      string
+		node      *swarm.Node
+		placement *swarm.Placement
+		want      bool
+	}{
+		{name: "nil placement, schedulable", node: &ready, placement: nil, want: true},
+		{name: "nil placement, drained", node: &drained, placement: nil, want: false},
+		{
+			name:      "constraint matches",
+			node:      &ready,
+			placement: &swarm.Placement{Constraints: []string{"node.hostname == host1"}},
+			want:      true,
+		},
+		{
+			name:      "constraint does not match",
+			node:      &ready,
+			placement: &swarm.Placement{Constraints: []string{"node.hostname == other"}},
+			want:      false,
+		},
+		{
+			name:      "platform does not match",
+			node:      &ready,
+			placement: &swarm.Placement{Platforms: []swarm.Platform{{OS: "windows"}}},
+			want:      false,
+		},
+		{
+			name:      "constraint matches but drained",
+			node:      &drained,
+			placement: &swarm.Placement{Constraints: []string{"node.hostname == host2"}},
+			want:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		if got := nodeEligible(tc.node, tc.placement); got != tc.want {
+			t.Errorf("%s: nodeEligible = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestPlacementFromMetadata(t *testing.T) {
+	if got := placementFromMetadata(&serviceMetadata{}); got != nil {
+		t.Errorf("no constraints nor platforms: got %+v, want nil", got)
+	}
+
+	md := serviceMetadata{
+		constraints: []string{"node.role == manager"},
+		platforms:   []swarm.Platform{{OS: "linux"}},
+	}
+
+	got := placementFromMetadata(&md)
+	if got == nil || len(got.Constraints) != 1 || len(got.Platforms) != 1 {
+		t.Errorf("placementFromMetadata = %+v, want the cached constraint and platform", got)
 	}
 }

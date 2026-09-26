@@ -57,9 +57,12 @@ const (
 var stopFast = []string{"sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"}
 
 // serviceOpts are the knobs of deployService. The zero value is a replicated service with one
-// replica running stopFast.
+// replica running stopFast. At most one of global, replicatedJob and globalJob is set.
 type serviceOpts struct {
 	global           bool
+	replicatedJob    bool
+	globalJob        bool
+	completions      uint64 // replicated job only: TotalCompletions; 0 leaves Swarm's default
 	replicas         uint64 // replicated only; 0 means 1 unless zeroReplicas is set
 	zeroReplicas     bool
 	command          []string // defaults to stopFast
@@ -145,8 +148,24 @@ func serviceSpec(stack, name string, opts *serviceOpts) swarm.ServiceSpec {
 		spec.TaskTemplate.RestartPolicy = &swarm.RestartPolicy{Condition: opts.restartCondition}
 	}
 
-	if opts.global {
+	switch {
+	case opts.global:
 		spec.Mode = swarm.ServiceMode{Global: &swarm.GlobalService{}}
+
+		return spec
+	case opts.globalJob:
+		spec.Mode = swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}}
+
+		return spec
+	case opts.replicatedJob:
+		job := &swarm.ReplicatedJob{}
+
+		if opts.completions > 0 {
+			completions := opts.completions
+			job.TotalCompletions = &completions
+		}
+
+		spec.Mode = swarm.ServiceMode{ReplicatedJob: job}
 
 		return spec
 	}

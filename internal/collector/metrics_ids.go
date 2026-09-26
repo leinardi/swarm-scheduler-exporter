@@ -44,6 +44,9 @@ const (
 	labelStack       = "stack"
 	labelState       = "state"
 
-	serviceModeReplicated = "replicated"
-	serviceModeGlobal     = "global"
+	// Service modes, spelled as in the MODE column of "docker service ls".
+	serviceModeReplicated    = "replicated"
+	serviceModeGlobal        = "global"
+	serviceModeReplicatedJob = "replicated-job"
+	serviceModeGlobalJob     = "global-job"
 )

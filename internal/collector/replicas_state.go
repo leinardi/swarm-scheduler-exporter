@@ -27,10 +27,11 @@ package collector
 // replicas_state exposes the gauge "swarm_service_replicas_state", which tracks
 // the number of tasks per service per state (new, running, failed, etc.).
 // This implementation counts only the current task per (service,slot) for
-// replicated services and per (service,nodeID) for global services, so that
-// historical tasks from previous rollouts do not inflate counts. The current task
-// is the one Swarm still wants, preferring a running one, then the newest (see
-// preferredTask).
+// replicated services and replicated jobs, and per (service,nodeID) for global
+// services and global jobs, so that historical tasks from previous rollouts do not
+// inflate counts. For jobs, only tasks of the current job iteration are counted. The
+// current task is the one Swarm still wants, preferring a running one, then the newest
+// (see preferredTask).
 
 import (
 	"context"
@@ -102,7 +103,8 @@ type replicasStateSnapshot struct {
 	stateDesc *prometheus.Desc
 	// runningDesc is swarm_service_running_replicas: running tasks per service.
 	runningDesc *prometheus.Desc
-	// atDesiredDesc is swarm_service_at_desired: 1 if running == desired replicas, else 0.
+	// atDesiredDesc is swarm_service_at_desired: 1 if running == desired replicas (for jobs: if
+	// the job finished), else 0.
 	atDesiredDesc *prometheus.Desc
 
 	stateLabelNames   []string
@@ -115,6 +117,16 @@ var atDesiredLogState sync.Map // map[string]string (serviceID -> "running|desir
 type taskCounter struct {
 	states map[string]float64
 	labels prometheus.Labels
+
+	// wanted counts the counted tasks Swarm still wants (not retiredTask), and wantedComplete
+	// those of them that are complete. A job is finished when they are equal; retired tasks
+	// still show in states but take no part in that decision.
+	wanted         float64
+	wantedComplete float64
+
+	// eligibleNodesCovered is set for global jobs only: every node that is eligible now has a
+	// wanted, completed task of the current iteration.
+	eligibleNodesCovered bool
 }
 
 // serviceCounter organizes taskCounters keyed by ServiceID (unique, avoids
@@ -122,12 +134,15 @@ type taskCounter struct {
 type serviceCounter map[string]taskCounter
 
 // latestKey identifies a deduplication group:
-// - replicated services → (serviceID, slot)
-// - global services     → (serviceID, nodeID).
+// - replicated services and replicated jobs → (serviceID, slot)
+// - global services and global jobs         → (serviceID, nodeID).
+//
+// Swarm gives each task of a replicated job its own slot in [0, TotalCompletions-1], and each
+// task of a global job its own node, so the same keys hold for jobs.
 type latestKey struct {
 	serviceID string
-	slot      int    // for replicated; 0 for global
-	nodeID    string // for global; empty for replicated
+	slot      int    // for replicated modes; 0 for global modes
+	nodeID    string // for global modes; empty for replicated modes
 }
 
 // ConfigureReplicasStateGauge registers the "swarm_task_replicas_state",
@@ -160,7 +175,8 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 	stateDesc := prometheus.NewDesc(
 		prometheus.BuildFQName(prometheusNamespace, prometheusTaskSubsystem, "replicas_state"),
 		"Number of tasks per Swarm service segmented by task state "+
-			"(current task per slot for replicated services or node for global services).",
+			"(current task per slot for replicated services and replicated jobs or node for global services "+
+			"and global jobs; jobs count only their current iteration).",
 		stateLabelNames,
 		nil,
 	)
@@ -168,14 +184,16 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 	runningDesc := prometheus.NewDesc(
 		prometheus.BuildFQName(prometheusNamespace, prometheusServiceSubsystem, "running_replicas"),
 		"Current number of running tasks per Swarm service "+
-			"(current task per slot for replicated services or node for global services).",
+			"(current task per slot for replicated services and replicated jobs or node for global services "+
+			"and global jobs; jobs count only their current iteration).",
 		serviceLabelNames,
 		nil,
 	)
 
 	atDesiredDesc := prometheus.NewDesc(
 		prometheus.BuildFQName(prometheusNamespace, prometheusServiceSubsystem, "at_desired"),
-		"Service is at desired replicas (1) or not (0).",
+		"Service is at desired replicas (1) or not (0). "+
+			"Jobs are at desired once finished: every task of the current iteration completed.",
 		serviceLabelNames,
 		nil,
 	)
@@ -191,8 +209,9 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 }
 
 // PollReplicasState lists tasks and aggregates them by state per service,
-// counting only the current task per (service, slot) for replicated services
-// and per (service, nodeID) for global services, as chosen by preferredTask.
+// counting only the current task per (service, slot) for replicated services and replicated jobs
+// and per (service, nodeID) for global services and global jobs, as chosen by preferredTask.
+// Job tasks from an older job iteration are skipped.
 func PollReplicasState(
 	parentContext context.Context,
 	dockerClient DockerAPI,
@@ -239,27 +258,9 @@ func PollReplicasState(
 			)
 		}
 
-		mode, found := getServiceModeCached(task.ServiceID)
-		if !found {
-			// Should not happen because getServiceLabels() above populates the cache,
-			// but if it does, skip this task defensively.
+		dedupeKey, counted := dedupeKeyForTask(task)
+		if !counted {
 			continue
-		}
-
-		var dedupeKey latestKey
-		if mode == serviceModeReplicated {
-			dedupeKey = latestKey{
-				serviceID: task.ServiceID,
-				slot:      task.Slot,
-				nodeID:    "",
-			}
-		} else {
-			// global services do not use slots; use NodeID instead
-			dedupeKey = latestKey{
-				serviceID: task.ServiceID,
-				slot:      0,
-				nodeID:    task.NodeID,
-			}
 		}
 
 		if previousTask, exists := latestByKey[dedupeKey]; !exists ||
@@ -270,6 +271,10 @@ func PollReplicasState(
 
 	// Step 2: aggregate chosen tasks per serviceID into states.
 	replicasByService := make(serviceCounter)
+
+	// completedNodesByService holds, per global job, the nodes with a wanted completed task. It
+	// only lives for this poll.
+	completedNodesByService := make(map[string]map[string]struct{})
 
 	for key, task := range latestByKey {
 		labels, labelErr := getServiceLabels(parentContext, dockerClient, task)
@@ -289,12 +294,154 @@ func PollReplicasState(
 
 		counter := replicasByService.get(key.serviceID, labels)
 		counter.inc(string(task.Status.State))
+		countWanted(&counter, task, completedNodesByService)
 		replicasByService[key.serviceID] = counter
 	}
 
+	markEligibleNodesCovered(replicasByService, completedNodesByService)
 	addServicesWithoutTasks(replicasByService, queriedServiceIDs)
 
 	return replicasByService, nil
+}
+
+// dedupeKeyForTask returns the dedupe key task is counted under, and false when task is not
+// counted at all: its service is not in the metadata cache, or it belongs to an earlier run of a
+// job.
+func dedupeKeyForTask(task *swarm.Task) (latestKey, bool) {
+	metadata, found := getServiceMetadata(task.ServiceID)
+	if !found {
+		// Should not happen because getServiceLabels() populates the cache before this is
+		// called, but if it does, skip this task defensively.
+		return latestKey{}, false
+	}
+
+	// A job's earlier runs leave their tasks behind (Swarm marks them for removal); only the
+	// current iteration describes the job now.
+	if isJobMode(metadata.serviceMode) &&
+		(task.JobIteration == nil || task.JobIteration.Index != metadata.jobIteration) {
+		return latestKey{}, false
+	}
+
+	if metadata.serviceMode == serviceModeReplicated ||
+		metadata.serviceMode == serviceModeReplicatedJob {
+		return latestKey{
+			serviceID: task.ServiceID,
+			slot:      task.Slot,
+			nodeID:    "",
+		}, true
+	}
+
+	// global services and global jobs do not use slots; use NodeID instead
+	return latestKey{
+		serviceID: task.ServiceID,
+		slot:      0,
+		nodeID:    task.NodeID,
+	}, true
+}
+
+// countWanted adds task to the wanted counts when Swarm still wants it, and records the node of
+// a wanted completed global-job task in completedNodesByService.
+func countWanted(
+	counter *taskCounter,
+	task *swarm.Task,
+	completedNodesByService map[string]map[string]struct{},
+) {
+	if retiredTask(task) {
+		return
+	}
+
+	counter.wanted++
+
+	if task.Status.State != swarm.TaskStateComplete {
+		return
+	}
+
+	counter.wantedComplete++
+
+	if counter.labels[labelServiceMode] == serviceModeGlobalJob {
+		addCompletedNode(completedNodesByService, task.ServiceID, task.NodeID)
+	}
+}
+
+// addCompletedNode records that nodeID has a wanted completed task of global job serviceID.
+func addCompletedNode(
+	completedNodesByService map[string]map[string]struct{},
+	serviceID, nodeID string,
+) {
+	completedNodes, ok := completedNodesByService[serviceID]
+	if !ok {
+		completedNodes = make(map[string]struct{})
+		completedNodesByService[serviceID] = completedNodes
+	}
+
+	completedNodes[nodeID] = struct{}{}
+}
+
+// markEligibleNodesCovered sets eligibleNodesCovered on every global-job counter, checking the
+// nodes eligible now, from one node snapshot, against the nodes where the job has a wanted
+// completed task. Comparing node identities rather than counts matters: when node A has
+// completed and then becomes ineligible while node B becomes eligible, A's completion must not
+// stand in for B, whose task Swarm only creates on its next reconcile. The work is bounded by
+// nodes times global jobs and reads caches only.
+func markEligibleNodesCovered(
+	replicasByService serviceCounter,
+	completedNodesByService map[string]map[string]struct{},
+) {
+	var (
+		nodes       []swarm.Node
+		nodesLoaded bool
+	)
+
+	for serviceID, counter := range replicasByService {
+		if counter.labels[labelServiceMode] != serviceModeGlobalJob {
+			continue
+		}
+
+		metadata, found := getServiceMetadata(serviceID)
+		if !found {
+			// Removed while this poll was running; leave it uncovered.
+			continue
+		}
+
+		// One snapshot per poll, taken only when there is a global job to check.
+		if !nodesLoaded {
+			nodes = getCachedNodes()
+			nodesLoaded = true
+		}
+
+		counter.eligibleNodesCovered = eligibleNodesCovered(
+			nodes,
+			placementFromMetadata(&metadata),
+			completedNodesByService[serviceID],
+		)
+		replicasByService[serviceID] = counter
+	}
+}
+
+// eligibleNodesCovered reports whether every node of nodes that is eligible for placement is in
+// completedNodes. An empty snapshot (nodes not seeded yet) reports false, so a global job is not
+// taken for finished before the exporter knows the nodes.
+func eligibleNodesCovered(
+	nodes []swarm.Node,
+	placement *swarm.Placement,
+	completedNodes map[string]struct{},
+) bool {
+	if len(nodes) == 0 {
+		return false
+	}
+
+	for index := range nodes {
+		node := &nodes[index]
+		if !nodeEligible(node, placement) {
+			continue
+		}
+
+		if _, completed := completedNodes[node.ID]; !completed {
+			return false
+		}
+	}
+
+	return true
 }
 
 // addServicesWithoutTasks gives every queried service that has no tasks an empty counter, so
@@ -394,36 +541,90 @@ func setAtDesiredForService(
 		return
 	}
 
+	mode := baseLabels[labelServiceMode]
+
+	reached := running == desired
+	if isJobMode(mode) {
+		reached = jobAtDesired(mode, &taskCounterValue, desired)
+	}
+
 	atDesired := 0.0
-	if running == desired {
+	if reached {
 		atDesired = 1.0
 	} else {
-		logAtDesiredMismatchOncePerChange(serviceID, baseLabels, running, desired)
+		logAtDesiredMismatchOncePerChange(
+			serviceID,
+			baseLabels,
+			running,
+			desired,
+			&taskCounterValue,
+		)
 	}
 
 	builder.set(families.atDesiredDesc, families.serviceLabelNames, baseLabels, atDesired)
+}
+
+// jobAtDesired reports whether a job has finished, from the tasks of its current iteration.
+// Only tasks Swarm still wants count: Swarm shuts down (DesiredState=Shutdown) a global job's
+// running task when its node goes down or is drained (swarmkit jobs/global/reconciler.go), and
+// the restart supervisor does the same to a failed task before replacing it, so a retired task
+// left in the total would keep a finished job at 0 forever. A slot whose restarts are exhausted
+// is left with a retired failed task and no replacement, so wantedComplete stays below the
+// total completions and the replicated job stays at 0.
+func jobAtDesired(mode string, counter *taskCounter, desired float64) bool {
+	// Every wanted task is complete: none is still pending, running, or failed awaiting a
+	// restart. Without it, in a global job a down node's completed task plus a new node's
+	// unfinished task could add up to desired.
+	allWantedComplete := counter.wantedComplete == counter.wanted
+
+	if mode == serviceModeReplicatedJob {
+		// desired (total completions) is at least 1, so this also requires a task.
+		return allWantedComplete && counter.wantedComplete >= desired
+	}
+
+	// Global job. wanted > 0 rather than desired > 0: a global job with no eligible node never
+	// runs and stays at 0, while a finished one whose last eligible node is later drained or
+	// goes down keeps its completed tasks and still reports 1 with desired at 0. Covering every
+	// eligible node by identity implies wantedComplete >= desired.
+	return counter.wanted > 0 && allWantedComplete && counter.eligibleNodesCovered
 }
 
 func logAtDesiredMismatchOncePerChange(
 	serviceID string,
 	baseLabels prometheus.Labels,
 	running, desired float64,
+	counter *taskCounter,
 ) {
 	key := fmt.Sprintf("%.0f|%.0f", running, desired)
-
-	prev, loaded := atDesiredLogState.LoadOrStore(serviceID, key)
-	if loaded && prev == key {
-		return // same situation as last time -> no log
-	}
-
-	logger.L().Debug("at_desired mismatch",
+	fields := []any{
 		"service_id", serviceID,
 		labelStack, baseLabels[labelStack],
 		labelService, baseLabels[labelService],
 		"mode", baseLabels[labelServiceMode],
 		"running", running,
 		"desired", desired,
-	)
+	}
+
+	if isJobMode(baseLabels[labelServiceMode]) {
+		key += fmt.Sprintf(
+			"|%.0f|%.0f|%t",
+			counter.wanted,
+			counter.wantedComplete,
+			counter.eligibleNodesCovered,
+		)
+		fields = append(fields,
+			"wanted", counter.wanted,
+			"wanted_complete", counter.wantedComplete,
+			"eligible_nodes_covered", counter.eligibleNodesCovered,
+		)
+	}
+
+	prev, loaded := atDesiredLogState.LoadOrStore(serviceID, key)
+	if loaded && prev == key {
+		return // same situation as last time -> no log
+	}
+
+	logger.L().Debug("at_desired mismatch", fields...)
 }
 
 // inc increments the counter for a particular Swarm task state.

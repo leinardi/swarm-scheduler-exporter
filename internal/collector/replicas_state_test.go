@@ -891,3 +891,363 @@ func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
 		}
 	}
 }
+
+// makeJobTask returns a task of job serviceID in the given slot or on the given node, spawned by
+// job iteration (0 means no JobIteration), with the given desired and actual states.
+func makeJobTask(
+	serviceID string,
+	slot int,
+	nodeID string,
+	iteration uint64,
+	desired, state swarm.TaskState,
+) swarm.Task {
+	task := swarm.Task{
+		Meta:         swarm.Meta{CreatedAt: time.Date(2025, 1, 1, 0, 0, slot, 0, time.UTC)},
+		ServiceID:    serviceID,
+		Slot:         slot,
+		NodeID:       nodeID,
+		DesiredState: desired,
+		Status:       swarm.TaskStatus{State: state},
+	}
+
+	if iteration != 0 {
+		jobIteration := swarm.Version{Index: iteration}
+		task.JobIteration = &jobIteration
+	}
+
+	return task
+}
+
+// seedJobMetadata caches the metadata of a job service at the given iteration.
+func seedJobMetadata(serviceID, mode string, iteration uint64) {
+	md := makeTestMetadata("s", "job", mode)
+	md.jobIteration = iteration
+	setServiceMetadata(serviceID, &md)
+}
+
+// drainedNode returns a schedulable node set to drain, so it is no longer eligible.
+func drainedNode(id string) swarm.Node {
+	node := makeSchedulableNode(id, id)
+	node.Spec.Availability = swarm.NodeAvailabilityDrain
+
+	return node
+}
+
+func TestPollReplicasState_ReplicatedJob_DedupeBySlot(t *testing.T) {
+	resetCollectorState(t)
+	seedJobMetadata("job1", serviceModeReplicatedJob, 1)
+
+	// 5 completions spread over 2 nodes: keyed by node, they would collapse into 2.
+	tasks := make([]swarm.Task, 0, 5)
+	for slot := range 5 {
+		tasks = append(tasks, makeJobTask(
+			"job1", slot, []string{"n1", "n2"}[slot%2], 1,
+			swarm.TaskStateComplete, swarm.TaskStateComplete,
+		))
+	}
+
+	sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := sc["job1"].states[string(swarm.TaskStateComplete)]; got != 5 {
+		t.Errorf("complete = %v, want 5 (one per slot)", got)
+	}
+}
+
+func TestPollReplicasState_Job_OldIterationIgnored(t *testing.T) {
+	resetCollectorState(t)
+	seedJobMetadata("job1", serviceModeReplicatedJob, 2)
+
+	tasks := []swarm.Task{
+		// Previous run, marked for removal by Swarm.
+		makeJobTask("job1", 0, "n1", 1, swarm.TaskStateRemove, swarm.TaskStateComplete),
+		makeJobTask("job1", 1, "n1", 1, swarm.TaskStateRemove, swarm.TaskStateComplete),
+		// A task without a JobIteration cannot be placed in any run.
+		makeJobTask("job1", 2, "n1", 0, swarm.TaskStateComplete, swarm.TaskStateComplete),
+		// Current run.
+		makeJobTask("job1", 0, "n2", 2, swarm.TaskStateComplete, swarm.TaskStateRunning),
+	}
+
+	sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	counter := sc["job1"]
+	if got := counter.states[string(swarm.TaskStateRunning)]; got != 1 {
+		t.Errorf("running = %v, want 1 (current iteration)", got)
+	}
+
+	if got := counter.states[string(swarm.TaskStateComplete)]; got != 0 {
+		t.Errorf("complete = %v, want 0 (older iteration and no-iteration tasks skipped)", got)
+	}
+}
+
+func TestPollReplicasState_GlobalJob_DedupeByNode(t *testing.T) {
+	resetCollectorState(t)
+	seedJobMetadata("gjob1", serviceModeGlobalJob, 1)
+
+	failed := makeJobTask("gjob1", 0, "n1", 1, swarm.TaskStateShutdown, swarm.TaskStateFailed)
+	restarted := makeJobTask("gjob1", 0, "n1", 1, swarm.TaskStateComplete, swarm.TaskStateComplete)
+	restarted.CreatedAt = failed.CreatedAt.Add(time.Second)
+	other := makeJobTask("gjob1", 0, "n2", 1, swarm.TaskStateComplete, swarm.TaskStateComplete)
+
+	sc, err := PollReplicasState(
+		context.Background(),
+		&fakeDocker{tasks: []swarm.Task{failed, restarted, other}},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	counter := sc["gjob1"]
+	if got := counter.states[string(swarm.TaskStateComplete)]; got != 2 {
+		t.Errorf("complete = %v, want 2 (one per node)", got)
+	}
+
+	if got := counter.states[string(swarm.TaskStateFailed)]; got != 0 {
+		t.Errorf("failed = %v, want 0 (replaced on the same node)", got)
+	}
+}
+
+// pollJobAtDesired polls tasks for the job service jobID, publishes the result and returns the
+// job's at_desired value and its replicas_state series for state.
+func pollJobAtDesired(
+	t *testing.T,
+	families *replicasStateSnapshot,
+	mode string,
+	tasks []swarm.Task,
+	state swarm.TaskState,
+) (atDesired, stateCount float64) {
+	t.Helper()
+
+	sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	UpdateReplicasStateGauge(sc)
+
+	labels := serviceLabels("s", "job", mode)
+
+	atDesired, found := snapshotValue(t, families, atDesiredFQName, labels)
+	if !found {
+		t.Fatal("at_desired series missing")
+	}
+
+	stateLabels := maps.Clone(labels)
+	stateLabels[labelState] = string(state)
+
+	stateCount, found = snapshotValue(t, families, replicasStateFQName, stateLabels)
+	if !found {
+		t.Fatalf("replicas_state{state=%q} series missing", state)
+	}
+
+	return atDesired, stateCount
+}
+
+func TestUpdateReplicasStateGauge_JobAtDesired(t *testing.T) {
+	const (
+		complete = swarm.TaskStateComplete
+		running  = swarm.TaskStateRunning
+		failed   = swarm.TaskStateFailed
+		shutdown = swarm.TaskStateShutdown
+	)
+
+	ready := []swarm.Node{makeSchedulableNode("n1", "n1"), makeSchedulableNode("n2", "n2")}
+
+	cases := []struct {
+		name    string
+		mode    string
+		desired float64
+		nodes   []swarm.Node
+		tasks   []swarm.Task
+		want    float64
+		// countState and wantCount check one replicas_state series alongside.
+		countState swarm.TaskState
+		wantCount  float64
+	}{
+		{
+			name:    "replicated-job finished",
+			mode:    serviceModeReplicatedJob,
+			desired: 3,
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+				makeJobTask("job1", 1, "n2", 1, complete, complete),
+				makeJobTask("job1", 2, "n1", 1, complete, complete),
+			},
+			want:       1,
+			countState: complete,
+			wantCount:  3,
+		},
+		{
+			name:    "replicated-job in progress",
+			mode:    serviceModeReplicatedJob,
+			desired: 3,
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+				makeJobTask("job1", 1, "n2", 1, complete, complete),
+				makeJobTask("job1", 2, "n1", 1, complete, running),
+			},
+			want:       0,
+			countState: running,
+			wantCount:  1,
+		},
+		{
+			name:    "replicated-job with a failed task awaiting restart",
+			mode:    serviceModeReplicatedJob,
+			desired: 2,
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+				makeJobTask("job1", 1, "n2", 1, complete, failed),
+			},
+			want:       0,
+			countState: failed,
+			wantCount:  1,
+		},
+		{
+			name:    "replicated-job slot with exhausted restarts",
+			mode:    serviceModeReplicatedJob,
+			desired: 2,
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+				makeJobTask("job1", 1, "n2", 1, shutdown, failed),
+			},
+			want:       0,
+			countState: failed,
+			wantCount:  1,
+		},
+		{
+			name:    "global-job finished",
+			mode:    serviceModeGlobalJob,
+			desired: 2,
+			nodes:   ready,
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+				makeJobTask("job1", 0, "n2", 1, complete, complete),
+			},
+			want:       1,
+			countState: complete,
+			wantCount:  2,
+		},
+		{
+			name:       "global-job without tasks and no eligible node",
+			mode:       serviceModeGlobalJob,
+			desired:    0,
+			nodes:      []swarm.Node{drainedNode("n1")},
+			tasks:      nil,
+			want:       0,
+			countState: complete,
+			wantCount:  0,
+		},
+		{
+			name:    "global-job finished with a retired task on a drained node",
+			mode:    serviceModeGlobalJob,
+			desired: 2,
+			nodes:   append(append([]swarm.Node{}, ready...), drainedNode("n3")),
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+				makeJobTask("job1", 0, "n2", 1, complete, complete),
+				// Swarm shut the task down when n3 was drained; its node still reports it running.
+				makeJobTask("job1", 0, "n3", 1, shutdown, running),
+			},
+			want:       1,
+			countState: running,
+			wantCount:  1,
+		},
+		{
+			name:    "global-job finished whose last eligible node was drained",
+			mode:    serviceModeGlobalJob,
+			desired: 0,
+			nodes:   []swarm.Node{drainedNode("n1")},
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+			},
+			want:       1,
+			countState: complete,
+			wantCount:  1,
+		},
+		{
+			name:    "global-job with an empty node cache",
+			mode:    serviceModeGlobalJob,
+			desired: 1,
+			nodes:   nil,
+			tasks: []swarm.Task{
+				makeJobTask("job1", 0, "n1", 1, complete, complete),
+			},
+			want:       0,
+			countState: complete,
+			wantCount:  1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetCollectorState(t)
+			families := installReplicasStateGauges(t)
+
+			seedJobMetadata("job1", tc.mode, 1)
+			setServiceDesiredReplicas("job1", tc.desired)
+			setCachedNodes(tc.nodes)
+
+			atDesired, count := pollJobAtDesired(t, families, tc.mode, tc.tasks, tc.countState)
+			if atDesired != tc.want {
+				t.Errorf("at_desired = %v, want %v", atDesired, tc.want)
+			}
+
+			if count != tc.wantCount {
+				t.Errorf(
+					"replicas_state{state=%q} = %v, want %v",
+					tc.countState,
+					count,
+					tc.wantCount,
+				)
+			}
+		})
+	}
+}
+
+// TestUpdateReplicasStateGauge_GlobalJob_NodeReplacement checks that a global job's completion
+// goes by node identity: node A's completed task must not stand in for node B, which became
+// eligible after A was drained and has no task yet, even though the counts match.
+func TestUpdateReplicasStateGauge_GlobalJob_NodeReplacement(t *testing.T) {
+	resetCollectorState(t)
+	families := installReplicasStateGauges(t)
+
+	seedJobMetadata("job1", serviceModeGlobalJob, 1)
+	setServiceDesiredReplicas("job1", 1)
+	setCachedNodes([]swarm.Node{drainedNode("nA"), makeSchedulableNode("nB", "nB")})
+
+	tasks := make([]swarm.Task, 0, 2)
+	tasks = append(tasks,
+		makeJobTask("job1", 0, "nA", 1, swarm.TaskStateComplete, swarm.TaskStateComplete),
+	)
+
+	atDesired, _ := pollJobAtDesired(
+		t,
+		families,
+		serviceModeGlobalJob,
+		tasks,
+		swarm.TaskStateComplete,
+	)
+	if atDesired != 0 {
+		t.Errorf("at_desired = %v, want 0 while node B has no completed task", atDesired)
+	}
+
+	tasks = append(tasks,
+		makeJobTask("job1", 0, "nB", 1, swarm.TaskStateComplete, swarm.TaskStateComplete),
+	)
+
+	atDesired, _ = pollJobAtDesired(
+		t,
+		families,
+		serviceModeGlobalJob,
+		tasks,
+		swarm.TaskStateComplete,
+	)
+	if atDesired != 1 {
+		t.Errorf("at_desired = %v, want 1 once node B completed", atDesired)
+	}
+}

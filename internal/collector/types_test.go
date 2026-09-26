@@ -25,6 +25,7 @@
 package collector
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -72,6 +73,138 @@ func TestServiceMode(t *testing.T) {
 
 	if got := serviceMode(global); got != serviceModeGlobal {
 		t.Errorf("global service: got %q, want %q", got, serviceModeGlobal)
+	}
+
+	replicatedJob := &swarm.Service{
+		Spec: swarm.ServiceSpec{
+			Mode: swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{}},
+		},
+	}
+	if got := serviceMode(replicatedJob); got != serviceModeReplicatedJob {
+		t.Errorf("replicated-job service: got %q, want %q", got, serviceModeReplicatedJob)
+	}
+
+	globalJob := &swarm.Service{
+		Spec: swarm.ServiceSpec{
+			Mode: swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}},
+		},
+	}
+	if got := serviceMode(globalJob); got != serviceModeGlobalJob {
+		t.Errorf("global-job service: got %q, want %q", got, serviceModeGlobalJob)
+	}
+}
+
+func TestIsJobMode(t *testing.T) {
+	cases := map[string]bool{
+		serviceModeReplicated:    false,
+		serviceModeGlobal:        false,
+		serviceModeReplicatedJob: true,
+		serviceModeGlobalJob:     true,
+		"":                       false,
+	}
+	for mode, want := range cases {
+		if got := isJobMode(mode); got != want {
+			t.Errorf("isJobMode(%q) = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+func TestJobTotalCompletions_Defaults(t *testing.T) {
+	maxConcurrent := uint64(4)
+	totalCompletions := uint64(7)
+
+	cases := []struct {
+		name string
+		job  swarm.ReplicatedJob
+		want float64
+	}{
+		{name: "neither set", job: swarm.ReplicatedJob{}, want: 1},
+		{
+			name: "max concurrent only",
+			job:  swarm.ReplicatedJob{MaxConcurrent: &maxConcurrent},
+			want: 4,
+		},
+		{
+			name: "total completions only",
+			job:  swarm.ReplicatedJob{TotalCompletions: &totalCompletions},
+			want: 7,
+		},
+		{
+			name: "both set",
+			job: swarm.ReplicatedJob{
+				MaxConcurrent:    &maxConcurrent,
+				TotalCompletions: &totalCompletions,
+			},
+			want: 7,
+		},
+	}
+	for _, tc := range cases {
+		if got := jobTotalCompletions(&tc.job); got != tc.want {
+			t.Errorf("%s: jobTotalCompletions = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestBuildMetadata_ReplicatedJob(t *testing.T) {
+	resetCollectorState(t)
+
+	maxConcurrent := uint64(2)
+	totalCompletions := uint64(5)
+	svc := &swarm.Service{
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{Name: "job"},
+			Mode: swarm.ServiceMode{
+				ReplicatedJob: &swarm.ReplicatedJob{
+					MaxConcurrent:    &maxConcurrent,
+					TotalCompletions: &totalCompletions,
+				},
+			},
+		},
+		JobStatus: &swarm.JobStatus{JobIteration: swarm.Version{Index: 42}},
+	}
+
+	md := buildMetadata(svc)
+	if md.serviceMode != serviceModeReplicatedJob {
+		t.Errorf("serviceMode = %q, want %q", md.serviceMode, serviceModeReplicatedJob)
+	}
+
+	if md.configuredReplicas != 5 {
+		t.Errorf("configuredReplicas = %v, want 5 (TotalCompletions)", md.configuredReplicas)
+	}
+
+	if md.jobIteration != 42 {
+		t.Errorf("jobIteration = %d, want 42", md.jobIteration)
+	}
+}
+
+func TestBuildMetadata_GlobalJob(t *testing.T) {
+	resetCollectorState(t)
+
+	svc := &swarm.Service{
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{Name: "job"},
+			Mode:        swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}},
+		},
+		JobStatus: &swarm.JobStatus{JobIteration: swarm.Version{Index: 9}},
+	}
+
+	md := buildMetadata(svc)
+	if md.serviceMode != serviceModeGlobalJob {
+		t.Errorf("serviceMode = %q, want %q", md.serviceMode, serviceModeGlobalJob)
+	}
+
+	if md.configuredReplicas != 0 {
+		t.Errorf("configuredReplicas = %v, want 0 for global-job", md.configuredReplicas)
+	}
+
+	if md.jobIteration != 9 {
+		t.Errorf("jobIteration = %d, want 9", md.jobIteration)
+	}
+
+	// A service without JobStatus (not a job, or not reported) leaves the iteration at 0.
+	svc.JobStatus = nil
+	if md = buildMetadata(svc); md.jobIteration != 0 {
+		t.Errorf("jobIteration = %d, want 0 without JobStatus", md.jobIteration)
 	}
 }
 
@@ -305,5 +438,29 @@ func TestGetReplicatedServiceMetadata_FiltersCorrectly(t *testing.T) {
 		if md.serviceMode != serviceModeReplicated {
 			t.Errorf("unexpected mode %q", md.serviceMode)
 		}
+	}
+}
+
+func TestGetNodeDependentServiceIDs_GlobalAndGlobalJobOnly(t *testing.T) {
+	resetCollectorState(t)
+
+	for serviceID, mode := range map[string]string{
+		"rep":    serviceModeReplicated,
+		"glb":    serviceModeGlobal,
+		"repjob": serviceModeReplicatedJob,
+		"glbjob": serviceModeGlobalJob,
+	} {
+		setServiceMetadata(
+			serviceID,
+			&serviceMetadata{serviceMode: mode, customLabels: map[string]string{}},
+		)
+	}
+
+	got := getNodeDependentServiceIDs()
+	slices.Sort(got)
+
+	want := []string{"glb", "glbjob"}
+	if !slices.Equal(got, want) {
+		t.Errorf("getNodeDependentServiceIDs() = %v, want %v", got, want)
 	}
 }

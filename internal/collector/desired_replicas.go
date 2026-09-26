@@ -26,8 +26,9 @@ package collector
 
 // desired_replicas exposes the gauge "swarm_service_desired_replicas", which tracks
 // the scheduler's desired replica count for each service. For replicated services,
-// this is the configured replica count. For global services, it approximates the
-// number of eligible nodes by evaluating placement constraints and node status.
+// this is the configured replica count, and for replicated jobs the total number of
+// completions. For global services and global jobs, it approximates the number of
+// eligible nodes by evaluating placement constraints and node status.
 
 import (
 	"context"
@@ -56,6 +57,7 @@ var desiredReplicasGauge *prometheus.GaugeVec
 // scheduled right now given current node availability and placement constraints.
 // For replicated services it equals min(configured, eligible_nodes).
 // For global services it equals the eligible-node count (same as desired_replicas).
+// For jobs and RestartPolicy.Condition=="none" services it is always 0.
 var schedulableReplicasGauge *prometheus.GaugeVec
 
 // Event stream / worker pool configuration.
@@ -99,10 +101,11 @@ func ConfigureDesiredReplicasGauge() {
 	}, getSanitizedCustomLabelNames()...)
 
 	desiredReplicasGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusServiceSubsystem,
-		Name:        "desired_replicas",
-		Help:        "Number of desired replicas for a Swarm service (replicated: configured replicas; global: eligible nodes).",
+		Namespace: prometheusNamespace,
+		Subsystem: prometheusServiceSubsystem,
+		Name:      "desired_replicas",
+		Help: "Number of desired replicas for a Swarm service (replicated: configured replicas; " +
+			"replicated-job: total completions; global and global-job: eligible nodes).",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(desiredReplicasGauge)
@@ -112,7 +115,8 @@ func ConfigureDesiredReplicasGauge() {
 		Subsystem: prometheusServiceSubsystem,
 		Name:      "schedulable_replicas",
 		Help: "Number of replicas that can currently be scheduled given node availability and placement constraints " +
-			"(replicated: min(configured, eligible_nodes); global: eligible nodes).",
+			"(replicated: min(configured, eligible_nodes); global: eligible nodes; " +
+			"jobs and restart-condition none services: 0).",
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(schedulableReplicasGauge)
@@ -468,10 +472,12 @@ func processEvent(
 	if evt.Type == "node" {
 		switch evt.Action { //nolint:exhaustive // only create/remove affect desired replica approximation here
 		case events.ActionCreate, events.ActionRemove, events.ActionUpdate:
-			// Node topology/schedulability changed → refresh nodes, recompute only globals.
-			refreshErr := refreshNodesAndRecomputeGlobals(parentContext, dockerClient)
+			// Node topology/schedulability changed → refresh nodes, recompute only the
+			// services whose counts follow the nodes.
+			refreshErr := refreshNodesAndRecomputeNodeDependent(parentContext, dockerClient)
 			if refreshErr != nil {
-				logger.L().Warn("refresh nodes and recompute globals", "err", refreshErr)
+				logger.L().
+					Warn("refresh nodes and recompute node-dependent services", "err", refreshErr)
 			}
 		default:
 			// Ignore other node events (e.g., updates) for this gauge.
@@ -566,14 +572,17 @@ func labelsForMetadata(metadata *serviceMetadata) prometheus.Labels {
 
 // updateServiceReplicasGauge sets the per-service desired and schedulable replica values.
 // For replicated services, desired = configured replicas, schedulable = min(configured, eligible_nodes).
-// For global services, both desired and schedulable equal the eligible-node count.
+// For replicated jobs, desired = total completions and schedulable = 0.
+// For global services and global jobs, desired is the eligible-node count, and so is schedulable
+// for global services (0 for global jobs).
 func updateServiceReplicasGauge(
 	parentContext context.Context,
 	dockerClient DockerAPI,
 	service *swarm.Service,
 	metadata *serviceMetadata,
 ) {
-	if service.Spec.Mode.Replicated != nil {
+	switch metadata.serviceMode {
+	case serviceModeReplicated:
 		desired := float64(*service.Spec.Mode.Replicated.Replicas)
 		setServiceDesiredReplicas(service.ID, desired)
 		setDesiredReplicasGauge(metadata, desired)
@@ -590,9 +599,20 @@ func updateServiceReplicasGauge(
 		setSchedulableReplicasGauge(metadata, schedulable)
 
 		return
+	case serviceModeReplicatedJob:
+		// The target is the number of completions, whatever the nodes; schedulable is forced to 0.
+		desired := jobTotalCompletions(service.Spec.Mode.ReplicatedJob)
+		setServiceDesiredReplicas(service.ID, desired)
+		setDesiredReplicasGauge(metadata, desired)
+		setSchedulableReplicasGauge(metadata, desired)
+
+		return
+	default:
+		// Global services and global jobs follow the eligible-node count below.
 	}
 
-	// Global service: both desired and schedulable equal the eligible-node count.
+	// Global service or global job: desired equals the eligible-node count, and so does
+	// schedulable before setSchedulableReplicasGauge forces jobs to 0.
 
 	// Attempt to use cached nodes if available.
 	if nodes := getCachedNodes(); len(nodes) > 0 {
@@ -637,12 +657,13 @@ func setDesiredReplicasGauge(metadata *serviceMetadata, value float64) {
 }
 
 // setSchedulableReplicasGauge writes the schedulable replicas gauge value.
-// Services with RestartPolicy.Condition=="none" (one-shot/cronjob) are forced
-// to 0 because the scheduler is not expected to keep tasks running for them
-// — using the raw placement-eligibility value would produce constant
-// false-positive alerts of the form running_replicas < schedulable_replicas.
+// Services with RestartPolicy.Condition=="none" (one-shot/cronjob) and job services
+// (replicated-job, global-job) are forced to 0 because the scheduler is not expected
+// to keep tasks running for them: a job's tasks run to completion and exit. Using the
+// raw placement-eligibility value would produce constant false-positive alerts of the
+// form running_replicas < schedulable_replicas.
 func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
-	if metadata.restartConditionNone {
+	if metadata.restartConditionNone || isJobMode(metadata.serviceMode) {
 		value = 0
 	}
 
@@ -676,7 +697,7 @@ func countActiveNodes(parentContext context.Context, dockerClient DockerAPI) (in
 	return activeCount, nil
 }
 
-// countEligibleNodesForService returns the number of nodes where a GLOBAL service
+// countEligibleNodesForService returns the number of nodes where a global service or global job
 // would place tasks, based on node schedulability + placement constraints + platforms.
 func countEligibleNodesForService(
 	parentContext context.Context,
@@ -691,78 +712,55 @@ func countEligibleNodesForService(
 		return 0, fmt.Errorf("node list: %w", listErr)
 	}
 
-	nodes := listResult.Items
-
-	// Precompute constraint predicates
-	var constraints []string
-	if service.Spec.TaskTemplate.Placement != nil &&
-		len(service.Spec.TaskTemplate.Placement.Constraints) > 0 {
-		constraints = service.Spec.TaskTemplate.Placement.Constraints
-	}
-
-	var platforms []swarm.Platform
-	if service.Spec.TaskTemplate.Placement != nil &&
-		len(service.Spec.TaskTemplate.Placement.Platforms) > 0 {
-		platforms = service.Spec.TaskTemplate.Placement.Platforms
-	}
-
-	eligibleCount := 0
-
-	for index := range nodes {
-		node := &nodes[index]
-		if !isNodeSchedulable(node) {
-			continue
-		}
-
-		if len(platforms) > 0 && !platformMatches(node, platforms) {
-			continue
-		}
-
-		if !constraintsMatch(node, constraints) {
-			continue
-		}
-
-		eligibleCount++
-	}
-
-	return eligibleCount, nil
+	return countEligibleNodesForServiceFromNodes(listResult.Items, service), nil
 }
 
-// countEligibleNodesForServiceFromNodes returns eligible nodes count using a provided snapshot.
-// It mirrors countEligibleNodesForService but avoids NodeList round-trips.
+// countEligibleNodesForServiceFromNodes returns eligible nodes count using a provided snapshot,
+// without a NodeList round-trip (countEligibleNodesForService lists the nodes, then calls it).
 func countEligibleNodesForServiceFromNodes(nodes []swarm.Node, service *swarm.Service) int {
-	var constraints []string
-	if service.Spec.TaskTemplate.Placement != nil &&
-		len(service.Spec.TaskTemplate.Placement.Constraints) > 0 {
-		constraints = service.Spec.TaskTemplate.Placement.Constraints
-	}
-
-	var platforms []swarm.Platform
-	if service.Spec.TaskTemplate.Placement != nil &&
-		len(service.Spec.TaskTemplate.Placement.Platforms) > 0 {
-		platforms = service.Spec.TaskTemplate.Placement.Platforms
-	}
-
+	placement := service.Spec.TaskTemplate.Placement
 	eligibleCount := 0
 
 	for index := range nodes {
-		node := &nodes[index]
-		if !isNodeSchedulable(node) {
-			continue
+		if nodeEligible(&nodes[index], placement) {
+			eligibleCount++
 		}
-
-		if len(platforms) > 0 && !platformMatches(node, platforms) {
-			continue
-		}
-
-		if !constraintsMatch(node, constraints) {
-			continue
-		}
-
-		eligibleCount++
 	}
 
 	return eligibleCount
+}
+
+// nodeEligible reports whether a task with the given placement could be placed on node: the
+// node is schedulable, matches one of the required platforms (when any), and meets every
+// placement constraint. A nil placement only requires a schedulable node.
+func nodeEligible(node *swarm.Node, placement *swarm.Placement) bool {
+	if !isNodeSchedulable(node) {
+		return false
+	}
+
+	if placement == nil {
+		return true
+	}
+
+	if len(placement.Platforms) > 0 && !platformMatches(node, placement.Platforms) {
+		return false
+	}
+
+	return constraintsMatch(node, placement.Constraints)
+}
+
+// placementFromMetadata rebuilds the placement cached in metadata, for evaluating eligibility
+// without the service spec. It returns nil when the service has neither constraints nor
+// platforms.
+func placementFromMetadata(metadata *serviceMetadata) *swarm.Placement {
+	if len(metadata.constraints) == 0 && len(metadata.platforms) == 0 {
+		return nil
+	}
+
+	return &swarm.Placement{
+		Constraints: metadata.constraints,
+		Platforms:   metadata.platforms,
+	}
 }
 
 // isNodeSchedulable applies basic Swarm scheduling preconditions:
@@ -960,10 +958,11 @@ func matchNodeIPConstraint(operator, expected, nodeAddr string) bool {
 	return matched
 }
 
-// refreshNodesAndRecomputeGlobals refreshes the nodes cache once and recomputes
-// desired replicas for all global-mode services using the cached nodes.
-// It avoids a full metric Reset or ServiceList.
-func refreshNodesAndRecomputeGlobals(
+// refreshNodesAndRecomputeNodeDependent refreshes the nodes cache once and recomputes, using
+// the cached nodes, the desired replicas of every service whose desired count is the
+// eligible-node count (global services and global jobs), then the schedulable replicas of
+// replicated services. It avoids a full metric Reset or ServiceList.
+func refreshNodesAndRecomputeNodeDependent(
 	parentContext context.Context,
 	dockerClient DockerAPI,
 ) error {
@@ -980,9 +979,9 @@ func refreshNodesAndRecomputeGlobals(
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
 
-	globalIDs := getGlobalServiceIDs()
-	for index := range globalIDs {
-		serviceID := globalIDs[index]
+	nodeDependentIDs := getNodeDependentServiceIDs()
+	for index := range nodeDependentIDs {
+		serviceID := nodeDependentIDs[index]
 
 		// We need the current service spec to properly evaluate constraints/platforms.
 		inspectResult, inspectErr := dockerClient.ServiceInspect(
@@ -1004,7 +1003,8 @@ func refreshNodesAndRecomputeGlobals(
 		metadata, ok := getServiceMetadata(serviceID)
 		if !ok {
 			// Should be rare; skip with a warning.
-			logger.L().Warn("metadata missing during global recompute", "service_id", serviceID)
+			logger.L().
+				Warn("metadata missing during node-dependent recompute", "service_id", serviceID)
 
 			continue
 		}
@@ -1013,7 +1013,10 @@ func refreshNodesAndRecomputeGlobals(
 		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
 		setServiceDesiredReplicas(service.ID, eligible)
 		setDesiredReplicasGauge(&metadata, eligible)
-		setSchedulableReplicasGauge(&metadata, eligible) // same as desired for globals
+		setSchedulableReplicasGauge(
+			&metadata,
+			eligible,
+		) // same as desired for globals, 0 for global jobs
 	}
 
 	// Recompute schedulable_replicas for replicated services using cached constraints.
@@ -1023,12 +1026,7 @@ func refreshNodesAndRecomputeGlobals(
 		metadata := replicatedMetadata[index]
 
 		stub := &swarm.Service{}
-		if len(metadata.constraints) > 0 || len(metadata.platforms) > 0 {
-			stub.Spec.TaskTemplate.Placement = &swarm.Placement{
-				Constraints: metadata.constraints,
-				Platforms:   metadata.platforms,
-			}
-		}
+		stub.Spec.TaskTemplate.Placement = placementFromMetadata(&metadata)
 
 		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, stub))
 		schedulable := min(metadata.configuredReplicas, eligible)

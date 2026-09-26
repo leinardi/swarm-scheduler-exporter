@@ -30,15 +30,18 @@ All metrics live under the `swarm_` namespace.
 
 ### Service-level
 
+`service_mode` is `replicated`, `global`, `replicated-job` or `global-job`, as in the `MODE` column of `docker service ls`.
+
 - `swarm_service_desired_replicas{stack,service,service_mode,...custom}`
   Desired replicas (**replicated**: configured replicas; **global**: number of eligible nodes, e.g. `6` on a healthy 6-node cluster with
-  no constraints). A node is eligible when it is `ready` + `active` and meets the service's placement constraints and platforms.
+  no constraints; **replicated-job**: the job's total completions; **global-job**: number of eligible nodes). A node is eligible when it is `ready` + `active` and meets the service's placement constraints and platforms.
   Placement-constraint evaluation follows Swarm: values are case-insensitive, a missing label compares as empty, and `node.ip`
   supports an IP or CIDR.
 
 - `swarm_task_replicas_state{stack,service,service_mode,state,...custom}`
-  Task count by state, counting the **current task per slot** for replicated services or **per node** for global services (always emits
-  zeros for all known states per current service).
+  Task count by state, counting the **current task per slot** for replicated services and replicated jobs or **per node** for global
+  services and global jobs (always emits zeros for all known states per current service). Jobs count only the tasks of their **current
+  iteration**: tasks left behind by an earlier run of the job are skipped.
 
 - `swarm_service_running_replicas{stack,service,service_mode,...custom}`
   Number of **currently running** tasks per service (current task per slot or node, same snapshot as `replicas_state`).
@@ -51,6 +54,10 @@ All metrics live under the `swarm_` namespace.
 
 - `swarm_service_at_desired{stack,service,service_mode,...custom}`
   `1` if `running_replicas == desired_replicas`, else `0`. Useful for dead-simple SLOs and alerting.
+  **Jobs** are at desired once they have **finished**: every task of the current iteration that Swarm still wants is `complete`, and
+  there are at least `desired_replicas` of them for a replicated job. For a global job, every node that is eligible **now** must have a
+  completed task of the current iteration, so a node that becomes eligible after the job ran keeps it at `0` until its own task
+  completes. While a job is still running, `at_desired` is `0`.
 
 - `swarm_service_schedulable_replicas{stack,service,service_mode,...custom}`
   Number of replicas that can currently be scheduled given node availability and placement constraints.
@@ -58,6 +65,7 @@ All metrics live under the `swarm_` namespace.
   **Global**: equal to `desired_replicas` (eligible-node count).
   **One-shot / cronjob services** (`RestartPolicy.Condition == "none"`): always `0`, since the scheduler is not expected to keep tasks running for
   them. This silences false positives for swarm-cronjob–managed services that idle at `running=0` between runs.
+  **Jobs** (`replicated-job`, `global-job`): always `0` too, since a job's tasks run to completion and exit.
   Architecture matching for `Placement.Platforms` normalizes kernel-style names (`x86_64`, `aarch64`, `armv7l`, `i686`, …) to Docker manifest names (
   `amd64`, `arm64`, `arm`, `386`, …) on both sides of the comparison, so a manager that reports `x86_64` correctly matches a service requiring
   `amd64`.
@@ -349,6 +357,10 @@ Prometheus Alert rule:
       One or more Swarm nodes are not in 'ready' status.
       Check 'docker node ls' and node availability / connectivity.
 ```
+
+> ℹ️ **Jobs and `SwarmServiceNotAtDesired`:** a job reports `at_desired=0` until it has finished, so a job that runs longer than the
+> rule's `for:` fires it. Exclude jobs with `swarm_service_at_desired{service_mode!~".*-job"} == 0`, or give them their own rule with a
+> longer `for:`.
 
 ## 🧪 Quick checks
 
