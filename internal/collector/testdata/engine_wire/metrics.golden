@@ -62,7 +62,7 @@ swarm_service_at_desired{com_example_team="",display_name="db",service="db",serv
 swarm_service_at_desired{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
 swarm_service_at_desired{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
 swarm_service_at_desired{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 0
-# HELP swarm_service_desired_replicas Number of desired replicas for a Swarm service (replicated: configured replicas; global: eligible nodes).
+# HELP swarm_service_desired_replicas Number of desired replicas for a Swarm service (replicated: configured replicas; replicated-job: total completions; global and global-job: eligible nodes).
 # TYPE swarm_service_desired_replicas gauge
 swarm_service_desired_replicas{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 2
 swarm_service_desired_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
@@ -74,7 +74,7 @@ swarm_service_running_replicas{com_example_team="",display_name="db",service="db
 swarm_service_running_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
 swarm_service_running_replicas{com_example_team="ops",display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
 swarm_service_running_replicas{com_example_team="payments",display_name="web api",service="api",service_mode="replicated",stack="web"} 2
-# HELP swarm_service_schedulable_replicas Number of replicas that can currently be scheduled given node availability and placement constraints (replicated: min(configured, eligible_nodes); global: eligible nodes).
+# HELP swarm_service_schedulable_replicas Number of replicas that can currently be scheduled given node availability and placement constraints (replicated: min(configured, eligible_nodes); global: eligible nodes; jobs and restart-condition none services: 0).
 # TYPE swarm_service_schedulable_replicas gauge
 swarm_service_schedulable_replicas{com_example_team="",display_name="db",service="db",service_mode="replicated",stack=""} 1
 swarm_service_schedulable_replicas{com_example_team="",display_name="web agent",service="agent",service_mode="global",stack="web"} 1
