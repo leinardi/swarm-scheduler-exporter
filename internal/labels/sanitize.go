@@ -30,7 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -162,46 +162,47 @@ func MaybeWarnHighCardinality(labelKey, labelValue string) {
 
 // ---- internal helpers ----
 
+// sanitizeName maps labelName to a Prometheus label name: every rune outside [A-Za-z0-9_] becomes
+// '_', non-ASCII letters and invalid bytes included, and '_' is prefixed when the result would not
+// start with [A-Za-z_]. The result is ASCII.
 func sanitizeName(labelName string) string {
 	if labelName == "" {
 		return "_"
 	}
 
-	// Replace any non [A-Za-z0-9_] with '_'
 	var builder strings.Builder
 	builder.Grow(len(labelName))
 
-	for _, runeVal := range labelName {
-		if runeVal == '_' || unicode.IsLetter(runeVal) || unicode.IsDigit(runeVal) {
-			// Always emit; if first char ends up invalid (digit), we prefix '_' below.
-			builder.WriteRune(runeVal)
+	// One '_' per rune: a multi-byte rune starts with a byte >= 0x80, never a label-name byte.
+	for index := 0; index < len(labelName); {
+		_, size := utf8.DecodeRuneInString(labelName[index:])
+
+		if isLabelNameByte(labelName[index]) {
+			builder.WriteByte(labelName[index])
 		} else {
 			builder.WriteByte('_')
 		}
+
+		index += size
 	}
 
 	out := builder.String()
-	// Ensure first char is [A-Za-z_]
-	firstRune := rune(out[0])
-	if firstRune != '_' && !unicode.IsLetter(firstRune) {
+	// The output is ASCII, so its first byte is its first character.
+	if !isLabelNameStartByte(out[0]) {
 		out = "_" + out
 	}
 
 	return out
 }
 
+// isValidLabelName reports whether labelName matches [a-zA-Z_][a-zA-Z0-9_]*.
 func isValidLabelName(labelName string) bool {
-	if labelName == "" {
+	if labelName == "" || !isLabelNameStartByte(labelName[0]) {
 		return false
 	}
 
-	firstRune := rune(labelName[0])
-	if firstRune != '_' && !unicode.IsLetter(firstRune) {
-		return false
-	}
-
-	for _, runeVal := range labelName[1:] {
-		if runeVal != '_' && !unicode.IsLetter(runeVal) && !unicode.IsDigit(runeVal) {
+	for index := 1; index < len(labelName); index++ {
+		if !isLabelNameByte(labelName[index]) {
 			return false
 		}
 	}
@@ -209,12 +210,29 @@ func isValidLabelName(labelName string) bool {
 	return true
 }
 
+// isLabelNameStartByte reports whether char may start a label name: [A-Za-z_].
+func isLabelNameStartByte(char byte) bool {
+	return char == '_' || ('a' <= char && char <= 'z') || ('A' <= char && char <= 'Z')
+}
+
+// isLabelNameByte reports whether char may appear in a label name: [A-Za-z0-9_].
+func isLabelNameByte(char byte) bool {
+	return isLabelNameStartByte(char) || ('0' <= char && char <= '9')
+}
+
+// truncate returns at most maxLength bytes of input, cut on a rune boundary so a multi-byte
+// character is never split.
 func truncate(input string, maxLength int) string {
 	if len(input) <= maxLength {
 		return input
 	}
 
-	return input[:maxLength]
+	cut := maxLength
+	for cut > 0 && !utf8.RuneStart(input[cut]) {
+		cut--
+	}
+
+	return input[:cut]
 }
 
 // Heuristic: detects UUID-like and long-hex tokens (common high-cardinality culprits).

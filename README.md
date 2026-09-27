@@ -367,9 +367,15 @@ is available at:
 
 ### Custom label guardrails
 
-- Names are validated & **sanitized** to Prometheus label rules
-  (e.g., `app.kubernetes.io/name` → `app_kubernetes_io_name`).
-- Duplicate/colliding sanitized names are rejected at startup.
+- Names are validated & **sanitized** to Prometheus label rules: ASCII `[a-zA-Z0-9_]` only, every other character (non-ASCII
+  letters included) becomes `_`, and a name that would start with a digit gets a leading `_`
+  (e.g., `app.kubernetes.io/name` → `app_kubernetes_io_name`, `équipe` → `_quipe`). Label values are kept as they are.
+  > ⚠️ Earlier versions kept non-ASCII letters in label names. If a `-label` name has one, its series label name changes
+  > (`tëam` is now `t_am`): update the queries, dashboards and alerts that use it. A name that starts with two or more non-ASCII
+  > characters (`команда`, `团队`, `ÜÖteam`) now sanitizes to a name starting with `__`, which is reserved: the exporter
+  > rejects it at startup, and the `-label` must be renamed.
+- Duplicate/colliding sanitized names are rejected at startup, and so is a sanitized name starting with `__` (reserved by
+  Prometheus).
 - At most **8** custom label keys; more are rejected at startup.
 - A name that sanitizes to a label the exporter already uses (`stack`, `service`, `service_mode`, `display_name`, `state`) is
   rejected at startup.
