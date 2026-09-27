@@ -25,13 +25,21 @@
 package collector
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 )
 
 // startListener runs ListenSwarmEvents on dockerClient until the test ends.
@@ -114,6 +122,131 @@ func TestListenSwarmEvents_ReconnectResumesFromLastEventAndRequestsResync(t *tes
 	eventually(t, "a resync requested by the second reconnect", func() bool {
 		return resyncsRequested(reconciler) == before+2
 	})
+}
+
+// lockedBuffer is a buffer the listener goroutine writes logs to while the test reads them.
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(chunk []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.buffer.Write(chunk)
+
+	return len(chunk), nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buffer.String()
+}
+
+// captureLogs installs a JSON logger writing to the returned buffer, and restores the previous
+// logger when the test ends. Call it before starting any goroutine that logs, so the restore runs
+// after that goroutine's cleanup has stopped it.
+func captureLogs(t *testing.T) *lockedBuffer {
+	t.Helper()
+
+	previous := logger.L()
+	logs := &lockedBuffer{}
+
+	logger.Set(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { logger.Set(previous) })
+
+	return logs
+}
+
+// reconnectLogRecord is the part of a reconnect log record the tests assert on.
+type reconnectLogRecord struct {
+	Level string `json:"level"`
+	Msg   string `json:"msg"`
+	Err   string `json:"err"`
+}
+
+// reconnectLogRecords returns the records of logs that announce a reconnect, in order.
+func reconnectLogRecords(t *testing.T, logs string) []reconnectLogRecord {
+	t.Helper()
+
+	var records []reconnectLogRecord
+
+	for line := range strings.Lines(logs) {
+		var record reconnectLogRecord
+
+		decodeErr := json.Unmarshal([]byte(line), &record)
+		if decodeErr != nil {
+			t.Fatalf("decode log line %q: %v", line, decodeErr)
+		}
+
+		if strings.Contains(record.Msg, "reconnect") {
+			records = append(records, record)
+		}
+	}
+
+	return records
+}
+
+// TestListenSwarmEvents_ReconnectLogLevel ends one stream cleanly (io.EOF, as a proxy's idle
+// timeout does) and the next with another error: the first is logged at info, the second at warn,
+// and both still request a resync.
+func TestListenSwarmEvents_ReconnectLogLevel(t *testing.T) {
+	logs := captureLogs(t)
+
+	dockerClient := newStreamDocker(newReconcilerDocker(nil, nil))
+	reconciler := newTestReconciler(t, dockerClient)
+	completeFirstResync(t, reconciler)
+
+	before := resyncsRequested(reconciler)
+
+	startListener(t, dockerClient, reconciler)
+	waitOpened(t, dockerClient)
+
+	// The listener logs before its backoff, so a reopened stream means the record is written.
+	_, firstErr := dockerClient.stream(0)
+	firstErr <- io.EOF
+
+	waitOpened(t, dockerClient)
+
+	eventually(t, "a resync requested after the clean close", func() bool {
+		return resyncsRequested(reconciler) == before+1
+	})
+
+	_, secondErr := dockerClient.stream(1)
+	secondErr <- errClosedBody
+
+	waitOpened(t, dockerClient)
+
+	eventually(t, "a resync requested after the failed stream", func() bool {
+		return resyncsRequested(reconciler) == before+2
+	})
+
+	records := reconnectLogRecords(t, logs.String())
+	want := []reconnectLogRecord{
+		{
+			Level: "INFO",
+			Msg:   "event stream closed by the server; reconnecting",
+			Err:   "events stream error: EOF",
+		},
+		{
+			Level: "WARN",
+			Msg:   "event stream ended; will reconnect",
+			Err:   "events stream error: " + errClosedBody.Error(),
+		},
+	}
+
+	if len(records) != len(want) {
+		t.Fatalf("reconnect log records = %+v, want %+v", records, want)
+	}
+
+	for index := range want {
+		if records[index] != want[index] {
+			t.Errorf("reconnect log record %d = %+v, want %+v", index, records[index], want[index])
+		}
+	}
 }
 
 func TestListenSwarmEvents_FirstConnectionRequestsNoResync(t *testing.T) {

@@ -14,7 +14,8 @@ accurate eligibility for `global` services), **live task state** per service (cu
 - Watches Swarm **service** and **node** events to keep metrics fresh: events only mark what changed, and a single reconciler
   inspects it, backed by a full resync (service and node list) at startup, every 5 minutes, whenever it had to drop changes, and
   every time the event stream reconnects. A reconnect resumes the stream from just before the last event seen; the resync covers
-  what the daemon no longer replays, such as the events of a restart.
+  what the daemon no longer replays, such as the events of a restart. A socket proxy closing an idle stream (HAProxy does so after
+  its 10-minute client timeout on a quiet cluster) is expected: that clean close is logged at info, any other stream end at warn.
 - Periodically polls **tasks** and aggregates **current** states per service (current task per slot for replicated services or per node for
   global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only: status/availability/constraints/platforms).
