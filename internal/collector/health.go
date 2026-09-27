@@ -39,6 +39,7 @@ const (
 var (
 	// UnixNano timestamps (0 means "never").
 	lastPollSuccessUnixNano   atomic.Int64
+	lastResyncSuccessUnixNano atomic.Int64
 	lastEventsConnectUnixNano atomic.Int64
 
 	// Prometheus health metrics.

@@ -198,14 +198,17 @@ func serviceInspectRequest(query, serviceID string) string {
 // engineWireExcludedFamilies are registered families the golden file deliberately does not pin,
 // because their values depend on timing or do not come from the SDK.
 var engineWireExcludedFamilies = map[string]string{
-	"swarm_exporter_poll_duration_seconds":   "timing-dependent",
-	"swarm_exporter_polls_total":             "counts poll cycles, not SDK data",
-	"swarm_exporter_poll_errors_total":       "counts poll cycles, not SDK data",
-	"swarm_exporter_health":                  "derived from wall-clock poll freshness",
-	"swarm_exporter_build_info":              "ldflags, not SDK data",
-	"swarm_exporter_events_reconnects_total": "asserted by the reconnect case instead",
-	"swarm_exporter_events_dropped_total":    "asserted by the reconciler unit tests instead",
-	"swarm_exporter_poll_rejections_total":   "asserted by the poll protocol unit tests instead",
+	"swarm_exporter_poll_duration_seconds":                 "timing-dependent",
+	"swarm_exporter_polls_total":                           "counts poll cycles, not SDK data",
+	"swarm_exporter_poll_errors_total":                     "counts poll cycles, not SDK data",
+	"swarm_exporter_health":                                "derived from wall-clock poll freshness",
+	"swarm_exporter_build_info":                            "ldflags, not SDK data",
+	"swarm_exporter_events_reconnects_total":               "asserted by the reconnect case instead",
+	"swarm_exporter_events_dropped_total":                  "asserted by the reconciler unit tests instead",
+	"swarm_exporter_poll_rejections_total":                 "asserted by the poll protocol unit tests instead",
+	"swarm_exporter_resyncs_total":                         "asserted by the reconciler unit tests instead",
+	"swarm_exporter_last_poll_success_timestamp_seconds":   "wall-clock time",
+	"swarm_exporter_last_resync_success_timestamp_seconds": "wall-clock time",
 }
 
 func engineWireExpectations(t *testing.T) wireExpectations {
@@ -737,6 +740,8 @@ func restoreCollectorGlobals(t *testing.T) {
 	pollDuration, polls, pollErrors, reconnects := pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter,
 		eventsReconnectsTotalCounter
 	dropped, rejections := eventsDroppedTotalCounter, pollRejectionsTotalCounter
+	resyncs, lastPollSuccess, lastResyncSuccess := resyncsTotalCounter, lastPollSuccessTimestampGauge,
+		lastResyncSuccessTimestampGauge
 	updateState, updateStarted, updateCompleted := serviceUpdateStateGauge, serviceUpdateStartedTimestamp,
 		serviceUpdateCompletedTimestamp
 	containersState, enabled, includeSwarm := containersStateGauge, containersEnabled, containersIncludeSwarm
@@ -752,6 +757,8 @@ func restoreCollectorGlobals(t *testing.T) {
 		pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter, eventsReconnectsTotalCounter = pollDuration,
 			polls, pollErrors, reconnects
 		eventsDroppedTotalCounter, pollRejectionsTotalCounter = dropped, rejections
+		resyncsTotalCounter, lastPollSuccessTimestampGauge, lastResyncSuccessTimestampGauge = resyncs,
+			lastPollSuccess, lastResyncSuccess
 		serviceUpdateStateGauge, serviceUpdateStartedTimestamp, serviceUpdateCompletedTimestamp = updateState,
 			updateStarted, updateCompleted
 		containersStateGauge, containersEnabled, containersIncludeSwarm = containersState, enabled, includeSwarm

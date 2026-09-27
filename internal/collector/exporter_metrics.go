@@ -25,6 +25,7 @@
 package collector
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -37,6 +38,10 @@ var (
 	eventsReconnectsTotalCounter prometheus.Counter
 	eventsDroppedTotalCounter    prometheus.Counter
 	pollRejectionsTotalCounter   prometheus.Counter
+	resyncsTotalCounter          *prometheus.CounterVec
+
+	lastPollSuccessTimestampGauge   prometheus.GaugeFunc
+	lastResyncSuccessTimestampGauge prometheus.GaugeFunc
 )
 
 // ConfigureExporterOpsMetrics registers exporter self-observability metrics.
@@ -97,6 +102,56 @@ func ConfigureExporterOpsMetrics() {
 		ConstLabels: nil,
 	})
 	prometheus.MustRegister(pollRejectionsTotalCounter)
+
+	resyncsTotalCounter = newResyncsCounter()
+	prometheus.MustRegister(resyncsTotalCounter)
+
+	lastPollSuccessTimestampGauge = newUnixNanoTimestampGauge(
+		"last_poll_success_timestamp_seconds",
+		"Unix time of the latest successfully published replicas-state poll; 0 if none yet.",
+		&lastPollSuccessUnixNano,
+	)
+	prometheus.MustRegister(lastPollSuccessTimestampGauge)
+
+	lastResyncSuccessTimestampGauge = newUnixNanoTimestampGauge(
+		"last_resync_success_timestamp_seconds",
+		"Unix time of the latest completed resync (service and node list); 0 if none yet.",
+		&lastResyncSuccessUnixNano,
+	)
+	prometheus.MustRegister(lastResyncSuccessTimestampGauge)
+}
+
+// newResyncsCounter returns swarm_exporter_resyncs_total with both result series created at 0,
+// so increase() and "never failed" alerts work before the first resync.
+func newResyncsCounter() *prometheus.CounterVec {
+	counter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
+		Name:        "resyncs_total",
+		Help:        "Total number of resyncs (service and node list) by result: success or failure.",
+		ConstLabels: nil,
+	}, []string{labelResult})
+
+	counter.WithLabelValues(resyncResultSuccess).Add(0)
+	counter.WithLabelValues(resyncResultFailure).Add(0)
+
+	return counter
+}
+
+// newUnixNanoTimestampGauge returns a swarm_exporter gauge named name that reports unixNano, read
+// at scrape time, in seconds; 0 stays 0 ("never").
+//
+//nolint:ireturn // prometheus.NewGaugeFunc returns this interface; its implementation is unexported
+func newUnixNanoTimestampGauge(name, help string, unixNano *atomic.Int64) prometheus.GaugeFunc {
+	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
+		Name:        name,
+		Help:        help,
+		ConstLabels: nil,
+	}, func() float64 {
+		return float64(unixNano.Load()) / float64(time.Second)
+	})
 }
 
 // ObservePollDuration records a single poll duration.
@@ -140,5 +195,12 @@ func IncEventsDropped() {
 func IncPollRejections() {
 	if pollRejectionsTotalCounter != nil {
 		pollRejectionsTotalCounter.Inc()
+	}
+}
+
+// IncResync counts one resync with result resyncResultSuccess or resyncResultFailure.
+func IncResync(result string) {
+	if resyncsTotalCounter != nil {
+		resyncsTotalCounter.WithLabelValues(result).Inc()
 	}
 }

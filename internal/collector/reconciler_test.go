@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -255,9 +256,16 @@ func newTestReconciler(t *testing.T, dockerClient DockerAPI) *Reconciler {
 	installServiceUpdateGauges(t)
 	installNodesByStateGauge(t)
 
+	installResyncsCounter(t)
+
 	previous := activeReconciler.Load()
 
-	t.Cleanup(func() { activeReconciler.Store(previous) })
+	t.Cleanup(func() {
+		activeReconciler.Store(previous)
+		lastResyncSuccessUnixNano.Store(0)
+	})
+
+	lastResyncSuccessUnixNano.Store(0)
 
 	reconciler := NewReconciler(dockerClient)
 	reconciler.retryDelays = []time.Duration{
@@ -271,6 +279,19 @@ func newTestReconciler(t *testing.T, dockerClient DockerAPI) *Reconciler {
 	reconciler.nodesBackoff = reconciler.backoffInitial
 
 	return reconciler
+}
+
+// installResyncsCounter swaps in an unregistered swarm_exporter_resyncs_total for the rest of the
+// test, so resyncs counted by one test never show in another, and returns it.
+func installResyncsCounter(t *testing.T) *prometheus.CounterVec {
+	t.Helper()
+
+	previous := resyncsTotalCounter
+	resyncsTotalCounter = newResyncsCounter()
+
+	t.Cleanup(func() { resyncsTotalCounter = previous })
+
+	return resyncsTotalCounter
 }
 
 // runReconciler runs reconciler.Run until the test ends, then restores the active reconciler Run
@@ -1375,5 +1396,152 @@ func TestReconciler_PanickingResyncIsRateLimited(t *testing.T) {
 	// once, a resync that panics every time would run thousands.
 	if calls < 2 || calls > 12 {
 		t.Errorf("ServiceList calls in %s = %d, want between 2 and 12", window, calls)
+	}
+}
+
+// ---- Resync outcome metrics ----
+
+// configureExporterOpsMetricsForTest registers the exporter self-metrics for the rest of the test,
+// then unregisters them and restores the globals.
+func configureExporterOpsMetricsForTest(t *testing.T) {
+	t.Helper()
+
+	restoreCollectorGlobals(t)
+	ConfigureExporterOpsMetrics()
+	t.Cleanup(unregisterExporterOpsMetrics)
+}
+
+// assertResyncCounts checks swarm_exporter_resyncs_total, whose two series always exist.
+func assertResyncCounts(t *testing.T, when string, wantSuccess, wantFailure float64) {
+	t.Helper()
+
+	success := testutil.ToFloat64(resyncsTotalCounter.WithLabelValues(resyncResultSuccess))
+	failure := testutil.ToFloat64(resyncsTotalCounter.WithLabelValues(resyncResultFailure))
+
+	if success != wantSuccess || failure != wantFailure {
+		t.Errorf(
+			"%s: resyncs_total success=%v failure=%v, want success=%v failure=%v",
+			when,
+			success,
+			failure,
+			wantSuccess,
+			wantFailure,
+		)
+	}
+}
+
+// unixSeconds is t as the timestamp gauges report it.
+func unixSeconds(at time.Time) float64 {
+	return float64(at.UnixNano()) / float64(time.Second)
+}
+
+func TestConfigureExporterOpsMetrics_ResyncsStartAtZero(t *testing.T) {
+	configureExporterOpsMetricsForTest(t)
+
+	want := `
+# HELP swarm_exporter_resyncs_total Total number of resyncs (service and node list) by result: success or failure.
+# TYPE swarm_exporter_resyncs_total counter
+swarm_exporter_resyncs_total{result="failure"} 0
+swarm_exporter_resyncs_total{result="success"} 0
+`
+
+	compareErr := testutil.CollectAndCompare(resyncsTotalCounter, strings.NewReader(want))
+	if compareErr != nil {
+		t.Errorf("resyncs_total right after configuration:\n%v", compareErr)
+	}
+}
+
+func TestReconciler_ResyncOutcomeCounted(t *testing.T) {
+	dockerClient := newReconcilerDocker(nil, nil)
+	reconciler := newTestReconciler(t, dockerClient)
+
+	dockerClient.mu.Lock()
+	dockerClient.serviceListErr = errListUnavailable
+	dockerClient.mu.Unlock()
+
+	reconciler.resync(context.Background())
+	assertResyncCounts(t, "after a failed resync", 0, 1)
+
+	dockerClient.mu.Lock()
+	dockerClient.serviceListErr = nil
+	dockerClient.mu.Unlock()
+
+	reconciler.resync(context.Background())
+	assertResyncCounts(t, "after a successful resync", 1, 1)
+}
+
+func TestReconciler_CanceledResyncNotCounted(t *testing.T) {
+	dockerClient := newReconcilerDocker(nil, nil)
+	reconciler := newTestReconciler(t, dockerClient)
+
+	dockerClient.mu.Lock()
+	dockerClient.serviceListErr = errListUnavailable
+	dockerClient.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	reconciler.resync(ctx)
+	assertResyncCounts(t, "after a canceled resync", 0, 0)
+}
+
+func TestReconciler_PanickingResyncCountedAsFailure(t *testing.T) {
+	// The recovered panic is logged with its stack; keep it out of the test output.
+	captureLogs(t)
+
+	dockerClient := &panickingListDocker{reconcilerDocker: newReconcilerDocker(nil, nil)}
+	reconciler := newTestReconciler(t, dockerClient)
+
+	reconciler.cycle(context.Background())
+
+	dockerClient.mu.Lock()
+	calls := dockerClient.calls
+	dockerClient.mu.Unlock()
+
+	if calls != 1 {
+		t.Fatalf("ServiceList calls = %d, want the one resync of the cycle", calls)
+	}
+
+	assertResyncCounts(t, "after a panicking resync", 0, 1)
+}
+
+func TestReconciler_LastResyncSuccessTimestamp(t *testing.T) {
+	reconciler := newTestReconciler(t, newReconcilerDocker(nil, nil))
+	configureExporterOpsMetricsForTest(t)
+
+	if got := testutil.ToFloat64(lastResyncSuccessTimestampGauge); got != 0 {
+		t.Errorf("last_resync_success_timestamp_seconds before any resync = %v, want 0", got)
+	}
+
+	before := time.Now()
+
+	completeFirstResync(t, reconciler)
+
+	after := time.Now()
+
+	got := testutil.ToFloat64(lastResyncSuccessTimestampGauge)
+	if got < unixSeconds(before) || got > unixSeconds(after) {
+		t.Errorf(
+			"last_resync_success_timestamp_seconds = %v, want the completion time, between %v and %v",
+			got,
+			unixSeconds(before),
+			unixSeconds(after),
+		)
+	}
+}
+
+func TestLastPollSuccessTimestampFollowsMarkPollOK(t *testing.T) {
+	resetHealthState(t)
+	configureExporterOpsMetricsForTest(t)
+
+	if got := testutil.ToFloat64(lastPollSuccessTimestampGauge); got != 0 {
+		t.Errorf("last_poll_success_timestamp_seconds before any poll = %v, want 0", got)
+	}
+
+	polledAt := time.Unix(1_700_000_000, 123_456_789)
+	MarkPollOK(polledAt)
+
+	if got := testutil.ToFloat64(lastPollSuccessTimestampGauge); got != unixSeconds(polledAt) {
+		t.Errorf("last_poll_success_timestamp_seconds = %v, want %v", got, unixSeconds(polledAt))
 	}
 }

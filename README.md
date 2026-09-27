@@ -124,6 +124,30 @@ Every service-level metric, including the update/rollback metrics below, carries
 - `swarm_exporter_events_dropped_total` — Swarm events ignored because they carried no actor ID.
 - `swarm_exporter_poll_rejections_total` — per-service poll counts not published because the service changed while its tasks were
   listed (see **Consistency** above).
+- `swarm_exporter_resyncs_total{result}` — resyncs (service and node list) by `result`: `success` or `failure`. Both series exist
+  at `0` from startup, so `increase()` and "never failed" rules work before the first resync. A resync interrupted by shutdown is
+  not counted.
+- `swarm_exporter_last_poll_success_timestamp_seconds` — Unix time of the latest successfully published task poll; `0` until the
+  first one.
+- `swarm_exporter_last_resync_success_timestamp_seconds` — Unix time of the latest completed resync; `0` until the first one.
+
+For example:
+
+```yaml
+- alert: SwarmExporterResyncsFailing
+  expr: increase(swarm_exporter_resyncs_total{result="failure"}[30m]) > 3
+  labels:
+    severity: warning
+  annotations:
+    summary: "Swarm exporter resyncs keep failing"
+
+- alert: SwarmExporterPollsStale
+  expr: time() - swarm_exporter_last_poll_success_timestamp_seconds > 120
+  labels:
+    severity: warning
+  annotations:
+    summary: "Swarm exporter has not published a task poll for over 2 minutes"
+```
 
 ### Container-level (opt-in)
 
