@@ -51,7 +51,11 @@ LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 # Copy the binary
 COPY --from=build /out/swarm-scheduler-exporter /usr/local/bin/swarm-scheduler-exporter
 
-# dhi.io/static defaults to a non-root user; the exporter does not need root.
+# Run as a fixed non-root user; the exporter does not need root. The uid is pinned here rather
+# than inherited from the base image's default (65532 today), so a base update cannot change it.
+# A deployment that reaches the Docker socket through a bind mount adds the socket's group with
+# --group-add (docker run) or user: "65532:<gid>" (compose, stack) instead of running as root.
+USER 65532:65532
 
 # Document the metrics port
 EXPOSE 8888

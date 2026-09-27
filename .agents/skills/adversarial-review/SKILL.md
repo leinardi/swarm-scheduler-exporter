@@ -192,15 +192,15 @@ partial publish, or a README reason string that no longer matches the code is a 
       `dhi.io/golang:1.26.8-alpine3.23-dev@sha256:…`, matching `go 1.26.8` in `go.mod`, the
       runtime on `dhi.io/static:20250419@sha256:…`, and the `# syntax=` frontend line too. A
       base without a digest, or a Go image whose version differs from `go.mod`, is a finding.
-    - one gap remains: non-root comes only from the upstream image default, with no explicit
-      `USER` (the comment above `EXPOSE` asserts it).
+    - the runtime stage sets an explicit `USER 65532:65532`, never root, so the uid is pinned
+      in the Dockerfile rather than inherited from the base image's default
+      (`docker inspect --format '{{.Config.User}}'` on the built image prints `65532:65532`).
 
-  Review rule: a diff must not make this worse — adding root, dropping the static base,
-  adding a shell or package manager to the runtime stage, or widening mounts and
-  capabilities in the compose files is a finding. A diff that touches the Dockerfile and
-  leaves the `USER` gap unaddressed gets a **low** finding, not a blocker. The fix (an
-  explicit `USER 65532:65532` or whatever uid the dhi static image documents, verified with
-  `docker inspect --format '{{.Config.User}}'` on the built image) is a separate follow-up.
+  Review rule: a diff must not make this worse — adding root, removing or changing the
+  explicit `USER`, dropping the static base, adding a shell or package manager to the runtime
+  stage, or widening mounts and capabilities in the compose files is a finding. Socket access
+  is granted by adding the socket's group (`--group-add`, `user: "65532:<gid>"`), not by
+  running as root.
 
 ### Release and CI
 

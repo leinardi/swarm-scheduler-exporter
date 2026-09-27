@@ -222,7 +222,7 @@ stat -c %g /var/run/docker.sock
 ```
 
 Use that GID in the `--group` or `--group-add` flag so the container’s user
-(in the distroless image it’s a nonroot user, UID 65532) can connect to the socket.
+(the image sets an explicit non-root `USER 65532:65532`) can connect to the socket.
 
 If you skip this step, you’ll see errors like:
 
