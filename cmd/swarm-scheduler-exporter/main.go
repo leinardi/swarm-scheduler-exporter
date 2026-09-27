@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -55,7 +56,6 @@ const (
 	// Operability constants.
 	minPollDelay        = 1 * time.Second
 	httpShutdownTimeout = 10 * time.Second
-	healthTickInterval  = 5 * time.Second
 )
 
 // stringSlice implements flag.Value to support repeated -label flags
@@ -66,6 +66,10 @@ type stringSlice []string
 // is provided with an empty value. This is a sentinel error for tests
 // and for clearer calling code.
 var ErrEmptyFlagValue = errors.New("empty flag value")
+
+// ErrReservedLabelName is returned when a custom label sanitizes to a label name the exporter
+// already uses on its per-service metrics.
+var ErrReservedLabelName = errors.New("custom label collides with a reserved label name")
 
 // String returns the flag value in a human-friendly form.
 func (values *stringSlice) String() string {
@@ -284,6 +288,13 @@ func validateAndSetCustomLabels(rawKeys []string) error {
 	sanitized, sanitizeErr := labelutil.ValidateAndSanitizeLabelNames(rawKeys)
 	if sanitizeErr != nil {
 		return fmt.Errorf("sanitize custom label names: %w", sanitizeErr)
+	}
+
+	reserved := collector.ReservedLabelNames()
+	for _, name := range sanitized {
+		if slices.Contains(reserved, name) {
+			return fmt.Errorf("%w: %q", ErrReservedLabelName, name)
+		}
 	}
 
 	collector.SetCustomLabels(rawKeys, sanitized)

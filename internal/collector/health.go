@@ -85,10 +85,12 @@ func MarkEventsConnected(now time.Time) {
 //   - we have at least one successful poll, and
 //   - that poll is not older than max(3*pollDelay, 30s).
 func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reason string) {
-	lastPoll := time.Unix(0, lastPollSuccessUnixNano.Load())
-	if lastPoll.IsZero() {
+	lastPollUnixNano := lastPollSuccessUnixNano.Load()
+	if lastPollUnixNano == 0 {
 		return false, "no successful poll yet"
 	}
+
+	lastPoll := time.Unix(0, lastPollUnixNano)
 
 	// Staleness threshold: more lenient of the two
 	minWindow := 30 * time.Second

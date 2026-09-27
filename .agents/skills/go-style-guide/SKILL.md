@@ -493,7 +493,7 @@ swarm-scheduler-exporter/
 │   ├── labels/sanitize.go          # label sanitization and validation
 │   ├── logger/                     # slog configuration, global accessor, plain handler
 │   └── server/http.go              # mux for /metrics and /healthz
-├── deployments/docker/             # Dockerfile, compose, .dockerignore
+├── deployments/docker/             # Dockerfile, compose, Dockerfile.dockerignore
 ├── scripts/                        # shell helpers
 └── .mk/                            # Makefile snippets included by Makefile
 ```

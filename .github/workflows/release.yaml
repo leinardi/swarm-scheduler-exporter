@@ -364,7 +364,7 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The deps and build stages pull dhi.io/golang.
+      # The build stage pulls dhi.io/golang.
       - name: Log in to Docker Hardened Images (dhi.io)
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

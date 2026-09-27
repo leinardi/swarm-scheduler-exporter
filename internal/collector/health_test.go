@@ -43,8 +43,8 @@ func TestHealthSnapshot_NeverPolled(t *testing.T) {
 		t.Error("expected unhealthy when never polled")
 	}
 
-	if reason == "" {
-		t.Error("expected non-empty reason when never polled")
+	if reason != "no successful poll yet" {
+		t.Errorf("reason = %q, want %q", reason, "no successful poll yet")
 	}
 }
 

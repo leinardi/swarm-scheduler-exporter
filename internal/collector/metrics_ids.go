@@ -50,3 +50,9 @@ const (
 	serviceModeReplicatedJob = "replicated-job"
 	serviceModeGlobalJob     = "global-job"
 )
+
+// ReservedLabelNames returns the label names the per-service families already carry, which a
+// custom label must not reuse: a duplicate label name makes the vec constructor panic.
+func ReservedLabelNames() []string {
+	return []string{labelStack, labelService, labelServiceMode, labelDisplayName, labelState}
+}
