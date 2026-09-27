@@ -106,19 +106,79 @@ free-form strings) is a cardinality finding.
 ### Series lifecycle
 
 - Removing a resource **deletes** its series (`GaugeVec.Delete`, `ClearServiceUpdateMetrics`);
-  it never sets them to 0. A stale zero series tells dashboards the resource still exists.
+  it never sets them to 0. A stale zero series tells dashboards the resource still exists. A
+  service whose label identity changes (stack, name, mode, a custom label) has its old series
+  deleted before the new ones appear.
 - A known state set (task states, update states, container states) is emitted exhaustively
   for every subject, zeros included, so absent series never mean "0".
-- A gauge that mirrors a dynamic set is `Reset()` before it is re-emitted.
+- A family that mirrors a dynamic set (`replicas_state`, `running_replicas`, `at_desired`,
+  `nodes_by_state`, `container_state`) is a snapshot collector: the whole set is built first
+  and published in one swap, so a scrape never sees it empty or half-written. A build error
+  keeps the previous set. `Reset()` followed by re-emission is a finding: a scrape can land in
+  between.
+
+### One owner for Swarm state
+
+The service and node caches and the gauges derived from them are written by exactly one
+goroutine, the `Reconciler` (`internal/collector/reconciler.go`). Everything else only asks
+it for work or for a snapshot:
+
+- The event dispatcher only marks keys dirty (`enqueueEvent`), never blocking and never
+  calling Docker. A cache or gauge written from the dispatcher, the poller or an HTTP
+  handler is a finding.
+- Lock order is `Reconciler.mu` then `metadataMu`, never the reverse.
+- A generation (service, node, and the epoch for resyncs) is bumped when a change is
+  *queued*, not when it is applied, so a queued, unapplied change already invalidates a poll.
+  Moving a bump to apply time is a finding.
+- Readiness is the first completed resync: the poller does not start and `/healthz` stays
+  `503` ("initial resync not completed") until then. A resync fetches both `ServiceList` and
+  `NodeList` before mutating anything, and a failed one mutates nothing.
+- A resync is requested on overflow, on retry exhaustion, on a recovered panic, on every
+  event-stream reconnect and every `periodicResyncInterval`. Dropping any of these leaves the
+  caches behind Docker with nothing to catch them up.
+
+### Poll consistency
+
+The poller counts tasks against an immutable snapshot it gets from the reconciler and hands
+the counts back; the reconciler publishes a service only if its generation, its dirty key,
+the epoch and (for global services and global jobs) the node generation and the pending node
+refresh all still match the snapshot. A rejected service keeps its last published series for
+at most `maxCarriedPolls` (2) polls, only with an unchanged label identity; then its series
+are omitted and the poll fails, so health turns red. Findings:
+
+- counting or deduplicating tasks from the live caches instead of the snapshot;
+- a new rejection reason not checked, or carry-over that is unbounded or crosses a label
+  identity change;
+- `MarkPollOK` on anything but a fully published poll;
+- a poll or snapshot exchange that sends or waits without also selecting on `ctx.Done()`, or
+  a reply channel without room for the answer, so a shutdown can hang `workerGroup.Wait()`.
 
 ### Bounded work
 
-- Event handling goes through the fixed worker pool (`eventWorkerCount` workers,
-  `eventQueueCapacity` queue). A goroutine per event is a finding.
-- Every Docker call carries a context that is cancelled on shutdown and, where the call is
-  not a stream, bounded in time by the poll cycle or an explicit timeout.
+- Events become dirty keys in a bounded set (`pendingKeyCap`, 4096); past the cap the set is
+  dropped with fresh allocations and a resync is requested instead. The reconciler inspects
+  at most `serviceKeysPerCycle` (32) keys per cycle, a failed inspect is retried after
+  `serviceRetryDelays` and then dropped for a resync, and a failed resync or node refresh backs
+  off up to `backoffMaxDelay`. A goroutine per event, an unbounded queue, or a retry without a
+  delay is a finding.
+- Every request/response Docker call runs under `withDockerTimeout` (`dockerRequestTimeout`,
+  15s) derived from a context cancelled on shutdown. The event stream is the one exception:
+  it gets its own cancellable context per connection with no deadline, and its connection
+  setup is bounded by the transport (`newDockerClientWithTimeouts`). Container enrichment
+  shares one deadline per poll and at most `containersInspectCap` (300) inspects, failures
+  included.
 - No unbounded goroutines, and no map keyed by an external ID (service, node, container,
-  task) without an eviction path when that resource disappears.
+  task) without an eviction path when that resource disappears; that includes the
+  reconciler's generation and retry maps.
+
+### Health means published data
+
+`HealthSnapshot` is evaluated at scrape time, by `/healthz` and by the
+`swarm_exporter_health` `GaugeFunc` alike. It is unhealthy until the first resync completes,
+until a poll has been published, when the last published poll is older than
+`max(3 × poll delay, 30s)`, and when a requested resync has been outstanding for longer than
+that window. A health signal set by the poller itself, a timestamp moved on a failed or
+partial publish, or a README reason string that no longer matches the code is a finding.
 
 ### Endpoint and image hardening
 
@@ -127,20 +187,42 @@ free-form strings) is a cardinality finding.
 - `/metrics` and `/healthz` take no input that becomes work: no query parameter, header or
   body may trigger a Docker call, widen a scrape, or allocate per request beyond the
   exposition itself.
-- The image (`deployments/docker/Dockerfile`). These are **today's facts plus a direction**,
-  not invariants that already hold:
-    - the build stages use a mutable tag, `dhi.io/golang:1-alpine3.23-dev` (lines 6 and 18);
-    - the runtime base is date-tagged, `dhi.io/static:20250419`, not digest-pinned;
-    - non-root comes only from the upstream image default: there is no explicit `USER`
-      (lines 47–58; the comment on line 58 asserts it).
+- The image (`deployments/docker/Dockerfile`). What holds today:
+    - every base is pinned by tag and index digest: the build stage on
+      `dhi.io/golang:1.26.8-alpine3.23-dev@sha256:…`, matching `go 1.26.8` in `go.mod`, the
+      runtime on `dhi.io/static:20250419@sha256:…`, and the `# syntax=` frontend line too. A
+      base without a digest, or a Go image whose version differs from `go.mod`, is a finding.
+    - one gap remains: non-root comes only from the upstream image default, with no explicit
+      `USER` (the comment above `EXPOSE` asserts it).
 
   Review rule: a diff must not make this worse — adding root, dropping the static base,
   adding a shell or package manager to the runtime stage, or widening mounts and
   capabilities in the compose files is a finding. A diff that touches the Dockerfile and
-  leaves these gaps unaddressed gets a **low** finding, not a blocker. The fix (digest pins,
-  plus an explicit `USER 65532:65532` or whatever uid the dhi static image documents,
-  verified with `docker inspect --format '{{.Config.User}}'` on the built image) is a
-  separate follow-up.
+  leaves the `USER` gap unaddressed gets a **low** finding, not a blocker. The fix (an
+  explicit `USER 65532:65532` or whatever uid the dhi static image documents, verified with
+  `docker inspect --format '{{.Config.User}}'` on the built image) is a separate follow-up.
+
+### Release and CI
+
+`docs/release.md` is the contract; `.github/workflows/release.yaml` implements it. Tags here
+are immutable, so the order of the release job is the safety property:
+
+- The mode is decided from two fail-closed lookups before anything is pushed: the Git tag on
+  the remote and `ghcr.io/…:<version>`. Only "not found" may read as absent; a lookup whose
+  error is treated as absence is a blocker.
+- The image is built once, into the job-local registry, and only the digest that was scanned
+  is copied to GHCR (`skopeo copy --all --preserve-digests`), checked by hashing what GHCR
+  serves, attested and signed, and only then tagged `:<version>`. A second image build, a
+  scan of anything but the published digest, a copy that can change the digest (the build
+  forces gzip layers for this reason), or a version tag added before attest and sign is a
+  finding.
+- A reused image is verified by attestation and signature, never by comparing a rebuilt
+  index.
+- Trivy exceptions live only in `.trivyignore`, each with a reason and an `exp:` date; an
+  `--ignore-unfixed`, a lowered severity or an exception anywhere else is a finding.
+- Workflow tokens are `contents: read` at the top of every workflow, and a job asks for more
+  only with a comment saying why. Every action is pinned to a full commit SHA and every image
+  a workflow runs to an index digest; a new floating `@v…` or `:tag` is a finding.
 
 ## 4. Adversarial passes — language-agnostic
 
@@ -232,8 +314,10 @@ confirmed finding with the output attached:
 | Diff touched | Run |
 | --- | --- |
 | any `**/*.go` | `make go-build`, `go test -race ./...` (`make go-test` runs without `-race`), then `pre-commit run --all-files` |
-| `go.mod` / `go.sum` | `make audit-deps` (govulncheck); before that target exists, `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` |
+| `internal/collector/**`, `cmd/**`, `test/integration/**` | also `make go-test-integration` (a DinD Swarm; needs Docker with privileged containers) |
+| `go.mod` / `go.sum` | `make audit-deps` (govulncheck) |
 | `deployments/docker/Dockerfile` | hadolint via `pre-commit run --all-files`, plus `make docker-build` |
+| `.github/workflows/release.yaml` | actionlint via pre-commit; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `pre-commit run --all-files` (markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 
 golangci-lint may not be on `PATH`; run it through pre-commit. Several hooks rewrite files

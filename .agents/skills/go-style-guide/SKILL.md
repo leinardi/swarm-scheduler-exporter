@@ -132,7 +132,7 @@ Sentinels are package-level `var`s built with `errors.New`. Export them (`Err…
 when callers need `errors.Is`; unexported is fine for package-internal use:
 
 ```go
-var ErrNoCachedMetadata = errors.New("no cached metadata found for removed service")
+var ErrReplicasStateNotConfigured = errors.New("replicas state gauge not configured")
 var ErrEmptyFlagValue = errors.New("empty flag value")
 var ErrEventsStreamClosed = errors.New("events stream closed")
 ```
@@ -231,8 +231,8 @@ const (
     DefaultPollDelay    = 10 * time.Second
     minPollDelay        = 1 * time.Second
     httpShutdownTimeout = 10 * time.Second
-    eventWorkerCount    = 4
-    eventQueueCapacity  = 256
+    pendingKeyCap       = 4096
+    serviceKeysPerCycle = 32
     backoffInitialDelay = 500 * time.Millisecond
     backoffMaxDelay     = 30 * time.Second
 )
@@ -298,9 +298,8 @@ Doc comments:
 - Inline comments explain *why*, not *what* (see [§17](#17-comments-carry-rationale-history-goes-in-the-commit)):
 
   ```go
-  // Capture an anchor *before* we read the world, so any concurrent changes
-  // during seeding will still be caught by the event stream started with this "since".
-  initialSinceAnchor := time.Now()
+  // Cleared before the call: a node event that arrives during it sets the flag again.
+  r.nodesDirty = false
   ```
 
 - Large files are divided with `// --- Section name ---` separators
@@ -493,7 +492,7 @@ swarm-scheduler-exporter/
 │   ├── labels/sanitize.go          # label sanitization and validation
 │   ├── logger/                     # slog configuration, global accessor, plain handler
 │   └── server/http.go              # mux for /metrics and /healthz
-├── deployments/docker/             # Dockerfile, compose, .dockerignore
+├── deployments/docker/             # Dockerfile, compose, Dockerfile.dockerignore
 ├── scripts/                        # shell helpers
 └── .mk/                            # Makefile snippets included by Makefile
 ```
@@ -535,7 +534,6 @@ swarm-scheduler-exporter/
 
 - Every new function that does I/O or calls Docker takes `context.Context` as its first
   parameter, named `ctx`, or `parentContext` when it is the root being threaded through.
-  (`workerLoop` and `processEventMessage` take `workerID` first — existing exceptions.)
 - The root context is created once in `run()` with `signal.NotifyContext(context.Background(),
   syscall.SIGINT, syscall.SIGTERM)`; `defer` its cancel.
 - Child contexts with a timeout (`context.WithTimeout`) always `defer` their cancel.
@@ -619,14 +617,18 @@ Every SDK call takes an `…Options` struct and returns a `…Result` (`NodeList
 Rules (examples in [`references/patterns.md`](references/patterns.md#concurrency)):
 
 - Every long-running goroutine is owned by a `sync.WaitGroup` whose owner calls `Wait()` before
-  returning. Use `waitGroup.Go(...)` (as `main` does for the listener and the poller); the event
-  pool's `Add(eventWorkerCount)` plus a `Done` per worker is the one exception, since the count is
-  fixed up front. `serveHTTP`'s bare `go` for `Serve` is not waited for: it ends when
+  returning. Use `waitGroup.Go(...)` (as `main`'s `startWorkers` does for the reconciler, the
+  listener and the poller). `serveHTTP`'s bare `go` for `Serve` is not waited for: it ends when
   `Shutdown` makes `Serve` return into the buffered error channel.
-- **Never spawn unbounded goroutines.** Work triggered by external input (Swarm events) goes
-  through the fixed worker pool (`eventWorkerCount` workers, `eventQueueCapacity` buffered
-  queue). A `go processEvent(...)` inside an event loop is forbidden.
-- Long-lived workers that handle external input recover panics and log `debug.Stack()`.
+- **Never spawn unbounded goroutines.** Work triggered by external input (Swarm events) is only
+  recorded: the dispatcher marks a key dirty in the reconciler's bounded set (`pendingKeyCap`,
+  falling back to a full resync on overflow) without blocking, and the one reconciler goroutine
+  does the work. A `go processEvent(...)` inside an event loop is forbidden.
+- **One writer.** The reconciler (`reconciler.go`) is the only writer of the metadata and nodes
+  caches and of the event-driven families. New event-driven state goes through it, not through a
+  second goroutine writing the caches.
+- Long-lived workers that handle external input recover panics and log `debug.Stack()`
+  (`Reconciler.recoverStep`).
 - Read-heavy shared state uses `sync.RWMutex`; `defer` the unlock right after locking.
 - Return copies of slices from locked regions, and copy slices received from the Docker client
   before caching them.
@@ -719,7 +721,8 @@ too. Rules (examples in [`references/patterns.md`](references/patterns.md#promet
 - [ ] Removed resources `Delete` their series; categorical gauges emit every known state;
       recomputed sets are built whole and published as one snapshot, never `Reset()` and re-`Set`
 - [ ] No label fed by an unbounded value
-- [ ] No new goroutine per external event — work goes through the bounded worker pool; every
-      Docker call has a context
+- [ ] No new goroutine per external event — events mark keys dirty for the reconciler; every
+      request/response Docker call has a `withDockerTimeout` deadline, and only the event stream
+      goes without one
 - [ ] Shared state behind a mutex or atomic, with copies returned from locked regions and an
       eviction path for maps keyed by external IDs

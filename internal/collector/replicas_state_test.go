@@ -29,11 +29,12 @@ import (
 	"errors"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -281,7 +282,7 @@ func TestPollReplicasState_DedupeBySlot_NewerWins(t *testing.T) {
 
 	fd := &fakeDocker{tasks: []swarm.Task{older, newer}}
 
-	sc, err := PollReplicasState(context.Background(), fd)
+	sc, err := pollReplicasState(context.Background(), fd, cacheSnapshot())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -348,7 +349,11 @@ func TestPollReplicasState_NewerRetiredTask_DoesNotHideRunningTask(t *testing.T)
 
 			// Both list orders: Docker does not guarantee one.
 			for _, tasks := range [][]swarm.Task{{serving, failedUpdate}, {failedUpdate, serving}} {
-				sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+				sc, err := pollReplicasState(
+					context.Background(),
+					&fakeDocker{tasks: tasks},
+					cacheSnapshot(),
+				)
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -393,7 +398,7 @@ func TestPollReplicasState_GlobalService_DedupeByNodeID(t *testing.T) {
 
 	fd := &fakeDocker{tasks: []swarm.Task{t1, t2}}
 
-	sc, err := PollReplicasState(context.Background(), fd)
+	sc, err := pollReplicasState(context.Background(), fd, cacheSnapshot())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -408,38 +413,62 @@ func TestPollReplicasState_GlobalService_DedupeByNodeID(t *testing.T) {
 	}
 }
 
-func TestPollReplicasState_GoneService_Skipped(t *testing.T) {
+// inspectCountingDocker counts ServiceInspect calls.
+type inspectCountingDocker struct {
+	*fakeDocker
+
+	serviceInspects atomic.Int64
+}
+
+func (d *inspectCountingDocker) ServiceInspect(
+	ctx context.Context,
+	serviceID string,
+	options client.ServiceInspectOptions,
+) (client.ServiceInspectResult, error) {
+	d.serviceInspects.Add(1)
+
+	return d.fakeDocker.ServiceInspect(ctx, serviceID, options)
+}
+
+func TestPollReplicasState_ServiceNotInSnapshot_SkippedWithoutInspect(t *testing.T) {
 	resetCollectorState(t)
 
-	// "svc_gone" not in metadata cache → slow path → inspect returns not-found.
+	known := makeTestMetadata("s", "web", serviceModeReplicated)
+	setServiceMetadata("svc_known", &known)
+
+	// "svc_other" is not in the snapshot: the reconciler has not applied it (yet, or any more).
 	task := swarm.Task{
 		Meta:      swarm.Meta{CreatedAt: time.Now(), Version: swarm.Version{Index: 1}},
-		ServiceID: "svc_gone",
+		ServiceID: "svc_other",
 		Slot:      1,
 		Status:    swarm.TaskStatus{State: swarm.TaskStateRunning},
 	}
 
-	fd := &fakeDocker{
-		tasks:             []swarm.Task{task},
-		serviceInspectErr: errdefs.ErrNotFound,
-	}
+	fd := &inspectCountingDocker{fakeDocker: &fakeDocker{tasks: []swarm.Task{task}}}
 
-	sc, err := PollReplicasState(context.Background(), fd)
+	sc, err := pollReplicasState(context.Background(), fd, cacheSnapshot())
 	if err != nil {
-		t.Fatalf("unexpected error (gone service should be skipped, not errored): %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, ok := sc["svc_gone"]; ok {
-		t.Error("gone service should not appear in counter")
+	if _, ok := sc["svc_other"]; ok {
+		t.Error("a service not in the snapshot must not appear in the counters")
+	}
+
+	if got := fd.serviceInspects.Load(); got != 0 {
+		t.Errorf("service inspects = %d, want 0: the poller reads the snapshot only", got)
 	}
 }
 
 func TestPollReplicasState_TaskListError(t *testing.T) {
 	resetCollectorState(t)
 
+	metadata := makeTestMetadata("s", "web", serviceModeReplicated)
+	setServiceMetadata("svc", &metadata)
+
 	fd := &fakeDocker{taskListErr: errTaskListFailed}
 
-	_, err := PollReplicasState(context.Background(), fd)
+	_, err := pollReplicasState(context.Background(), fd, cacheSnapshot())
 	if err == nil {
 		t.Error("expected error from TaskList failure")
 	}
@@ -471,7 +500,7 @@ func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
 		Status:    swarm.TaskStatus{State: swarm.TaskStateRunning},
 	}}}
 
-	sc, err := PollReplicasState(context.Background(), fd)
+	sc, err := pollReplicasState(context.Background(), fd, cacheSnapshot())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -480,7 +509,7 @@ func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
 		t.Fatalf("got %d services, want 3 (services without tasks included)", len(sc))
 	}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	gathered := gatherSeries(t, families)
 
@@ -539,8 +568,8 @@ func TestAddServicesWithoutTasks(t *testing.T) {
 	existing.inc(string(swarm.TaskStateRunning))
 	sc := serviceCounter{"svc_busy": existing}
 
-	// svc_removed is not in the metadata cache: it was removed while polling.
-	addServicesWithoutTasks(sc, []string{"svc_busy", "svc_empty", "svc_removed"})
+	// svc_removed is not in the snapshot.
+	addServicesWithoutTasks(sc, []string{"svc_busy", "svc_empty", "svc_removed"}, cacheSnapshot())
 
 	if sc["svc_busy"].states[string(swarm.TaskStateRunning)] != 1 {
 		t.Error("existing counter must not be replaced")
@@ -560,11 +589,11 @@ func TestAddServicesWithoutTasks(t *testing.T) {
 	}
 
 	if _, ok := sc["svc_removed"]; ok {
-		t.Error("uncached service must not be added")
+		t.Error("a service not in the snapshot must not be added")
 	}
 }
 
-// ---- UpdateReplicasStateGauge ----
+// ---- updateReplicasStateGauge ----
 
 func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {
 	resetCollectorState(t)
@@ -576,12 +605,13 @@ func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {
 
 	lbls := serviceLabels("s", "sv", serviceModeReplicated)
 	tc := newTaskCounter(lbls)
+	tc.desired, tc.desiredKnown = 3, true
 	tc.inc(string(swarm.TaskStateRunning))
 	tc.inc(string(swarm.TaskStateRunning))
 	tc.inc(string(swarm.TaskStateRunning))
 	sc := serviceCounter{"svc1": tc}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	running, found := snapshotValue(
 		t,
@@ -622,10 +652,11 @@ func TestUpdateReplicasStateGauge_NotAtDesired(t *testing.T) {
 
 	lbls := serviceLabels("s", "sv", serviceModeReplicated)
 	tc := newTaskCounter(lbls)
+	tc.desired, tc.desiredKnown = 3, true
 	tc.inc(string(swarm.TaskStateRunning)) // only 1, desired=3
 	sc := serviceCounter{"svc1": tc}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	atDesired, found := snapshotValue(
 		t,
@@ -646,14 +677,14 @@ func TestUpdateReplicasStateGauge_MissingDesiredCache_NoPanic(t *testing.T) {
 	resetCollectorState(t)
 	families := installReplicasStateGauges(t)
 
-	// svc_nodesired not in metadata cache — getServiceDesiredReplicas returns false.
+	// The counter carries no desired replicas, as one not built from a polling snapshot.
 	lbls := serviceLabels("s", "sv", serviceModeReplicated)
 	tc := newTaskCounter(lbls)
 	tc.inc(string(swarm.TaskStateRunning))
 	sc := serviceCounter{"svc_nodesired": tc}
 
 	// Must not panic.
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	atDesired, found := snapshotValue(
 		t,
@@ -666,30 +697,56 @@ func TestUpdateReplicasStateGauge_MissingDesiredCache_NoPanic(t *testing.T) {
 	}
 
 	if atDesired != 0 {
-		t.Errorf("at_desired = %v, want 0 when desired cache missing", atDesired)
+		t.Errorf("at_desired = %v, want 0 when desired replicas are missing", atDesired)
 	}
 }
 
 func TestServiceCounter_GetCreatesLazily(t *testing.T) {
 	sc := make(serviceCounter)
-	labels := map[string]string{"stack": "s"}
+	service := &pollService{labels: map[string]string{"stack": "s"}}
 
-	c1 := sc.get("svc1", labels)
+	c1 := sc.get("svc1", service)
 	c1.inc("running")
 	sc["svc1"] = c1
 
-	c2 := sc.get("svc1", labels)
+	c2 := sc.get("svc1", service)
 	if c2.states["running"] != 1 {
 		t.Errorf("expected stored counter, got %v", c2.states["running"])
 	}
 
-	_ = sc.get("svc2", labels)
+	_ = sc.get("svc2", service)
 	if len(sc) != 2 {
 		t.Errorf("expected 2 entries after lazy create, got %d", len(sc))
 	}
 }
 
 // ---- Snapshot publication ----
+
+// cacheSnapshot returns a polling snapshot of the current caches, as a reconciler would build it.
+func cacheSnapshot() *pollSnapshot {
+	return NewReconciler(&fakeDocker{}).buildPollSnapshot()
+}
+
+// publishReplicasState publishes counters, failing the test if the build fails.
+func publishReplicasState(t *testing.T, counters serviceCounter) {
+	t.Helper()
+
+	publishErr := updateReplicasStateGauge(counters)
+	if publishErr != nil {
+		t.Fatalf("updateReplicasStateGauge: %v", publishErr)
+	}
+}
+
+// publishReplicasStateAsync is publishReplicasState for goroutines other than the test's own,
+// where t.Fatalf must not be called.
+func publishReplicasStateAsync(t *testing.T, counters serviceCounter) {
+	t.Helper()
+
+	publishErr := updateReplicasStateGauge(counters)
+	if publishErr != nil {
+		t.Errorf("updateReplicasStateGauge: %v", publishErr)
+	}
+}
 
 // replicasStateCounters returns a serviceCounter with one service per name in stack "s", each
 // with running tasks, after caching metadata and desired replicas for it.
@@ -705,6 +762,8 @@ func replicasStateCounters(t *testing.T, running, desired float64, names ...stri
 		setServiceDesiredReplicas(serviceID, desired)
 
 		counter := newTaskCounter(serviceLabels("s", name, serviceModeReplicated))
+		counter.desired, counter.desiredKnown = desired, true
+
 		for range int(running) {
 			counter.inc(string(swarm.TaskStateRunning))
 		}
@@ -743,7 +802,7 @@ func TestUpdateReplicasStateGauge_BuildDoesNotPublish(t *testing.T) {
 	expectedA := expectedReplicasStateSeries(t, countersA)
 	expectedB := expectedReplicasStateSeries(t, countersB)
 
-	UpdateReplicasStateGauge(countersA)
+	publishReplicasState(t, countersA)
 
 	if gathered := gatherSeries(t, families); !maps.Equal(gathered, expectedA) {
 		t.Fatalf("after publishing A gathered %v, want %v", gathered, expectedA)
@@ -777,8 +836,8 @@ func TestUpdateReplicasStateGauge_OnePublishUpdatesAllFamilies(t *testing.T) {
 	resetCollectorState(t)
 	families := installReplicasStateGauges(t)
 
-	UpdateReplicasStateGauge(replicasStateCounters(t, 1, 2, "svc"))
-	UpdateReplicasStateGauge(replicasStateCounters(t, 2, 2, "svc"))
+	publishReplicasState(t, replicasStateCounters(t, 1, 2, "svc"))
+	publishReplicasState(t, replicasStateCounters(t, 2, 2, "svc"))
 
 	gathered := gatherSeries(t, families)
 	labels := serviceLabels("s", "svc", serviceModeReplicated)
@@ -827,7 +886,7 @@ func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
 		nodeSeriesID("worker", "active", "ready"):  1,
 	}
 
-	UpdateReplicasStateGauge(countersA)
+	publishReplicasState(t, countersA)
 	UpdateNodesByStateFromSlice(nodesA)
 
 	stop := make(chan struct{})
@@ -852,8 +911,8 @@ func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
 
 	updaters.Go(func() {
 		alternate(
-			func() { UpdateReplicasStateGauge(countersA) },
-			func() { UpdateReplicasStateGauge(countersB) },
+			func() { publishReplicasStateAsync(t, countersA) },
+			func() { publishReplicasStateAsync(t, countersB) },
 		)
 	})
 
@@ -946,7 +1005,7 @@ func TestPollReplicasState_ReplicatedJob_DedupeBySlot(t *testing.T) {
 		))
 	}
 
-	sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+	sc, err := pollReplicasState(context.Background(), &fakeDocker{tasks: tasks}, cacheSnapshot())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -970,7 +1029,7 @@ func TestPollReplicasState_Job_OldIterationIgnored(t *testing.T) {
 		makeJobTask("job1", 0, "n2", 2, swarm.TaskStateComplete, swarm.TaskStateRunning),
 	}
 
-	sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+	sc, err := pollReplicasState(context.Background(), &fakeDocker{tasks: tasks}, cacheSnapshot())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -994,9 +1053,10 @@ func TestPollReplicasState_GlobalJob_DedupeByNode(t *testing.T) {
 	restarted.CreatedAt = failed.CreatedAt.Add(time.Second)
 	other := makeJobTask("gjob1", 0, "n2", 1, swarm.TaskStateComplete, swarm.TaskStateComplete)
 
-	sc, err := PollReplicasState(
+	sc, err := pollReplicasState(
 		context.Background(),
 		&fakeDocker{tasks: []swarm.Task{failed, restarted, other}},
+		cacheSnapshot(),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1023,12 +1083,12 @@ func pollJobAtDesired(
 ) (atDesired, stateCount float64) {
 	t.Helper()
 
-	sc, err := PollReplicasState(context.Background(), &fakeDocker{tasks: tasks})
+	sc, err := pollReplicasState(context.Background(), &fakeDocker{tasks: tasks}, cacheSnapshot())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	labels := serviceLabels("s", "job", mode)
 

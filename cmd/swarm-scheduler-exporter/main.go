@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -55,7 +56,6 @@ const (
 	// Operability constants.
 	minPollDelay        = 1 * time.Second
 	httpShutdownTimeout = 10 * time.Second
-	healthTickInterval  = 5 * time.Second
 )
 
 // stringSlice implements flag.Value to support repeated -label flags
@@ -66,6 +66,10 @@ type stringSlice []string
 // is provided with an empty value. This is a sentinel error for tests
 // and for clearer calling code.
 var ErrEmptyFlagValue = errors.New("empty flag value")
+
+// ErrReservedLabelName is returned when a custom label sanitizes to a label name the exporter
+// already uses on its per-service metrics.
+var ErrReservedLabelName = errors.New("custom label collides with a reserved label name")
 
 // String returns the flag value in a human-friendly form.
 func (values *stringSlice) String() string {
@@ -165,21 +169,7 @@ func run() int {
 		return 1
 	}
 
-	// Register metrics (including health/build info)
-	collector.ConfigureDesiredReplicasGauge()
-	collector.ConfigureReplicasStateGauge()
-	collector.ConfigureHealthGauges(version, commit, date)
-	collector.ConfigureNodesByStateGauge()
-	collector.ConfigureExporterOpsMetrics()
-	collector.ConfigureServiceUpdateMetrics()
-
-	// Containers (opt-in)
-	if *enableContainers {
-		collector.EnableContainersMetrics(true, *containersIncludeSwarm)
-		collector.ConfigureContainersStateGauge()
-	} else {
-		collector.EnableContainersMetrics(false, false)
-	}
+	registerMetrics(*pollDelay, *enableContainers, *containersIncludeSwarm)
 
 	// Root context canceled on SIGINT/SIGTERM
 	rootContext, cancelRoot := signal.NotifyContext(
@@ -191,7 +181,7 @@ func run() int {
 
 	// Docker client is configured from environment variables (DOCKER_HOST, DOCKER_API_VERSION,
 	// etc.). API version negotiation is lazy: it happens on the first request.
-	dockerClient, newClientErr := client.New(client.FromEnv)
+	dockerClient, newClientErr := newDockerClient()
 	if newClientErr != nil {
 		loggerInstance.Error("docker client init failed", "err", newClientErr)
 
@@ -206,10 +196,10 @@ func run() int {
 		return 1
 	}
 
-	// WaitGroup to wait for goroutines (event listener + poller + health updater).
+	// WaitGroup to wait for goroutines (reconciler + event listener + poller).
 	var workerGroup sync.WaitGroup
-	startEventListener(rootContext, &workerGroup, dockerClient)
-	startPoller(rootContext, &workerGroup, dockerClient, *pollDelay)
+
+	startWorkers(rootContext, &workerGroup, dockerClient, *pollDelay)
 
 	// HTTP server with sane timeouts + graceful shutdown.
 	isHealthy := func() (bool, string) {
@@ -286,82 +276,98 @@ func validateAndSetCustomLabels(rawKeys []string) error {
 		return fmt.Errorf("sanitize custom label names: %w", sanitizeErr)
 	}
 
+	reserved := collector.ReservedLabelNames()
+	for _, name := range sanitized {
+		if slices.Contains(reserved, name) {
+			return fmt.Errorf("%w: %q", ErrReservedLabelName, name)
+		}
+	}
+
 	collector.SetCustomLabels(rawKeys, sanitized)
 
 	return nil
 }
 
+// registerMetrics registers every metric family on the default registerer, including health and
+// build info; the containers family only when enabled.
+func registerMetrics(pollDelay time.Duration, enableContainers, containersIncludeSwarm bool) {
+	collector.ConfigureDesiredReplicasGauge()
+	collector.ConfigureReplicasStateGauge()
+	collector.ConfigureHealthGauges(version, commit, date, pollDelay)
+	collector.ConfigureNodesByStateGauge()
+	collector.ConfigureExporterOpsMetrics()
+	collector.ConfigureServiceUpdateMetrics()
+
+	if enableContainers {
+		collector.EnableContainersMetrics(true, containersIncludeSwarm)
+		collector.ConfigureContainersStateGauge()
+	} else {
+		collector.EnableContainersMetrics(false, false)
+	}
+}
+
+// startWorkers starts the reconciler, the event listener and the poller. The event-stream anchor
+// is captured before the reconciler's first resync lists anything, so every change made while
+// that resync runs reaches the reconciler as an event. The poller waits for that first resync.
+func startWorkers(
+	parentContext context.Context,
+	waitGroup *sync.WaitGroup,
+	dockerAPI collector.DockerAPI,
+	delay time.Duration,
+) {
+	reconciler := collector.NewReconciler(dockerAPI)
+	anchor := time.Now()
+
+	waitGroup.Go(func() { reconciler.Run(parentContext) })
+	startEventListener(parentContext, waitGroup, dockerAPI, reconciler, anchor)
+	startPoller(parentContext, waitGroup, dockerAPI, delay, reconciler)
+}
+
+// startEventListener starts the goroutine that follows the event stream from anchor, handing
+// every event to reconciler, until parentContext is done.
 func startEventListener(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
-	dockerClient *client.Client,
+	dockerAPI collector.DockerAPI,
+	reconciler *collector.Reconciler,
+	anchor time.Time,
 ) {
 	waitGroup.Go(func() {
-		loggerInstance := logger.L()
-
-		// Init now returns an anchor to use as the initial "since" for events.
-		initialSinceAnchor, initErr := collector.InitDesiredReplicasGauge(
-			parentContext,
-			dockerClient,
-		)
-		if initErr != nil {
-			loggerInstance.Error("InitDesiredReplicasGauge failed", "err", initErr)
-			// If this fails, there is no point continuing.
-			return
-		}
-
-		listenErr := collector.ListenSwarmEvents(parentContext, dockerClient, initialSinceAnchor)
+		listenErr := collector.ListenSwarmEvents(parentContext, dockerAPI, reconciler, anchor)
 		if !errors.Is(listenErr, context.Canceled) {
-			loggerInstance.Error("event listener exited with error", "err", listenErr)
+			logger.L().Error("event listener exited with error", "err", listenErr)
 		}
 	})
 }
 
+// startPoller starts the goroutine that polls tasks (and containers, when enabled) every delay,
+// against reconciler's polling snapshots. It waits for the reconciler's first resync first:
+// before it the caches are empty, and there is nothing to poll.
 func startPoller(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
-	dockerClient *client.Client,
+	dockerAPI collector.DockerAPI,
 	delay time.Duration,
+	reconciler *collector.Reconciler,
 ) {
 	waitGroup.Go(func() {
 		loggerInstance := logger.L()
+
+		select {
+		case <-parentContext.Done():
+			loggerInstance.Debug("polling loop: context canceled before the first resync completed")
+
+			return
+		case <-reconciler.Ready():
+		}
+
 		loggerInstance.Debug("start polling replicas state", "every", delay)
 
 		ticker := time.NewTicker(delay)
 		defer ticker.Stop()
 
-		// Local helper to run one full poll cycle with metrics + health.
-		pollOnce := func(now time.Time) {
-			startTime := now
-			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerClient)
-
-			collector.ObservePollDuration(time.Since(startTime))
-			collector.IncPolls()
-
-			if pollErr == nil {
-				collector.UpdateReplicasStateGauge(polledStates)
-				collector.MarkPollOK(now)
-			} else {
-				collector.IncPollErrors()
-				loggerInstance.Error("poll replicas state failed", "err", pollErr)
-			}
-
-			// --- Containers (opt-in) ---
-			if *enableContainers {
-				containerRows, contErr := collector.PollContainersState(parentContext, dockerClient)
-				if contErr != nil {
-					loggerInstance.Warn("poll containers state failed", "err", contErr)
-				} else {
-					collector.UpdateContainersStateGauge(containerRows)
-				}
-			}
-
-			healthy, _ := collector.HealthSnapshot(delay, now)
-			collector.SetExporterHealth(healthy)
-		}
-
 		// --- Immediate first poll (no waiting for the first tick) ---
-		pollOnce(time.Now())
+		pollOnce(parentContext, dockerAPI, reconciler)
 
 		for {
 			select {
@@ -370,10 +376,40 @@ func startPoller(
 
 				return
 			case <-ticker.C:
-				pollOnce(time.Now())
+				pollOnce(parentContext, dockerAPI, reconciler)
 			}
 		}
 	})
+}
+
+// pollOnce runs one poll cycle: the replicas state, then the containers when enabled.
+func pollOnce(
+	parentContext context.Context,
+	dockerAPI collector.DockerAPI,
+	reconciler *collector.Reconciler,
+) {
+	loggerInstance := logger.L()
+	startTime := time.Now()
+
+	pollErr := collector.PollAndPublishReplicasState(parentContext, dockerAPI, reconciler)
+
+	collector.ObservePollDuration(time.Since(startTime))
+	collector.IncPolls()
+
+	if pollErr != nil {
+		collector.IncPollErrors()
+		loggerInstance.Error("poll replicas state failed", "err", pollErr)
+	}
+
+	// --- Containers (opt-in) ---
+	if *enableContainers {
+		containerRows, contErr := collector.PollContainersState(parentContext, dockerAPI)
+		if contErr != nil {
+			loggerInstance.Warn("poll containers state failed", "err", contErr)
+		} else {
+			collector.UpdateContainersStateGauge(containerRows)
+		}
+	}
 }
 
 // runHTTPServer binds address and serves handler on it with serveHTTP.

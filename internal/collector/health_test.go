@@ -25,14 +25,33 @@
 package collector
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
+// resetHealthState clears the poll timestamp and installs a reconciler whose first resync
+// completed, so the tests below see only the poll-freshness checks unless they change it.
 func resetHealthState(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() { lastPollSuccessUnixNano.Store(0) })
+
+	previous := activeReconciler.Load()
+
+	t.Cleanup(func() {
+		lastPollSuccessUnixNano.Store(0)
+		activeReconciler.Store(previous)
+	})
+
 	lastPollSuccessUnixNano.Store(0)
+
+	ready := NewReconciler(&fakeDocker{})
+	ready.resyncCompleted = ready.resyncRequested
+	ready.resyncOutstandingSince = time.Time{}
+	ready.nextPeriodicResync = time.Now().Add(time.Hour)
+	activeReconciler.Store(ready)
 }
 
 func TestHealthSnapshot_NeverPolled(t *testing.T) {
@@ -43,8 +62,8 @@ func TestHealthSnapshot_NeverPolled(t *testing.T) {
 		t.Error("expected unhealthy when never polled")
 	}
 
-	if reason == "" {
-		t.Error("expected non-empty reason when never polled")
+	if reason != "no successful poll yet" {
+		t.Errorf("reason = %q, want %q", reason, "no successful poll yet")
 	}
 }
 
@@ -102,5 +121,108 @@ func TestHealthSnapshot_ThirtySecondFloor_StaleAfter30s(t *testing.T) {
 	healthy, _ := HealthSnapshot(pollDelay, now)
 	if healthy {
 		t.Error("expected unhealthy at 31s with 30s floor")
+	}
+}
+
+func TestHealthGauge_EvaluatedAtScrape(t *testing.T) {
+	resetHealthState(t)
+
+	pollDelay := 10 * time.Second
+	gauge := newHealthGauge(pollDelay)
+
+	if got := testutil.ToFloat64(gauge); got != 0 {
+		t.Errorf("health = %v before any poll, want 0", got)
+	}
+
+	MarkPollOK(time.Now())
+
+	if got := testutil.ToFloat64(gauge); got != 1 {
+		t.Errorf("health = %v right after a successful poll, want 1", got)
+	}
+
+	// No poller runs here: only the scrape-time evaluation can notice the poll went stale.
+	MarkPollOK(time.Now().Add(-time.Hour))
+
+	if got := testutil.ToFloat64(gauge); got != 0 {
+		t.Errorf("health = %v with a stale poll, want 0", got)
+	}
+}
+
+func TestPollAndPublishReplicasState_SuccessMovesTimestamp(t *testing.T) {
+	resetHealthState(t)
+	resetCollectorState(t)
+	installReplicasStateGauges(t)
+
+	metadata := makeTestMetadata("s", "web", serviceModeReplicated)
+	setServiceMetadata("svc", &metadata)
+	setServiceDesiredReplicas("svc", 1)
+
+	before := time.Now()
+
+	reconciler := activeReconciler.Load()
+	runReconciler(t, reconciler)
+
+	publishErr := PollAndPublishReplicasState(context.Background(), &fakeDocker{}, reconciler)
+	if publishErr != nil {
+		t.Fatalf("PollAndPublishReplicasState: %v", publishErr)
+	}
+
+	if got := lastPollSuccessUnixNano.Load(); got < before.UnixNano() {
+		t.Errorf("poll timestamp = %d, want at least %d (the publish time)", got, before.UnixNano())
+	}
+}
+
+func TestPollAndPublishReplicasState_FailedBuildLeavesTimestamp(t *testing.T) {
+	resetHealthState(t)
+	resetCollectorState(t)
+	installReplicasStateGauges(t)
+
+	// The installed families carry no custom label, so a service with one fails the build.
+	metadata := makeTestMetadata("s", "web", serviceModeReplicated)
+	metadata.customLabels = map[string]string{"team": "a"}
+	setServiceMetadata("svc", &metadata)
+	setServiceDesiredReplicas("svc", 1)
+
+	previous := time.Now().Add(-time.Minute).UnixNano()
+	lastPollSuccessUnixNano.Store(previous)
+
+	reconciler := activeReconciler.Load()
+	runReconciler(t, reconciler)
+
+	publishErr := PollAndPublishReplicasState(context.Background(), &fakeDocker{}, reconciler)
+	if !errors.Is(publishErr, errSnapshotLabelsMismatch) {
+		t.Fatalf("err = %v, want a snapshot build failure", publishErr)
+	}
+
+	if got := lastPollSuccessUnixNano.Load(); got != previous {
+		t.Errorf("poll timestamp = %d after a failed build, want it unchanged at %d", got, previous)
+	}
+}
+
+func TestPollAndPublishReplicasState_FailedPollLeavesTimestamp(t *testing.T) {
+	resetHealthState(t)
+	resetCollectorState(t)
+	installReplicasStateGauges(t)
+
+	metadata := makeTestMetadata("s", "web", serviceModeReplicated)
+	setServiceMetadata("svc", &metadata)
+
+	previous := time.Now().Add(-time.Minute).UnixNano()
+	lastPollSuccessUnixNano.Store(previous)
+
+	reconciler := activeReconciler.Load()
+	runReconciler(t, reconciler)
+
+	publishErr := PollAndPublishReplicasState(
+		context.Background(),
+		&fakeDocker{taskListErr: errTaskListFailed},
+		reconciler,
+	)
+	if !errors.Is(publishErr, errTaskListFailed) {
+		t.Fatalf("err = %v, want the task list failure", publishErr)
+	}
+
+	if got := lastPollSuccessUnixNano.Load(); got != previous {
+		t.Errorf("poll timestamp = %d after a failed poll, want it unchanged at %d", got, previous)
 	}
 }

@@ -12,48 +12,50 @@ function before copying one.
 
 ```go
 var workerGroup sync.WaitGroup
-startEventListener(rootContext, &workerGroup, dockerClient)
-startPoller(rootContext, &workerGroup, dockerClient, *pollDelay)
+startWorkers(rootContext, &workerGroup, dockerClient, *pollDelay)
 // ...
 workerGroup.Wait()
 ```
 
 Inside each starter the goroutine is launched with `waitGroup.Go(func() { ... })`.
 
-### Bounded worker pool
+### Bounded dirty set instead of a goroutine per event
 
-External events never get a goroutine each. `runEventPump` feeds a buffered queue drained by a
-fixed pool. The pool is the one place that uses `Add` up front and a `Done` in each worker
-(`startEventWorkers` launches `workerLoop`), because the worker count is known before any worker
-starts:
+External events never get a goroutine each, and the dispatcher never waits for the work they
+cause. `Reconciler.markServiceDirty` records the key under a mutex and returns; one reconciler
+goroutine inspects dirty keys a bounded number per cycle. Past `pendingKeyCap` the set is dropped
+with fresh allocations and a full resync is requested, so memory stays bounded however long the
+burst:
 
 ```go
-const (
-    eventWorkerCount   = 4   // number of concurrent event workers
-    eventQueueCapacity = 256 // buffered queue between dispatcher and workers
-)
+if len(r.pendingSet) >= r.pendingCap {
+    r.overflowLocked(now) // new map and slice, epoch++, resyncRequested++
 
-jobsChannel := make(chan events.Message, eventQueueCapacity)
+    return
+}
 
-var workerGroup sync.WaitGroup
-workerGroup.Add(eventWorkerCount)
-startEventWorkers(parentContext, dockerClient, jobsChannel, eventWorkerCount, &workerGroup)
+r.pendingSet[serviceID] = &pendingKey{attempts: 0, notBefore: now}
+r.pendingOrder = append(r.pendingOrder, serviceID)
 ```
 
-### Panic recovery in workers
+### Panic recovery in the reconciler
 
-A worker handling external input must not let one bad event kill the process
-(`processEventMessage`):
+A step handling external input must not let one bad object kill the process
+(`Reconciler.recoverStep`):
 
 ```go
 defer func() {
-    if recovered := recover(); recovered != nil {
-        logger.L().Error("event worker recovered from panic",
-            "worker", workerID,
-            "panic", recovered,
-            "stack", string(debug.Stack()),
-        )
+    recovered := recover()
+    if recovered == nil {
+        return
     }
+
+    logger.L().Error("reconciler recovered from panic",
+        "step", step,
+        "panic", recovered,
+        "stack", string(debug.Stack()),
+    )
+    r.requestResync(time.Now(), "panic")
 }()
 ```
 

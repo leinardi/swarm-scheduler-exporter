@@ -27,16 +27,12 @@
 package collector
 
 import (
-	"errors"
+	"maps"
 	"strings"
 	"sync"
 
 	"github.com/moby/moby/api/types/swarm"
 )
-
-// ErrNoCachedMetadata is returned when a removed service is seen in events
-// but we don't have cached labels/metadata for it (should be rare).
-var ErrNoCachedMetadata = errors.New("no cached metadata found for removed service")
 
 // customLabelDef pairs the raw service label key with its sanitized Prometheus label name.
 type customLabelDef struct {
@@ -106,57 +102,12 @@ func getCachedNodes() []swarm.Node {
 
 // --- Service metadata helpers ---
 
-// getAllServiceIDs returns a stable copy of all known service IDs from the metadata cache.
-func getAllServiceIDs() []string {
+// getAllServiceMetadata returns a point-in-time copy of the metadata cache, keyed by service ID.
+func getAllServiceMetadata() map[string]serviceMetadata {
 	metadataMu.RLock()
 	defer metadataMu.RUnlock()
 
-	if len(metadataCache) == 0 {
-		return nil
-	}
-
-	ids := make([]string, 0, len(metadataCache))
-	for serviceID := range metadataCache {
-		ids = append(ids, serviceID)
-	}
-
-	return ids
-}
-
-// getNodeDependentServiceIDs returns the IDs of the cached services whose desired count is the
-// eligible-node count, so it changes with the nodes: global and global-job services.
-func getNodeDependentServiceIDs() []string {
-	metadataMu.RLock()
-	defer metadataMu.RUnlock()
-
-	var ids []string
-
-	for serviceID := range metadataCache {
-		md := metadataCache[serviceID]
-		if md.serviceMode == serviceModeGlobal || md.serviceMode == serviceModeGlobalJob {
-			ids = append(ids, serviceID)
-		}
-	}
-
-	return ids
-}
-
-// getReplicatedServiceMetadata returns a point-in-time copy of all replicated
-// services' scheduling-relevant metadata for use without holding the lock.
-func getReplicatedServiceMetadata() []serviceMetadata {
-	metadataMu.RLock()
-	defer metadataMu.RUnlock()
-
-	var out []serviceMetadata
-
-	for serviceID := range metadataCache {
-		md := metadataCache[serviceID]
-		if md.serviceMode == serviceModeReplicated {
-			out = append(out, md)
-		}
-	}
-
-	return out
+	return maps.Clone(metadataCache)
 }
 
 // SetCustomLabels records both the raw keys (as they appear in Swarm) and their sanitized names.
@@ -299,6 +250,14 @@ func setServiceMetadata(serviceID string, metadata *serviceMetadata) {
 	metadataCache[serviceID] = *metadata
 }
 
+// replaceServiceMetadata stores metadata as is, desired replicas included.
+func replaceServiceMetadata(serviceID string, metadata *serviceMetadata) {
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
+
+	metadataCache[serviceID] = *metadata
+}
+
 func getServiceMetadata(serviceID string) (serviceMetadata, bool) {
 	metadataMu.RLock()
 	defer metadataMu.RUnlock()
@@ -328,19 +287,6 @@ func setServiceDesiredReplicas(serviceID string, desired float64) {
 
 	metadata.desiredReplicas = desired
 	metadataCache[serviceID] = metadata
-}
-
-// getServiceDesiredReplicas returns the last cached desired replicas for a service.
-func getServiceDesiredReplicas(serviceID string) (float64, bool) {
-	metadataMu.RLock()
-	defer metadataMu.RUnlock()
-
-	md, ok := metadataCache[serviceID]
-	if !ok {
-		return 0, false
-	}
-
-	return md.desiredReplicas, true
 }
 
 // shortServiceName returns the visible service name without the "<stack>_" prefix

@@ -9,21 +9,9 @@
 # ecosystem updates the tag and the digest together, through reviewed PRs.
 
 ########################
-# deps: cache modules
-########################
-FROM --platform=$BUILDPLATFORM dhi.io/golang:1-alpine3.23-dev@sha256:0d95d4f9889abcf60c182228d28fa83fde3e0dc2330bb1365e5960273b43ed57 AS deps
-WORKDIR /src
-RUN --mount=type=cache,target=/var/cache/apk \
-	apk add --no-cache git
-COPY go.mod go.sum ./
-# Use a named cache so we can reuse it in the build stage (no COPY needed)
-RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
-	go mod download
-
-########################
 # build: compile static binary
 ########################
-FROM --platform=$BUILDPLATFORM dhi.io/golang:1-alpine3.23-dev@sha256:0d95d4f9889abcf60c182228d28fa83fde3e0dc2330bb1365e5960273b43ed57 AS build
+FROM --platform=$BUILDPLATFORM dhi.io/golang:1.26.8-alpine3.23-dev@sha256:c2f8109463456b1c6bf1c9e53e702c89508f1b3b4b5e72779407d1fbf03a76be AS build
 ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
@@ -41,7 +29,7 @@ WORKDIR /src
 # Bring in source
 COPY . .
 
-# Reuse the same module & build caches (BuildKit)
+# Module and build caches (BuildKit)
 RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 	--mount=type=cache,target=/root/.cache/go-build \
 	go build -trimpath -buildvcs=false \
@@ -58,7 +46,7 @@ FROM dhi.io/static:20250419@sha256:98ef7a853608577e8d66dad1d25ada75d745d782f28d8
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.description="Prometheus exporter for Docker Swarm services/tasks" \
 	org.opencontainers.image.source="https://github.com/leinardi/swarm-scheduler-exporter" \
-	org.opencontainers.image.licenses="Apache-2.0"
+	org.opencontainers.image.licenses="MIT"
 
 # Copy the binary
 COPY --from=build /out/swarm-scheduler-exporter /usr/local/bin/swarm-scheduler-exporter

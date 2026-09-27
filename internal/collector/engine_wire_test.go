@@ -204,6 +204,8 @@ var engineWireExcludedFamilies = map[string]string{
 	"swarm_exporter_health":                  "derived from wall-clock poll freshness",
 	"swarm_exporter_build_info":              "ldflags, not SDK data",
 	"swarm_exporter_events_reconnects_total": "asserted by the reconnect case instead",
+	"swarm_exporter_events_dropped_total":    "asserted by the reconciler unit tests instead",
+	"swarm_exporter_poll_rejections_total":   "asserted by the poll protocol unit tests instead",
 }
 
 func engineWireExpectations(t *testing.T) wireExpectations {
@@ -713,7 +715,7 @@ func configureCollectorsLikeMain(t *testing.T) *recordingRegisterer {
 	// Same calls, same order as main.run with -containers -containers-include-swarm.
 	ConfigureDesiredReplicasGauge()
 	ConfigureReplicasStateGauge()
-	ConfigureHealthGauges("test", "none", "unknown")
+	ConfigureHealthGauges("test", "none", "unknown", 10*time.Second)
 	ConfigureNodesByStateGauge()
 	ConfigureExporterOpsMetrics()
 	ConfigureServiceUpdateMetrics()
@@ -734,6 +736,7 @@ func restoreCollectorGlobals(t *testing.T) {
 	nodesByState := nodesByStateGauge
 	pollDuration, polls, pollErrors, reconnects := pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter,
 		eventsReconnectsTotalCounter
+	dropped, rejections := eventsDroppedTotalCounter, pollRejectionsTotalCounter
 	updateState, updateStarted, updateCompleted := serviceUpdateStateGauge, serviceUpdateStartedTimestamp,
 		serviceUpdateCompletedTimestamp
 	containersState, enabled, includeSwarm := containersStateGauge, containersEnabled, containersIncludeSwarm
@@ -748,6 +751,7 @@ func restoreCollectorGlobals(t *testing.T) {
 		nodesByStateGauge = nodesByState
 		pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter, eventsReconnectsTotalCounter = pollDuration,
 			polls, pollErrors, reconnects
+		eventsDroppedTotalCounter, pollRejectionsTotalCounter = dropped, rejections
 		serviceUpdateStateGauge, serviceUpdateStartedTimestamp, serviceUpdateCompletedTimestamp = updateState,
 			updateStarted, updateCompleted
 		containersStateGauge, containersEnabled, containersIncludeSwarm = containersState, enabled, includeSwarm
@@ -921,19 +925,20 @@ func requestsTo(entries []recordedRequest, path string) []recordedRequest {
 // runListener starts ListenSwarmEvents and returns a stop that cancels it and asserts it returned
 // a context.Canceled wrap within engineWireCancelBound. stop is idempotent and also registered as
 // a cleanup, so a failed wait still stops the listener before earlier cleanups restore the package
-// globals its workers read.
+// globals it reads.
 func runListener(
 	t *testing.T,
 	ctx context.Context,
 	dockerClient DockerAPI,
-	since time.Time,
+	reconciler *Reconciler,
+	anchor time.Time,
 ) (stop func()) {
 	t.Helper()
 
 	listenerContext, cancel := context.WithCancel(ctx)
 	listenerDone := make(chan error, 1)
 
-	go func() { listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, since) }()
+	go func() { listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, reconciler, anchor) }()
 
 	var stopOnce sync.Once
 
@@ -1115,21 +1120,23 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	expectations := engineWireExpectations(t)
 	recorder := engine.recorder
 
-	// Phase 1: startup seeding. Sequential: service list, then node list.
+	// Phase 1: the reconciler's first resync. Sequential: service list, then node list.
 	recorder.reset()
 
-	beforeInit := time.Now()
+	reconciler := NewReconciler(dockerClient)
 
-	since, initErr := InitDesiredReplicasGauge(ctx, dockerClient)
-	if initErr != nil {
-		t.Fatalf("InitDesiredReplicasGauge: %v", initErr)
+	// The event-stream anchor, captured before the resync lists anything, as main does.
+	anchor := time.Now()
+
+	reconciler.resync(ctx)
+
+	if _, completed, _ := reconciler.resyncState(); completed == 0 {
+		t.Fatal("first resync did not complete")
 	}
-
-	afterInit := time.Now()
 
 	assertRequestSequence(
 		t,
-		"InitDesiredReplicasGauge",
+		"first resync",
 		normalizedRequests(recorder.phaseRequests()),
 		[]string{
 			"GET /services",
@@ -1137,24 +1144,29 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		},
 	)
 
-	// Phase 2: task poll. Sequential: one service-scoped task list, then an inspect for the task
-	// whose service is not cached; the daemon's 404 makes the poll skip it.
+	// Phase 2: task poll against the reconciler's polling snapshot. One service-scoped task list
+	// and nothing else: the task of svc-gone, a service the snapshot does not hold, is skipped
+	// without an inspect.
 	recorder.reset()
 
-	polled, pollErr := PollReplicasState(ctx, dockerClient)
+	snapshot := reconciler.buildPollSnapshot()
+
+	polled, pollErr := pollReplicasState(ctx, dockerClient, snapshot)
 	if pollErr != nil {
-		t.Fatalf("PollReplicasState: %v", pollErr)
+		t.Fatalf("pollReplicasState: %v", pollErr)
 	}
 
-	UpdateReplicasStateGauge(polled)
+	applyErr := reconciler.applyPollCounts(snapshot, polled)
+	if applyErr != nil {
+		t.Fatalf("applyPollCounts: %v", applyErr)
+	}
 
 	assertRequestSequence(
 		t,
-		"PollReplicasState",
+		"pollReplicasState",
 		normalizedRequests(recorder.phaseRequests()),
 		[]string{
 			"GET /tasks?filters={service:[svc-agent,svc-api,svc-cron,svc-db]}",
-			serviceInspectRequest(expectations.serviceInspectQuery, "svc-gone"),
 		},
 	)
 
@@ -1183,8 +1195,10 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	)
 
 	// Phase 4: events, happy path. One connection streams a service update and a node update and
-	// then stays open. Workers handle the two events concurrently, so their requests are compared
-	// as a multiset; only "/events first" is an ordering the code guarantees.
+	// then stays open. The reconciler inspects the updated service and refreshes the nodes,
+	// recomputing every service from the cached placement; when the two events land in the same
+	// cycle is timing, so their requests are compared as a multiset, and only "/events first" is
+	// an ordering the code guarantees.
 	recorder.reset()
 	engine.scriptEvents(eventsConnection{fixture: "events-happy.jsonl", hold: true})
 
@@ -1193,10 +1207,11 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		"GET /events?filters={type:[node,service]}&since=<time>",
 		serviceInspectRequest(expectations.serviceInspectQuery, "svc-api"),
 		"GET /nodes",
-		serviceInspectRequest(expectations.serviceInspectQuery, "svc-agent"),
 	}
 
-	stopListener := runListener(t, ctx, dockerClient, since)
+	runReconciler(t, reconciler)
+
+	stopListener := runListener(t, ctx, dockerClient, reconciler, anchor)
 	apiLabels := serviceSeriesLabels(t, "svc-api")
 
 	waitForEngineWire(
@@ -1231,11 +1246,10 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	}
 
 	if connections := requestsTo(eventRequests, "/events"); len(connections) == 1 {
-		// The anchor is formatted with second resolution before it is sent.
+		// The anchor minus the margin, sent with nanosecond resolution.
 		gotSince := eventsSince(t, &connections[0])
-		if gotSince.Before(beforeInit.Truncate(time.Second)) || gotSince.After(afterInit) {
-			t.Errorf("events since = %s, want the Init anchor, taken between %s and %s", gotSince,
-				beforeInit, afterInit)
+		if wantSince := anchor.Add(-eventsSinceMargin); !gotSince.Equal(wantSince) {
+			t.Errorf("events since = %s, want the anchor minus the margin, %s", gotSince, wantSince)
 		}
 	} else {
 		t.Errorf("happy path: %d /events requests, want exactly 1", len(connections))
@@ -1269,7 +1283,7 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 
 	// Phase 5: events, reconnect. The first connection streams one event and ends; the listener
 	// counts a reconnect and resumes 500 ms before that event on a second connection, which stays
-	// open.
+	// open, and requests a resync, which lists services and nodes.
 	recorder.reset()
 	engine.scriptEvents(
 		eventsConnection{fixture: "events-reconnect.jsonl", hold: false},
@@ -1281,13 +1295,20 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		"GET /events?filters={type:[node,service]}&since=<time>",
 		serviceInspectRequest(expectations.serviceInspectQuery, "svc-db"),
 		"GET /events?filters={type:[node,service]}&since=<time>",
+		"GET /services",
+		"GET /nodes",
 	}
 
-	stopListener = runListener(t, ctx, dockerClient, since)
+	stopListener = runListener(t, ctx, dockerClient, reconciler, anchor)
 
-	waitForEngineWire(t, ctx, "the event's inspect and a second /events connection", func() bool {
-		return len(recorder.phaseRequests()) >= len(wantReconnectRequests)
-	})
+	waitForEngineWire(
+		t,
+		ctx,
+		"the event's inspect, a second /events connection and the resync",
+		func() bool {
+			return len(recorder.phaseRequests()) >= len(wantReconnectRequests)
+		},
+	)
 
 	stopListener()
 
@@ -1301,8 +1322,8 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 
 	if connections := requestsTo(reconnectRequests, "/events"); len(connections) == 2 {
 		lastEvent := time.Unix(0, engineWireReconnectEventTimeNano)
-		// Resume 500 ms before the last event, sent with second resolution.
-		wantSince := lastEvent.Add(-500 * time.Millisecond).Truncate(time.Second)
+		// Resume eventsSinceMargin before the last event, sent with nanosecond resolution.
+		wantSince := lastEvent.Add(-eventsSinceMargin)
 
 		if gotSince := eventsSince(t, &connections[1]); !gotSince.Equal(wantSince) {
 			t.Errorf(
@@ -1344,23 +1365,41 @@ func TestEngineWire_TaskFilterCap(t *testing.T) {
 
 	engine.recorder.reset()
 
-	_, pollErr := PollReplicasState(ctx, dockerClient)
+	_, pollErr := pollReplicasState(ctx, dockerClient, cacheSnapshot())
 	if pollErr != nil {
 		t.Fatalf("PollReplicasState: %v", pollErr)
 	}
 
+	// One service past the cap: two calls, the first at the cap, together covering every
+	// service exactly once.
 	requests := engine.recorder.phaseRequests()
-	if len(requests) != 1 || requests[0].path != "/tasks" {
-		t.Fatalf("requests = %v, want a single GET /tasks", normalizedRequests(requests))
+	if len(requests) != 2 || requests[0].path != "/tasks" || requests[1].path != "/tasks" {
+		t.Fatalf("requests = %v, want two GET /tasks", normalizedRequests(requests))
 	}
 
-	services := decodeFilters(t, requests[0].query.Get("filters"))["service"]
-	if len(services) != maxServicesInTaskFilter {
-		t.Errorf(
-			"task filter carries %d services, want the cap of %d",
-			len(services),
-			maxServicesInTaskFilter,
-		)
+	queried := make(map[string]int)
+
+	for index := range requests {
+		services := decodeFilters(t, requests[index].query.Get("filters"))["service"]
+		if len(services) > maxServicesInTaskFilter {
+			t.Errorf(
+				"task filter %d carries %d services, over the cap of %d",
+				index,
+				len(services),
+				maxServicesInTaskFilter,
+			)
+		}
+
+		for _, serviceID := range services {
+			queried[serviceID]++
+		}
+	}
+
+	for index := range maxServicesInTaskFilter + 1 {
+		serviceID := fmt.Sprintf("svc-%05d", index)
+		if queried[serviceID] != 1 {
+			t.Errorf("%s queried %d times, want once", serviceID, queried[serviceID])
+		}
 	}
 
 	assertWireProperties(t, engine.recorder.allRequests())

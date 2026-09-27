@@ -35,11 +35,13 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
+	"time"
 
-	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,8 +54,8 @@ const (
 	// Capacity hint for the per-service state map.
 	defaultStatesCapacity = 16
 
-	// Limit for the number of service filters to attach to TaskList calls.
-	// Prevents extremely large filter payloads; adjust as needed.
+	// maxServicesInTaskFilter bounds the service IDs of one TaskList filter, so a large cluster
+	// never sends one huge query. A poll with more services lists their tasks in several calls.
 	maxServicesInTaskFilter = 10000
 )
 
@@ -111,6 +113,10 @@ type replicasStateSnapshot struct {
 	serviceLabelNames []string
 }
 
+// ErrReplicasStateNotConfigured is returned by updateReplicasStateGauge before
+// ConfigureReplicasStateGauge has run: there is nowhere to publish to.
+var ErrReplicasStateNotConfigured = errors.New("replicas state gauge not configured")
+
 var atDesiredLogState sync.Map // map[string]string (serviceID -> "running|desired")
 
 // taskCounter keeps a set of counters per Swarm task state for a given service.
@@ -127,6 +133,11 @@ type taskCounter struct {
 	// eligibleNodesCovered is set for global jobs only: every node that is eligible now has a
 	// wanted, completed task of the current iteration.
 	eligibleNodesCovered bool
+
+	// desired is the service's desired replicas in the snapshot the tasks were counted against;
+	// desiredKnown is false when the counter was built without one.
+	desired      float64
+	desiredKnown bool
 }
 
 // serviceCounter organizes taskCounters keyed by ServiceID (unique, avoids
@@ -208,37 +219,30 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 	}
 }
 
-// PollReplicasState lists tasks and aggregates them by state per service,
-// counting only the current task per (service, slot) for replicated services and replicated jobs
-// and per (service, nodeID) for global services and global jobs, as chosen by preferredTask.
-// Job tasks from an older job iteration are skipped.
-func PollReplicasState(
+// pollReplicasState lists the tasks of the services in snapshot and aggregates them by state per
+// service, counting only the current task per (service, slot) for replicated services and
+// replicated jobs and per (service, nodeID) for global services and global jobs, as chosen by
+// preferredTask. Job tasks from an older job iteration are skipped. Everything but the task list
+// comes from snapshot, never from the live caches, so the counts and the metadata they are judged
+// against describe the same moment; tasks of a service not in snapshot are skipped, the
+// reconciler will add it to a later one. Every service of snapshot gets a counter.
+func pollReplicasState(
 	parentContext context.Context,
 	dockerClient DockerAPI,
+	snapshot *pollSnapshot,
 ) (serviceCounter, error) {
+	replicasByService := make(serviceCounter)
+
 	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
-	serviceIDs := getAllServiceIDs()
-
-	// A nil client.Filters sends no filter; Add on it would panic, so allocate before adding.
-	var (
-		taskFilters       client.Filters
-		queriedServiceIDs []string
-	)
-
-	if len(serviceIDs) > 0 {
-		limit := min(len(serviceIDs), maxServicesInTaskFilter)
-		queriedServiceIDs = serviceIDs[:limit]
-		taskFilters = make(client.Filters).Add("service", queriedServiceIDs...)
+	serviceIDs := snapshot.serviceIDs()
+	if len(serviceIDs) == 0 {
+		return replicasByService, nil
 	}
 
-	taskListResult, listErr := dockerClient.TaskList(parentContext, client.TaskListOptions{
-		Filters: taskFilters,
-	})
+	tasks, listErr := listServiceTasks(parentContext, dockerClient, serviceIDs)
 	if listErr != nil {
-		return serviceCounter{}, fmt.Errorf("task list: %w", listErr)
+		return serviceCounter{}, listErr
 	}
-
-	tasks := taskListResult.Items
 
 	// Step 1: choose the current task per dedupe key.
 	latestByKey := make(map[latestKey]*swarm.Task)
@@ -246,19 +250,12 @@ func PollReplicasState(
 	for index := range tasks { // iterate by index to avoid copying
 		task := &tasks[index]
 
-		// Ensure we have metadata cached (and skip tasks for deleted services).
-		_, labelErr := getServiceLabels(parentContext, dockerClient, task)
-		if errdefs.IsNotFound(labelErr) {
+		service, known := snapshot.services[task.ServiceID]
+		if !known {
 			continue
-		} else if labelErr != nil {
-			return serviceCounter{}, fmt.Errorf(
-				"labels for service %s: %w",
-				task.ServiceID,
-				labelErr,
-			)
 		}
 
-		dedupeKey, counted := dedupeKeyForTask(task)
+		dedupeKey, counted := dedupeKeyForTask(task, &service.metadata)
 		if !counted {
 			continue
 		}
@@ -270,51 +267,57 @@ func PollReplicasState(
 	}
 
 	// Step 2: aggregate chosen tasks per serviceID into states.
-	replicasByService := make(serviceCounter)
 
 	// completedNodesByService holds, per global job, the nodes with a wanted completed task. It
 	// only lives for this poll.
 	completedNodesByService := make(map[string]map[string]struct{})
 
 	for key, task := range latestByKey {
-		labels, labelErr := getServiceLabels(parentContext, dockerClient, task)
-		if errdefs.IsNotFound(labelErr) {
-			// Service disappeared between selection and labeling; ignore.
-			continue
-		} else if labelErr != nil {
-			return serviceCounter{}, fmt.Errorf(
-				"labels for service %s: %w",
-				task.ServiceID,
-				labelErr,
-			)
-		}
-
-		// Ensure label keys are Prometheus-safe (values are passed through).
-		labels = labelutil.SanitizeMetricLabels(labels)
-
-		counter := replicasByService.get(key.serviceID, labels)
+		counter := replicasByService.get(key.serviceID, snapshot.services[key.serviceID])
 		counter.inc(string(task.Status.State))
 		countWanted(&counter, task, completedNodesByService)
 		replicasByService[key.serviceID] = counter
 	}
 
-	markEligibleNodesCovered(replicasByService, completedNodesByService)
-	addServicesWithoutTasks(replicasByService, queriedServiceIDs)
+	markEligibleNodesCovered(replicasByService, completedNodesByService, snapshot)
+	addServicesWithoutTasks(replicasByService, serviceIDs, snapshot)
 
 	return replicasByService, nil
 }
 
-// dedupeKeyForTask returns the dedupe key task is counted under, and false when task is not
-// counted at all: its service is not in the metadata cache, or it belongs to an earlier run of a
-// job.
-func dedupeKeyForTask(task *swarm.Task) (latestKey, bool) {
-	metadata, found := getServiceMetadata(task.ServiceID)
-	if !found {
-		// Should not happen because getServiceLabels() populates the cache before this is
-		// called, but if it does, skip this task defensively.
-		return latestKey{}, false
+// listServiceTasks lists the tasks of serviceIDs, in calls of at most maxServicesInTaskFilter
+// services each, every call under its own request deadline. Any failed call fails the whole
+// list: a poll that saw only some services' tasks would count the others as having none.
+func listServiceTasks(
+	parentContext context.Context,
+	dockerClient DockerAPI,
+	serviceIDs []string,
+) ([]swarm.Task, error) {
+	var tasks []swarm.Task
+
+	for chunk := range slices.Chunk(serviceIDs, maxServicesInTaskFilter) {
+		listContext, cancelList := withDockerTimeout(parentContext)
+
+		taskListResult, listErr := dockerClient.TaskList(listContext, client.TaskListOptions{
+			Filters: make(client.Filters).Add("service", chunk...),
+		})
+
+		cancelList()
+
+		if listErr != nil {
+			return nil, fmt.Errorf("task list: %w", listErr)
+		}
+
+		tasks = append(tasks, taskListResult.Items...)
 	}
 
+	return tasks, nil
+}
+
+// dedupeKeyForTask returns the dedupe key task is counted under, and false when task is not
+// counted at all: it belongs to an earlier run of a job. metadata is its service's, from the
+// polling snapshot.
+func dedupeKeyForTask(task *swarm.Task, metadata *serviceMetadata) (latestKey, bool) {
 	// A job's earlier runs leave their tasks behind (Swarm marks them for removal); only the
 	// current iteration describes the job now.
 	if isJobMode(metadata.serviceMode) &&
@@ -378,40 +381,25 @@ func addCompletedNode(
 }
 
 // markEligibleNodesCovered sets eligibleNodesCovered on every global-job counter, checking the
-// nodes eligible now, from one node snapshot, against the nodes where the job has a wanted
-// completed task. Comparing node identities rather than counts matters: when node A has
-// completed and then becomes ineligible while node B becomes eligible, A's completion must not
-// stand in for B, whose task Swarm only creates on its next reconcile. The work is bounded by
-// nodes times global jobs and reads caches only.
+// nodes eligible in the snapshot against the nodes where the job has a wanted completed task.
+// Comparing node identities rather than counts matters: when node A has completed and then
+// becomes ineligible while node B becomes eligible, A's completion must not stand in for B, whose
+// task Swarm only creates on its next reconcile. The work is bounded by nodes times global jobs
+// and reads the snapshot only.
 func markEligibleNodesCovered(
 	replicasByService serviceCounter,
 	completedNodesByService map[string]map[string]struct{},
+	snapshot *pollSnapshot,
 ) {
-	var (
-		nodes       []swarm.Node
-		nodesLoaded bool
-	)
-
 	for serviceID, counter := range replicasByService {
 		if counter.labels[labelServiceMode] != serviceModeGlobalJob {
 			continue
 		}
 
-		metadata, found := getServiceMetadata(serviceID)
-		if !found {
-			// Removed while this poll was running; leave it uncovered.
-			continue
-		}
-
-		// One snapshot per poll, taken only when there is a global job to check.
-		if !nodesLoaded {
-			nodes = getCachedNodes()
-			nodesLoaded = true
-		}
-
+		service := snapshot.services[serviceID]
 		counter.eligibleNodesCovered = eligibleNodesCovered(
-			nodes,
-			placementFromMetadata(&metadata),
+			snapshot.nodes,
+			placementFromMetadata(&service.metadata),
 			completedNodesByService[serviceID],
 		)
 		replicasByService[serviceID] = counter
@@ -448,41 +436,76 @@ func eligibleNodesCovered(
 // it still emits running_replicas=0, zeroed task states and an at_desired series. Without it a
 // service that was never scheduled (a global service no node is eligible for, a replicated
 // service whose tasks cannot be created) has no series at all, and an "at_desired == 0" alert
-// never fires for it. Only services that were in the TaskList filter are added: one beyond
-// maxServicesInTaskFilter was not queried, so its task count is unknown, not zero.
-func addServicesWithoutTasks(replicasByService serviceCounter, queriedServiceIDs []string) {
+// never fires for it.
+func addServicesWithoutTasks(
+	replicasByService serviceCounter,
+	queriedServiceIDs []string,
+	snapshot *pollSnapshot,
+) {
 	for _, serviceID := range queriedServiceIDs {
 		if _, exists := replicasByService[serviceID]; exists {
 			continue
 		}
 
-		metadata, found := getServiceMetadata(serviceID)
-		if !found {
-			// Removed while this poll was running.
+		service, known := snapshot.services[serviceID]
+		if !known {
 			continue
 		}
 
-		replicasByService[serviceID] = newTaskCounter(labelsForMetadata(&metadata))
+		replicasByService[serviceID] = newServiceTaskCounter(service)
 	}
 }
 
-// UpdateReplicasStateGauge publishes the aggregated state counters as the replicas_state,
+// updateReplicasStateGauge publishes the aggregated state counters as the replicas_state,
 // running_replicas and at_desired families. The whole set is built first and replaces the
 // previous one in a single swap, so services that disappeared are dropped without a scrape ever
-// seeing the families empty or half rebuilt. If the build fails, the previous set stays.
-func UpdateReplicasStateGauge(counterByService serviceCounter) {
+// seeing the families empty or half rebuilt. If the build fails, the previous set stays and the
+// error is returned: nothing was published, so the caller must not count the poll as a success.
+// Only the reconciler publishes, when it applies a poll.
+func updateReplicasStateGauge(counterByService serviceCounter) error {
 	if replicasStateCollector == nil {
-		return
+		return ErrReplicasStateNotConfigured
 	}
 
 	metrics, buildErr := buildReplicasState(replicasStateCollector, counterByService).build()
 	if buildErr != nil {
-		logger.L().Error("build replicas state snapshot; keeping previous", "err", buildErr)
-
-		return
+		return fmt.Errorf("build replicas state snapshot; keeping previous: %w", buildErr)
 	}
 
 	replicasStateCollector.publish(metrics)
+
+	return nil
+}
+
+// PollAndPublishReplicasState runs one poll against reconciler: it asks for a polling snapshot,
+// lists and counts the tasks of the snapshot's services, and hands the counts back for the
+// reconciler to judge and publish. Only when the reconciler replies that everything was published
+// does it record the poll as successful for health, with the time of that reply. A failed poll, a
+// failed build or a partial failure leaves the health timestamp where it was, so health turns red
+// once polls keep failing instead of reporting the last attempt.
+func PollAndPublishReplicasState(
+	parentContext context.Context,
+	dockerClient DockerAPI,
+	reconciler *Reconciler,
+) error {
+	snapshot, snapshotErr := reconciler.requestPollSnapshot(parentContext)
+	if snapshotErr != nil {
+		return snapshotErr
+	}
+
+	polledStates, pollErr := pollReplicasState(parentContext, dockerClient, snapshot)
+	if pollErr != nil {
+		return pollErr
+	}
+
+	applyErr := reconciler.submitPollCounts(parentContext, snapshot, polledStates)
+	if applyErr != nil {
+		return applyErr
+	}
+
+	MarkPollOK(time.Now())
+
+	return nil
 }
 
 // buildReplicasState records the series of every service in counterByService, for all three
@@ -526,9 +549,9 @@ func setAtDesiredForService(
 ) {
 	running := taskCounterValue.states[string(swarm.TaskStateRunning)]
 
-	desired, foundDesired := getServiceDesiredReplicas(serviceID)
-	if !foundDesired {
-		logger.L().Warn("desired replicas missing from cache",
+	desired := taskCounterValue.desired
+	if !taskCounterValue.desiredKnown {
+		logger.L().Warn("desired replicas missing from the polling snapshot",
 			"service_id", serviceID,
 			labelStack, baseLabels[labelStack],
 			labelService, baseLabels[labelService],
@@ -632,14 +655,23 @@ func (counter taskCounter) inc(state string) {
 	counter.states[state]++
 }
 
-// get returns the taskCounter for ServiceID, creating it if necessary.
-// labels must already contain stack/service/service_mode (+ custom labels).
-func (byService serviceCounter) get(serviceID string, labels prometheus.Labels) taskCounter {
+// get returns the taskCounter for serviceID, creating it from service if necessary.
+func (byService serviceCounter) get(serviceID string, service *pollService) taskCounter {
 	if _, ok := byService[serviceID]; !ok {
-		byService[serviceID] = newTaskCounter(labels)
+		byService[serviceID] = newServiceTaskCounter(service)
 	}
 
 	return byService[serviceID]
+}
+
+// newServiceTaskCounter returns an empty counter with the label identity and desired replicas of
+// service, as the polling snapshot recorded them.
+func newServiceTaskCounter(service *pollService) taskCounter {
+	counter := newTaskCounter(service.labels)
+	counter.desired = service.metadata.desiredReplicas
+	counter.desiredKnown = true
+
+	return counter
 }
 
 // newTaskCounter initializes an empty state map; we only record states that are present
@@ -708,57 +740,4 @@ func newerThan(candidate, current *swarm.Task) bool {
 
 	// 3) Fallback to Version.Index (monotonic increasing for a task object)
 	return candidate.Version.Index > current.Version.Index
-}
-
-// getServiceLabels returns label values for a task's parent service,
-// populating the local metadata cache if necessary.
-func getServiceLabels(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	task *swarm.Task,
-) (prometheus.Labels, error) {
-	serviceID := task.ServiceID
-
-	// Fast path: metadata present
-	if metadata, ok := getServiceMetadata(serviceID); ok {
-		labelSet := prometheus.Labels{
-			labelStack:       metadata.stack,
-			labelService:     metadata.service,
-			labelServiceMode: metadata.serviceMode,
-			labelDisplayName: displayName(metadata.stack, metadata.service),
-		}
-		maps.Copy(labelSet, metadata.customLabels)
-
-		return labelSet, nil
-	}
-
-	// Slow path: inspect and cache
-	inspectResult, inspectErr := dockerClient.ServiceInspect(
-		parentContext,
-		serviceID,
-		client.ServiceInspectOptions{
-			InsertDefaults: false,
-		},
-	)
-	if inspectErr != nil {
-		return map[string]string{}, fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
-	}
-
-	service := inspectResult.Service
-
-	metadata := buildMetadata(&service)
-	setServiceMetadata(serviceID, &metadata)
-
-	labelSet := prometheus.Labels{
-		labelStack:       metadata.stack,
-		labelService:     metadata.service,
-		labelServiceMode: metadata.serviceMode,
-		labelDisplayName: displayName(metadata.stack, metadata.service),
-	}
-	for key, value := range metadata.customLabels {
-		labelSet[key] = value
-		labelutil.MaybeWarnHighCardinality(key, value)
-	}
-
-	return labelSet, nil
 }

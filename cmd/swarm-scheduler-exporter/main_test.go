@@ -107,6 +107,19 @@ func TestValidateAndSetCustomLabels_InvalidName_ReservedPrefix(t *testing.T) {
 	}
 }
 
+func TestValidateAndSetCustomLabels_ReservedName(t *testing.T) {
+	for _, raw := range []string{"stack", "service", "service_mode", "display.name", "state"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Cleanup(func() { collector.SetCustomLabels(nil, nil) })
+
+			err := validateAndSetCustomLabels([]string{"team", raw})
+			if !errors.Is(err, ErrReservedLabelName) {
+				t.Fatalf("err = %v, want ErrReservedLabelName", err)
+			}
+		})
+	}
+}
+
 func TestValidateAndSetCustomLabels_PostSanitizeCollision(t *testing.T) {
 	t.Cleanup(func() { collector.SetCustomLabels(nil, nil) })
 

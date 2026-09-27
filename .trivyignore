@@ -1,0 +1,12 @@
+# Trivy findings the release and scheduled scans accept, one CVE ID per line.
+#
+# Both scans fail on any HIGH or CRITICAL vulnerability, fixed upstream or not.
+# An entry here is the only exception, and every entry must have, on the lines
+# above it, why the finding does not apply or cannot be fixed yet, and on its
+# own line an expiry date that Trivy enforces, after which the finding fails
+# the scan again:
+#
+#   # Only reachable through <feature>, which the exporter never calls.
+#   CVE-2026-00000 exp:2026-12-31
+#
+# There are no entries.

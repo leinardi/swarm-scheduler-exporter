@@ -26,9 +26,22 @@ package collector
 
 import (
 	"context"
+	"time"
 
 	"github.com/moby/moby/client"
 )
+
+// dockerRequestTimeout bounds every request/response call into Docker. Without it a daemon that
+// accepts a request and never answers would hang the goroutine that made it forever: a resync
+// would never finish, a poll would never publish, and the reconciler would stop applying changes.
+// It is well below the 30s floor of the health window, so a hung call surfaces as a failed poll
+// before health turns red on its own. The event stream is long-lived and is not bounded by it.
+const dockerRequestTimeout = 15 * time.Second
+
+// withDockerTimeout derives the context for one Docker request/response call from parentContext.
+func withDockerTimeout(parentContext context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parentContext, dockerRequestTimeout)
+}
 
 // DockerAPI is the subset of the moby client.Client used by this package. It only lists,
 // inspects and streams events: the exporter must never change Docker state, and this interface

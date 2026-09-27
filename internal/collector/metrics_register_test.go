@@ -26,6 +26,7 @@ package collector
 
 import (
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -72,7 +73,7 @@ func TestConfigureServiceUpdateMetrics_RegistersWithoutPanic(t *testing.T) {
 }
 
 func TestConfigureHealthGauges_RegistersWithoutPanic(t *testing.T) {
-	ConfigureHealthGauges("v1.0.0", "abc1234", "2025-01-01")
+	ConfigureHealthGauges("v1.0.0", "abc1234", "2025-01-01", 10*time.Second)
 	t.Cleanup(func() {
 		prometheus.Unregister(exporterHealthGauge)
 		prometheus.Unregister(buildInfoGauge)
@@ -86,5 +87,7 @@ func TestConfigureExporterOpsMetrics_RegistersWithoutPanic(t *testing.T) {
 		prometheus.Unregister(pollsTotalCounter)
 		prometheus.Unregister(pollErrorsTotalCounter)
 		prometheus.Unregister(eventsReconnectsTotalCounter)
+		prometheus.Unregister(eventsDroppedTotalCounter)
+		prometheus.Unregister(pollRejectionsTotalCounter)
 	})
 }

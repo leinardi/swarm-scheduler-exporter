@@ -31,7 +31,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
@@ -280,7 +279,7 @@ func TestConstraintsMatch(t *testing.T) {
 	}
 }
 
-func TestCountEligibleNodesForServiceFromNodes(t *testing.T) {
+func TestCountEligibleNodes(t *testing.T) {
 	nodes := []swarm.Node{
 		makeSchedulableNode("n1", "host1"),
 		makeSchedulableNode("n2", "host2"),
@@ -292,7 +291,7 @@ func TestCountEligibleNodesForServiceFromNodes(t *testing.T) {
 	t.Run("no placement all schedulable", func(t *testing.T) {
 		svc := &swarm.Service{}
 
-		got := countEligibleNodesForServiceFromNodes(nodes, svc)
+		got := countEligibleNodes(nodes, svc.Spec.TaskTemplate.Placement)
 		if got != 2 { // n1, n2 only (n3 is drain)
 			t.Errorf("got %d, want 2", got)
 		}
@@ -309,7 +308,7 @@ func TestCountEligibleNodesForServiceFromNodes(t *testing.T) {
 			},
 		}
 
-		got := countEligibleNodesForServiceFromNodes(nodes, svc)
+		got := countEligibleNodes(nodes, svc.Spec.TaskTemplate.Placement)
 		if got != 1 {
 			t.Errorf("got %d, want 1", got)
 		}
@@ -329,7 +328,7 @@ func TestCountEligibleNodesForServiceFromNodes(t *testing.T) {
 			},
 		}
 
-		got := countEligibleNodesForServiceFromNodes(nodes2, svc)
+		got := countEligibleNodes(nodes2, svc.Spec.TaskTemplate.Placement)
 		if got != 0 {
 			t.Errorf("got %d, want 0", got)
 		}
@@ -358,7 +357,7 @@ func TestCountEligibleNodesForServiceFromNodes(t *testing.T) {
 			},
 		}
 
-		got := countEligibleNodesForServiceFromNodes(nodes6, svc)
+		got := countEligibleNodes(nodes6, svc.Spec.TaskTemplate.Placement)
 		if got != 6 {
 			t.Errorf("got %d, want 6", got)
 		}
@@ -392,196 +391,6 @@ func makeGlobalService(id, stack, name string) swarm.Service {
 			},
 			Mode: swarm.ServiceMode{Global: &swarm.GlobalService{}},
 		},
-	}
-}
-
-func TestProcessEvent_NodeUpdate_TriggersNodeListRefresh(t *testing.T) {
-	resetCollectorState(t)
-	installDesiredReplicasGauges(t)
-	installServiceUpdateGauges(t)
-	installNodesByStateGauge(t)
-
-	fd := &fakeDocker{nodes: []swarm.Node{makeSchedulableNode("n1", "h1")}}
-
-	evt := &events.Message{Type: "node", Action: events.ActionUpdate, Actor: events.Actor{ID: "n1"}}
-
-	err := processEvent(context.Background(), fd, evt)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	fd.mu.Lock()
-	calls := fd.nodeListCalls
-	fd.mu.Unlock()
-
-	if calls == 0 {
-		t.Error("expected NodeList to be called on node event")
-	}
-}
-
-func TestProcessEvent_ServiceRemove_WithCachedMetadata(t *testing.T) {
-	resetCollectorState(t)
-	installDesiredReplicasGauges(t)
-	installServiceUpdateGauges(t)
-
-	md := makeTestMetadata("stack", "svc", serviceModeReplicated)
-	setServiceMetadata("svc1", &md)
-
-	evt := &events.Message{
-		Type:   "service",
-		Action: events.ActionRemove,
-		Actor:  events.Actor{ID: "svc1"},
-	}
-
-	err := processEvent(context.Background(), &fakeDocker{}, evt)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	_, ok := getServiceMetadata("svc1")
-	if ok {
-		t.Error("metadata should have been deleted after service remove event")
-	}
-}
-
-func TestProcessEvent_ServiceRemove_WithoutCachedMetadata(t *testing.T) {
-	resetCollectorState(t)
-	installDesiredReplicasGauges(t)
-	installServiceUpdateGauges(t)
-
-	evt := &events.Message{
-		Type:   "service",
-		Action: events.ActionRemove,
-		Actor:  events.Actor{ID: "svc_gone"},
-	}
-
-	err := processEvent(context.Background(), &fakeDocker{}, evt)
-	if err == nil {
-		t.Error("expected ErrNoCachedMetadata for unknown service remove")
-	}
-}
-
-func TestProcessEvent_ServiceUpdate_PopulatesMetadata(t *testing.T) {
-	resetCollectorState(t)
-	installDesiredReplicasGauges(t)
-	installServiceUpdateGauges(t)
-
-	svc := makeReplicatedService("svc1", "stack", "web", 2)
-	fd := &fakeDocker{serviceByID: map[string]swarm.Service{"svc1": svc}}
-	fd.nodes = []swarm.Node{makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2")}
-	setCachedNodes(fd.nodes)
-
-	evt := &events.Message{
-		Type:   "service",
-		Action: events.ActionUpdate,
-		Actor:  events.Actor{ID: "svc1"},
-	}
-
-	err := processEvent(context.Background(), fd, evt)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	md, ok := getServiceMetadata("svc1")
-	if !ok {
-		t.Fatal("metadata should be present after service update event")
-	}
-
-	if md.service != "web" {
-		t.Errorf("service = %q, want 'web'", md.service)
-	}
-
-	if md.serviceMode != serviceModeReplicated {
-		t.Errorf("serviceMode = %q, want %q", md.serviceMode, serviceModeReplicated)
-	}
-}
-
-func TestRefreshNodesAndRecomputeGlobals_RecomputesGlobalService(t *testing.T) {
-	resetCollectorState(t)
-	desired := installDesiredReplicasGauges(t)
-	installServiceUpdateGauges(t)
-	installNodesByStateGauge(t)
-
-	// Seed a global service.
-	glbSvc := makeGlobalService("glb1", "stack", "worker")
-	glbMd := makeTestMetadata("stack", "worker", serviceModeGlobal)
-	setServiceMetadata("glb1", &glbMd)
-
-	// Start with 2 schedulable nodes.
-	nodes2 := []swarm.Node{makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2")}
-	fd := &fakeDocker{
-		nodes:       nodes2,
-		serviceByID: map[string]swarm.Service{"glb1": glbSvc},
-	}
-
-	err := refreshNodesAndRecomputeNodeDependent(context.Background(), fd)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	lbls := prometheus.Labels{
-		labelStack: "stack", labelService: "worker",
-		labelServiceMode: serviceModeGlobal,
-		labelDisplayName: displayName("stack", "worker"),
-	}
-
-	got := testutil.ToFloat64(desired.With(lbls))
-	if got != 2 {
-		t.Errorf("desired_replicas = %v, want 2 (one per schedulable node)", got)
-	}
-}
-
-func TestRefreshNodesAndRecomputeGlobals_GoneService_SkippedNotError(t *testing.T) {
-	resetCollectorState(t)
-	installDesiredReplicasGauges(t)
-	installServiceUpdateGauges(t)
-	installNodesByStateGauge(t)
-
-	// Seed a global service that has disappeared from Docker.
-	glbMd := makeTestMetadata("stack", "gone", serviceModeGlobal)
-	setServiceMetadata("glb_gone", &glbMd)
-
-	fd := &fakeDocker{
-		nodes:             []swarm.Node{makeSchedulableNode("n1", "h1")},
-		serviceInspectErr: errdefs.ErrNotFound,
-	}
-
-	err := refreshNodesAndRecomputeNodeDependent(context.Background(), fd)
-	if err != nil {
-		t.Errorf("gone service during refresh should not error, got: %v", err)
-	}
-}
-
-func TestCountActiveNodes_NodeListError(t *testing.T) {
-	resetCollectorState(t)
-
-	fd := &fakeDocker{nodeListErr: errdefs.ErrUnavailable}
-
-	_, err := countActiveNodes(context.Background(), fd)
-	if err == nil {
-		t.Error("expected error when NodeList fails")
-	}
-}
-
-func TestCountActiveNodes_CountsSchedulable(t *testing.T) {
-	resetCollectorState(t)
-
-	nodes := make([]swarm.Node, 0, 3)
-	nodes = append(nodes, makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2"))
-	// n3: ready but drain — not schedulable.
-	n3 := makeSchedulableNode("n3", "h3")
-	n3.Spec.Availability = swarm.NodeAvailabilityDrain
-	nodes = append(nodes, n3)
-
-	fd := &fakeDocker{nodes: nodes}
-
-	count, err := countActiveNodes(context.Background(), fd)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if count != 2 {
-		t.Errorf("count = %d, want 2", count)
 	}
 }
 
@@ -624,7 +433,9 @@ func TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted(t *testing.T) {
 
 	listenerDone := make(chan error, 1)
 
-	go func() { listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, time.Now()) }()
+	go func() {
+		listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, NewReconciler(dockerClient), time.Now())
+	}()
 
 	select {
 	case <-dockerClient.connected:
@@ -668,14 +479,11 @@ func TestDispatchEvents_CancelledStreamErrorReportsCancellation(t *testing.T) {
 		errorChannel := make(chan error, 1)
 		errorChannel <- errClosedBody
 
-		var lastSeen time.Time
-
-		err := dispatchEvents(
+		_, err := dispatchEvents(
 			parentContext,
-			make(chan events.Message, 1),
+			NewReconciler(&fakeDocker{}),
 			make(chan events.Message),
 			errorChannel,
-			&lastSeen,
 		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want a context.Canceled wrap", err)
@@ -693,14 +501,11 @@ func TestDispatchEvents_CancelledStreamCloseReportsCancellation(t *testing.T) {
 		eventChannel := make(chan events.Message)
 		close(eventChannel)
 
-		var lastSeen time.Time
-
-		err := dispatchEvents(
+		_, err := dispatchEvents(
 			parentContext,
-			make(chan events.Message, 1),
+			NewReconciler(&fakeDocker{}),
 			eventChannel,
 			make(chan error),
-			&lastSeen,
 		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want a context.Canceled wrap", err)
@@ -735,110 +540,6 @@ func makeGlobalJobService(id, stack, name string) swarm.Service {
 			Mode: swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}},
 		},
 		JobStatus: &swarm.JobStatus{JobIteration: swarm.Version{Index: 1}},
-	}
-}
-
-// seedService builds and caches the metadata of svc the way processEvent does, and returns it.
-func seedService(t *testing.T, svc *swarm.Service) serviceMetadata {
-	t.Helper()
-
-	md := buildMetadata(svc)
-	setServiceMetadata(svc.ID, &md)
-
-	return mustGetServiceMetadata(svc.ID)
-}
-
-func TestUpdateServiceReplicasGauge_ReplicatedJob_DesiredIsTotalCompletions(t *testing.T) {
-	resetCollectorState(t)
-	desired := installDesiredReplicasGauges(t)
-
-	// Two eligible nodes: a replicated job's target must not follow them.
-	setCachedNodes([]swarm.Node{makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2")})
-
-	svc := makeReplicatedJobService("job1", "stack", "migrate", 5)
-	md := seedService(t, &svc)
-
-	updateServiceReplicasGauge(context.Background(), &fakeDocker{}, &svc, &md)
-
-	lbls := serviceLabels("stack", "migrate", serviceModeReplicatedJob)
-
-	if got := testutil.ToFloat64(desired.With(lbls)); got != 5 {
-		t.Errorf("desired_replicas = %v, want 5 (TotalCompletions)", got)
-	}
-
-	if got := testutil.ToFloat64(schedulableReplicasGauge.With(lbls)); got != 0 {
-		t.Errorf("schedulable_replicas = %v, want 0 for a job", got)
-	}
-
-	if got, _ := getServiceDesiredReplicas("job1"); got != 5 {
-		t.Errorf("cached desired = %v, want 5", got)
-	}
-}
-
-func TestUpdateServiceReplicasGauge_GlobalJob_DesiredIsEligibleNodes(t *testing.T) {
-	resetCollectorState(t)
-	desired := installDesiredReplicasGauges(t)
-
-	setCachedNodes([]swarm.Node{makeSchedulableNode("n1", "h1"), makeSchedulableNode("n2", "h2")})
-
-	svc := makeGlobalJobService("gjob1", "stack", "prune")
-	md := seedService(t, &svc)
-
-	updateServiceReplicasGauge(context.Background(), &fakeDocker{}, &svc, &md)
-
-	lbls := serviceLabels("stack", "prune", serviceModeGlobalJob)
-
-	if got := testutil.ToFloat64(desired.With(lbls)); got != 2 {
-		t.Errorf("desired_replicas = %v, want 2 (eligible nodes)", got)
-	}
-
-	if got := testutil.ToFloat64(schedulableReplicasGauge.With(lbls)); got != 0 {
-		t.Errorf("schedulable_replicas = %v, want 0 for a job", got)
-	}
-}
-
-func TestRefreshNodesAndRecomputeNodeDependent_GlobalJobOnly(t *testing.T) {
-	resetCollectorState(t)
-	desired := installDesiredReplicasGauges(t)
-	installNodesByStateGauge(t)
-
-	globalJob := makeGlobalJobService("gjob1", "stack", "prune")
-	replicatedJob := makeReplicatedJobService("rjob1", "stack", "migrate", 5)
-
-	seedService(t, &globalJob)
-	seedService(t, &replicatedJob)
-
-	fd := &fakeDocker{
-		nodes: []swarm.Node{
-			makeSchedulableNode("n1", "h1"),
-			makeSchedulableNode("n2", "h2"),
-			makeSchedulableNode("n3", "h3"),
-		},
-		serviceByID: map[string]swarm.Service{"gjob1": globalJob, "rjob1": replicatedJob},
-	}
-
-	err := refreshNodesAndRecomputeNodeDependent(context.Background(), fd)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	globalLabels := serviceLabels("stack", "prune", serviceModeGlobalJob)
-	if got := testutil.ToFloat64(desired.With(globalLabels)); got != 3 {
-		t.Errorf("global-job desired_replicas = %v, want 3 (eligible nodes)", got)
-	}
-
-	if got := testutil.ToFloat64(schedulableReplicasGauge.With(globalLabels)); got != 0 {
-		t.Errorf("global-job schedulable_replicas = %v, want 0", got)
-	}
-
-	// The replicated job's target does not depend on the nodes: nothing was written for it.
-	replicatedLabels := serviceLabels("stack", "migrate", serviceModeReplicatedJob)
-	if desired.Delete(replicatedLabels) {
-		t.Error("replicated-job desired_replicas was recomputed on a node refresh")
-	}
-
-	if schedulableReplicasGauge.Delete(replicatedLabels) {
-		t.Error("replicated-job schedulable_replicas was recomputed on a node refresh")
 	}
 }
 

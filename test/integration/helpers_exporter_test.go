@@ -72,6 +72,46 @@ var occupyFirstProbedPort bool
 func startExporter(t *testing.T, services []serviceKey, args ...string) string {
 	t.Helper()
 
+	return startExporterVia(t, cluster.Manager.DockerHost, services, args...)
+}
+
+// startExporterVia is startExporter with the exporter's DOCKER_HOST set to dockerHost, such as a
+// dockerProxy in front of the manager.
+func startExporterVia(
+	t *testing.T,
+	dockerHost string,
+	services []serviceKey,
+	args ...string,
+) string {
+	t.Helper()
+
+	return launchUntil(t, dockerHost, func(ctx context.Context, baseURL string) error {
+		return readiness(ctx, baseURL, services)
+	}, args...)
+}
+
+// startExporterServing starts the exporter like startExporterVia, but returns as soon as its
+// HTTP server answers /healthz, healthy or not, for a test that looks at it before it is ready.
+func startExporterServing(t *testing.T, dockerHost string, args ...string) string {
+	t.Helper()
+
+	return launchUntil(t, dockerHost, func(ctx context.Context, baseURL string) error {
+		_, _, err := httpGet(ctx, baseURL+"/healthz")
+
+		return err
+	}, args...)
+}
+
+// launchUntil runs the exporter against dockerHost until probe passes, retrying a launch that
+// exits, and returns its base URL. See startExporter.
+func launchUntil(
+	t *testing.T,
+	dockerHost string,
+	probe func(ctx context.Context, baseURL string) error,
+	args ...string,
+) string {
+	t.Helper()
+
 	ctx := testCtx(t)
 
 	var (
@@ -112,7 +152,7 @@ func startExporter(t *testing.T, services []serviceKey, args ...string) string {
 			t.Cleanup(func() { _ = blocker.Close() })
 		}
 
-		current, err = launchExporter(ctx, port, args)
+		current, err = launchExporter(ctx, port, dockerHost, args)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +161,7 @@ func startExporter(t *testing.T, services []serviceKey, args ...string) string {
 
 		baseURL := "http://" + localAddr(port)
 
-		err = current.waitReady(ctx, baseURL, services)
+		err = current.waitReady(ctx, baseURL, probe)
 		if err == nil {
 			return baseURL
 		}
@@ -147,10 +187,10 @@ func startExporter(t *testing.T, services []serviceKey, args ...string) string {
 }
 
 // exporterEnv is the child's environment: the test process's own, minus every DOCKER_* variable,
-// plus DOCKER_HOST pointing at the test Swarm's manager. The exporter builds its client with
+// plus DOCKER_HOST set to dockerHost (the test Swarm's manager, or a proxy in front of it). The exporter builds its client with
 // client.FromEnv, so an inherited DOCKER_TLS_VERIFY, DOCKER_CERT_PATH, DOCKER_API_VERSION or
 // DOCKER_CONTEXT from the developer's shell would otherwise leak into it.
-func exporterEnv() []string {
+func exporterEnv(dockerHost string) []string {
 	env := make([]string, 0, len(os.Environ())+1)
 
 	for _, entry := range os.Environ() {
@@ -161,7 +201,7 @@ func exporterEnv() []string {
 		env = append(env, entry)
 	}
 
-	return append(env, "DOCKER_HOST="+cluster.Manager.DockerHost)
+	return append(env, "DOCKER_HOST="+dockerHost)
 }
 
 func freePort(ctx context.Context) (int, error) {
@@ -191,7 +231,12 @@ type exporterProc struct {
 	exited chan struct{} // closed once cmd.Wait has returned
 }
 
-func launchExporter(ctx context.Context, port int, args []string) (*exporterProc, error) {
+func launchExporter(
+	ctx context.Context,
+	port int,
+	dockerHost string,
+	args []string,
+) (*exporterProc, error) {
 	cmdArgs := append(
 		[]string{"-listen-addr", localAddr(port), "-poll-delay", "1s", "-log-format", "json"},
 		args...)
@@ -199,7 +244,7 @@ func launchExporter(ctx context.Context, port int, args []string) (*exporterProc
 	// Detached from ctx: the test's context ends before its cleanups run, and exec would then kill
 	// the exporter outright. stop ends it instead, with SIGTERM, from the cleanup.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), exporterBinary, cmdArgs...)
-	cmd.Env = exporterEnv()
+	cmd.Env = exporterEnv(dockerHost)
 
 	// The exporter's logger writes to stdout and a crash lands on stderr: both go through the
 	// same watcher, which exec serializes when the writer is shared.
@@ -223,9 +268,13 @@ func launchExporter(ctx context.Context, port int, args []string) (*exporterProc
 	return proc, nil
 }
 
-// waitReady waits for the exporter to be healthy and seeded. It returns errExporterExited, which
-// the caller retries, as soon as the exporter exits (a lost port race ends that way too).
-func (p *exporterProc) waitReady(ctx context.Context, baseURL string, services []serviceKey) error {
+// waitReady waits for probe to pass against the exporter. It returns errExporterExited, which the
+// caller retries, as soon as the exporter exits (a lost port race ends that way too).
+func (p *exporterProc) waitReady(
+	ctx context.Context,
+	baseURL string,
+	probe func(ctx context.Context, baseURL string) error,
+) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -233,7 +282,7 @@ func (p *exporterProc) waitReady(ctx context.Context, baseURL string, services [
 	defer deadline.Stop()
 
 	for {
-		lastErr := p.readiness(ctx, baseURL, services)
+		lastErr := probe(ctx, baseURL)
 
 		// A foreign process that grabbed the port could answer, but it cannot have served seeded
 		// exporter metrics before our exporter, failing to bind, exited: checking the exit after
@@ -260,7 +309,10 @@ func (p *exporterProc) waitReady(ctx context.Context, baseURL string, services [
 	}
 }
 
-func (*exporterProc) readiness(ctx context.Context, baseURL string, services []serviceKey) error {
+// readiness passes once the exporter is healthy and seeded: /healthz answers 200, nodes_by_state
+// accounts for every cluster node, and every service in services has desired_replicas and
+// running_replicas series.
+func readiness(ctx context.Context, baseURL string, services []serviceKey) error {
 	_, status, err := httpGet(ctx, baseURL+"/healthz")
 	if err != nil {
 		return err

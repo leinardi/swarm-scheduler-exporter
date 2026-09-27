@@ -1,16 +1,18 @@
 name: Release swarm-scheduler-exporter
 
-# One dispatch resolves the version, verifies, builds the binaries and the
-# image, tags, publishes the image and the GitHub release, and moves the
-# `latest` pointers.
+# One dispatch resolves the version, verifies, decides the release mode, builds
+# the binaries and the image, scans the image, tags, publishes the image and the
+# GitHub release, and moves the `latest` pointers.
 #
 # The order of the release job is deliberate: everything that can fail does so
 # before the tag exists, because tags in this repository are immutable ("Immutable
 # tags" ruleset: no update, no deletion, no bypass) and cannot be cleaned up after
-# a failure. Everything after the tag push reuses what is already published only
-# once it is proven to be this run's, and never replaces it, so a re-run with the
-# same explicit version finishes a failed publish. docs/release.md is the prose
-# version of this, with the recovery procedure.
+# a failure. The image is built once, into a job-local registry, and scanned
+# there; only that scanned digest is copied to GHCR, after the tag. Everything
+# after the tag push reuses what is already published only once it is proven to
+# be this run's, and never replaces it, so a re-run with the same explicit
+# version finishes a failed publish. docs/release.md is the prose version of
+# this, with the recovery procedure.
 on:
   workflow_dispatch:
     inputs:
@@ -61,6 +63,18 @@ env:
   SIGNER_WORKFLOW: leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml
   SIGNER_IDENTITY: https://github.com/leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml@refs/heads/master
   SIGNER_ISSUER: https://token.actions.githubusercontent.com
+  PLATFORMS: linux/amd64,linux/arm64
+  # The job-local registries the image is built into, and a dry run copies to.
+  # Pinned by index digest, like every image this workflow runs.
+  REGISTRY_IMAGE: registry:3.1.2@sha256:c87f33837722a100572e95d7dc4bf539fc42cf68202b13c3bc03c0ff54c3a649
+  LOCAL_IMAGE: localhost:5000/swarm-scheduler-exporter
+  COPY_IMAGE: localhost:5001/swarm-scheduler-exporter
+  # Copies the scanned index to GHCR with its digest. skopeo v1.24.1 is
+  # released on GitHub but has no image on quay.io, so this is v1.22.3.
+  SKOPEO_IMAGE: quay.io/skopeo/stable:v1.22.3-immutable@sha256:c0ee1f4edca5c01cb8d5611124f92f3cc47196ecab68aee5d0f90834e00574d5
+  # Pinned by hand, like SVU_VERSION: setup-trivy installs whatever it is given.
+  # scheduled-scan.yaml scans with the same version; bump both together.
+  TRIVY_VERSION: v0.74.0
 
 jobs:
   # workflow_dispatch lets the caller pick any branch, and the release job holds
@@ -94,6 +108,7 @@ jobs:
   test:
     needs: guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -114,6 +129,7 @@ jobs:
   audit:
     needs: guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -327,6 +343,89 @@ jobs:
             git tag -a "$VERSION" -m "swarm-scheduler-exporter $VERSION"
           fi
 
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Installs cosign v3, which stores the signature as a Sigstore bundle in an
+      # OCI 1.1 referring artifact rather than a `.sig` tag. Signing and the
+      # recovery check below both use this same cosign, so they agree; a
+      # consumer needs cosign v3, or v2.6+ with --new-bundle-format, to verify.
+      - name: Install cosign
+        if: ${{ !inputs.dry_run }}
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # The mode is decided here, before anything is built or pushed, from two
+      # lookups: the Git tag (the step above) and the image :<version> on GHCR.
+      # Only "not found" counts as absent: an authentication or network error
+      # stops the run, because reading it as "absent" would let a run push a tag
+      # or an image over something it could not see.
+      #
+      #   Git tag         image :<version>                     mode
+      #   absent          absent                               fresh
+      #   absent          present                              stop before tagging
+      #   on this commit  present, attested for this commit    reuse
+      #   on this commit  present, not attested                stop: needs a human
+      #   on this commit  absent                               publish
+      #
+      # A tag on another commit already failed the step above. docs/release.md
+      # describes each mode.
+      - name: Decide the release mode
+        id: mode
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG_EXISTS: ${{ steps.tag.outputs.exists }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" --format '{{json .Manifest}}' 2>&1); then
+            IMAGE_DIGEST=$(jq -r '.digest' <<<"$OUT")
+          elif grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
+            IMAGE_DIGEST=""
+          else
+            echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
+            exit 1
+          fi
+
+          if [ "$TAG_EXISTS" != "true" ]; then
+            if [ -n "$IMAGE_DIGEST" ]; then
+              echo "$IMAGE_REPO:$VERSION already exists ($IMAGE_DIGEST), but the tag $VERSION does not. The version is held by an image, so it cannot be tagged: nothing was pushed. Release a higher version - docs/release.md." >&2
+              exit 1
+            fi
+            MODE=fresh
+          elif [ -z "$IMAGE_DIGEST" ]; then
+            MODE=publish
+          # Verified by digest, not by tag, so what is checked is what is reused.
+          elif gh attestation verify "oci://$IMAGE_REPO@$IMAGE_DIGEST" \
+            --repo leinardi/swarm-scheduler-exporter \
+            --signer-workflow "$SIGNER_WORKFLOW" \
+            --source-ref refs/heads/master \
+            --source-digest "$GITHUB_SHA"; then
+            MODE=reuse
+          else
+            echo "$IMAGE_REPO:$VERSION ($IMAGE_DIGEST) exists but carries no provenance from $SIGNER_WORKFLOW for commit $GITHUB_SHA. A tag this workflow did not produce is holding the version. Nothing was published and the tag was not touched: the version needs a human - docs/release.md." >&2
+            exit 1
+          fi
+
+          # A dry run rehearses a fresh release whatever the mode: it builds,
+          # scans and copies, and stops at the absence check if the image exists.
+          BUILD=true
+          if [ "$MODE" = "reuse" ] && [ "$DRY_RUN" != "true" ]; then
+            BUILD=false
+          fi
+
+          echo "Tag on this commit: $TAG_EXISTS. Image: ${IMAGE_DIGEST:-absent}. Mode: $MODE."
+          {
+            echo "mode=$MODE"
+            echo "build=$BUILD"
+            echo "image_digest=$IMAGE_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build static binaries (linux/amd64, linux/arm64)
         env:
           CGO_ENABLED: "0"
@@ -361,34 +460,63 @@ jobs:
             dist/${{ env.APP_NAME }}-linux-arm64
             dist/checksums.txt
 
+      # Host network, so the builder reaches the job-local registry on localhost.
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: network=host
 
-      # The deps and build stages pull dhi.io/golang.
+      # The build stage pulls dhi.io/golang.
       - name: Log in to Docker Hardened Images (dhi.io)
+        if: steps.mode.outputs.build == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: dhi.io
           username: ${{ vars.DHI_USERNAME }}
           password: ${{ secrets.DHI_TOKEN }}
 
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # The image is built once, into a registry that lives and dies with this
+      # job, and only the digest that was scanned is copied to GHCR. A dry run
+      # starts a second one to exercise that copy.
+      - name: Start the job-local registries
+        if: steps.mode.outputs.build == 'true'
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          docker run -d --name local-registry -p 5000:5000 "$REGISTRY_IMAGE"
+          PORTS=(5000)
+          if [ "$DRY_RUN" = "true" ]; then
+            docker run -d --name copy-registry -p 5001:5000 "$REGISTRY_IMAGE"
+            PORTS+=(5001)
+          fi
+          for port in "${PORTS[@]}"; do
+            for _ in $(seq 1 30); do
+              if curl -fsS -o /dev/null "http://localhost:$port/v2/"; then
+                continue 2
+              fi
+              sleep 1
+            done
+            echo "The job-local registry on port $port did not come up." >&2
+            exit 1
+          done
 
-      # The whole multi-arch image, built and thrown away. A Dockerfile or
-      # base-image failure stops the run here, before the tag exists, and the
-      # publishing build below reuses this one from the cache.
-      - name: Build the image, publish nothing
+      # The only image build. Pushed by digest with no tag, with the SBOM and
+      # mode=max provenance in the index. Every layer is recompressed as gzip:
+      # the dhi.io base layers are zstd, and for a zstd image skopeo rewrites the
+      # index entries with a compression annotation, which --preserve-digests
+      # then refuses, so the copy below could not keep the scanned digest.
+      - name: Build the image into the job-local registry
+        id: build
+        if: steps.mode.outputs.build == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: deployments/docker/Dockerfile
-          push: false
-          platforms: linux/amd64,linux/arm64
+          # push=true inside `outputs` instead of the `push` input: `push` adds a
+          # second, tagged registry exporter.
+          outputs: type=image,name=${{ env.LOCAL_IMAGE }},push-by-digest=true,name-canonical=true,push=true,compression=gzip,force-compression=true
+          platforms: ${{ env.PLATFORMS }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha
@@ -399,43 +527,44 @@ jobs:
             DATE=${{ steps.version.outputs.build_date }}
             SOURCE_DATE_EPOCH=${{ steps.version.outputs.source_date_epoch }}
 
-      - name: Report what a real run would publish
-        if: inputs.dry_run
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+
+      # Both platform images of the index, each by its own digest. A HIGH or
+      # CRITICAL finding, fixed upstream or not, fails the run here, before any
+      # tag exists. The only exceptions are the ones committed in .trivyignore,
+      # each with a reason and an expiry date.
+      - name: Scan both platform images
+        id: scan
+        if: steps.mode.outputs.build == 'true'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          PREVIOUS: ${{ steps.version.outputs.previous }}
-          EXPLICIT: ${{ steps.version.outputs.explicit }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          {
-            echo "# Dry run: $VERSION"
-            echo
-            echo "Previous tag: ${PREVIOUS:-none}. Explicit version: $EXPLICIT."
-            echo
-            echo "No tag was created and nothing was published. The image was built for linux/amd64 and linux/arm64 and discarded."
-            echo
-            echo '## Artifacts'
-            echo
-            echo '```text'
-            ls -1 dist
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          INDEX=$(docker buildx imagetools inspect "$LOCAL_IMAGE@$DIGEST" --format '{{json .Manifest}}')
+          SCANNED=()
+          for platform in ${PLATFORMS//,/ }; do
+            PLATFORM_DIGEST=$(jq -r --arg os "${platform%%/*}" --arg arch "${platform#*/}" \
+              '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch) | .digest] | if length == 1 then .[0] else empty end' \
+              <<<"$INDEX")
+            if [ -z "$PLATFORM_DIGEST" ]; then
+              echo "The index $DIGEST has no single $platform image." >&2
+              exit 1
+            fi
+            echo "Scanning $platform: $PLATFORM_DIGEST"
+            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --platform "$platform" "$LOCAL_IMAGE@$PLATFORM_DIGEST"
+            SCANNED+=("$platform=$PLATFORM_DIGEST")
+          done
+          echo "platforms=${SCANNED[*]}" >> "$GITHUB_OUTPUT"
 
-      # Per attempt, like the binaries above, so a re-run dry run does not
-      # collide with the first attempt's upload.
-      - name: Upload the unpublished artifacts for inspection
-        if: inputs.dry_run
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dry-run-${{ steps.version.outputs.version }}-${{ github.run_attempt }}
-          path: dist
-
-      # The last look before the point of no return. Concurrency serializes the
-      # workflow, but a tag can also arrive from outside it, and the check in the
-      # version step ran before several minutes of building. This asks the
-      # remote, not the local clone, and it asks now.
+      # The last look at the tags before the point of no return. Concurrency
+      # serializes the workflow, but a tag can also arrive from outside it, and
+      # the check in the version step ran before several minutes of building.
+      # This asks the remote, not the local clone, and it asks now.
       - name: Gate the tag
-        if: ${{ !inputs.dry_run }}
+        if: steps.mode.outputs.mode == 'fresh' || inputs.dry_run
         env:
           VERSION: ${{ steps.version.outputs.version }}
           EXISTS: ${{ steps.tag.outputs.exists }}
@@ -469,125 +598,187 @@ jobs:
           echo "$HIGHEST_REMOTE was published while this run was building, so $VERSION would be a lower immutable tag. Nothing was pushed; release a higher version." >&2
           exit 1
 
-      # The point of no return. Everything after it reuses a published artifact
-      # only once it is proven to be this run's and never replaces one, so a
-      # re-run with the same explicit version finishes a failed publish.
-      - name: Push the tag
-        if: ${{ !inputs.dry_run && steps.tag.outputs.exists != 'true' }}
+      # The image ownership check, right before the tag is pushed: the version
+      # must not be held by an image, or the tag would point at a version this
+      # run can never publish. Same fail-closed lookup as the mode step.
+      - name: Check the version image is absent
+        if: steps.mode.outputs.mode == 'fresh' || inputs.dry_run
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: git push origin "$VERSION"
-
-      # Installs cosign v3, which stores the signature as a Sigstore bundle in an
-      # OCI 1.1 referring artifact rather than a `.sig` tag. Signing and the
-      # recovery check below both use this same cosign, so they agree; a
-      # consumer needs cosign v3, or v2.6+ with --new-bundle-format, to verify.
-      - name: Install cosign
-        if: ${{ !inputs.dry_run }}
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      # A version tag on GHCR is either absent, or must be proven to be this
-      # commit's, built by this workflow. Only "not found" counts as absent: an
-      # authentication or network error must never be read as "free to push",
-      # because the tag would then be overwritten.
-      - name: Check the published image
-        id: image
-        if: ${{ !inputs.dry_run }}
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-
-          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" --format '{{json .Manifest}}' 2>&1); then
-            DIGEST=$(jq -r '.digest' <<<"$OUT")
-          elif grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
-            echo "$IMAGE_REPO:$VERSION does not exist yet."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          else
+          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" 2>&1); then
+            echo "$IMAGE_REPO:$VERSION appeared while this run was building. Nothing was pushed; release a higher version - docs/release.md." >&2
+            exit 1
+          elif ! grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
             echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
             exit 1
           fi
 
-          # Verified by digest, not by tag, so what is checked is what is reused.
-          if ! gh attestation verify "oci://$IMAGE_REPO@$DIGEST" \
-            --repo leinardi/swarm-scheduler-exporter \
-            --signer-workflow "$SIGNER_WORKFLOW" \
-            --source-ref refs/heads/master \
-            --source-digest "$GITHUB_SHA"; then
-            echo "$IMAGE_REPO:$VERSION ($DIGEST) exists but carries no provenance from $SIGNER_WORKFLOW for commit $GITHUB_SHA. A tag this workflow did not produce is holding the version. Nothing more was published, and the tag was not touched: the version needs a human - docs/release.md." >&2
+      # The copy step below, against the second job-local registry instead of
+      # GHCR, with the same checks: the digest survives, and so do the SBOM and
+      # provenance manifests of both platforms.
+      - name: Rehearse the copy on a second local registry
+        if: inputs.dry_run
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host "$SKOPEO_IMAGE" copy --all --preserve-digests \
+            --src-tls-verify=false --dest-tls-verify=false \
+            "docker://$LOCAL_IMAGE@$DIGEST" "docker://$COPY_IMAGE@$DIGEST"
+
+          RAW=$(mktemp)
+          docker run --rm --network host "$SKOPEO_IMAGE" inspect --raw --tls-verify=false \
+            "docker://$COPY_IMAGE@$DIGEST" > "$RAW"
+          COPIED="sha256:$(sha256sum < "$RAW" | cut -d' ' -f1)"
+          if [ "$COPIED" != "$DIGEST" ]; then
+            echo "The copied index is $COPIED, not the scanned $DIGEST." >&2
             exit 1
           fi
 
-          echo "$IMAGE_REPO:$VERSION is $DIGEST, attested by this workflow for this commit: reusing it."
-          {
-            echo "exists=true"
-            echo "digest=$DIGEST"
-          } >> "$GITHUB_OUTPUT"
+          ATTESTATIONS=$(jq '[.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length' "$RAW")
+          WANT=$(tr ',' '\n' <<<"$PLATFORMS" | wc -l)
+          if [ "$ATTESTATIONS" -ne "$WANT" ]; then
+            echo "The copied index carries $ATTESTATIONS attestation manifests, want $WANT (one per platform)." >&2
+            exit 1
+          fi
+          echo "Copied $DIGEST with its digest and $ATTESTATIONS attestation manifests intact."
 
-      # Pushed by digest with no tag at all: a version tag is only ever added once
-      # the digest has been attested and signed, so an untagged digest left by a
-      # failed run is inert.
-      - name: Push the image by digest
-        id: push
-        if: ${{ !inputs.dry_run && steps.image.outputs.exists != 'true' }}
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Report what a real run would publish
+        if: inputs.dry_run
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+          EXPLICIT: ${{ steps.version.outputs.explicit }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SCANNED: ${{ steps.scan.outputs.platforms }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Dry run: $VERSION"
+            echo
+            echo "Previous tag: ${PREVIOUS:-none}. Explicit version: $EXPLICIT. A real run would take the $MODE mode."
+            echo
+            echo "No tag was created and nothing was published. The image index $DIGEST was built into a job-local registry,"
+            echo "its platform images were scanned ($SCANNED), and it was copied to a second local registry with its digest and"
+            echo "attestation manifests intact."
+            echo
+            echo '## Artifacts'
+            echo
+            echo '```text'
+            ls -1 dist
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Per attempt, like the binaries above, so a re-run dry run does not
+      # collide with the first attempt's upload.
+      - name: Upload the unpublished artifacts for inspection
+        if: inputs.dry_run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          context: .
-          file: deployments/docker/Dockerfile
-          # push=true inside `outputs` instead of the `push` input: `push` adds a
-          # second, tagged registry exporter.
-          outputs: type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
-          platforms: linux/amd64,linux/arm64
-          provenance: mode=max
-          sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            COMMIT=${{ steps.version.outputs.short_sha }}
-            DATE=${{ steps.version.outputs.build_date }}
-            SOURCE_DATE_EPOCH=${{ steps.version.outputs.source_date_epoch }}
+          name: dry-run-${{ steps.version.outputs.version }}-${{ github.run_attempt }}
+          path: dist
+
+      # The point of no return. Everything after it reuses a published artifact
+      # only once it is proven to be this run's and never replaces one, so a
+      # re-run with the same explicit version finishes a failed publish.
+      - name: Push the tag
+        if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'fresh' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: git push origin "$VERSION"
+
+      # The scanned index, byte for byte, with no tag at all: a version tag is
+      # only ever added once the digest has been attested and signed, so an
+      # untagged digest left by a failed run is inert.
+      - name: Copy the image to GHCR by digest
+        if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$HOME/.docker/config.json:/auth.json:ro" "$SKOPEO_IMAGE" \
+            copy --all --preserve-digests --src-tls-verify=false --dest-authfile /auth.json \
+            "docker://$LOCAL_IMAGE@$DIGEST" "docker://$IMAGE_REPO@$DIGEST"
+
+      # What GHCR now serves under the digest is hashed here, not taken from a
+      # tool's report, so the digest attested and signed below is the one that
+      # was scanned.
+      - name: Check GHCR serves the scanned index
+        if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          RAW=$(mktemp)
+          docker run --rm -v "$HOME/.docker/config.json:/auth.json:ro" "$SKOPEO_IMAGE" \
+            inspect --raw --authfile /auth.json "docker://$IMAGE_REPO@$DIGEST" > "$RAW"
+          SERVED="sha256:$(sha256sum < "$RAW" | cut -d' ' -f1)"
+          if [ "$SERVED" != "$DIGEST" ]; then
+            echo "GHCR serves $SERVED for $IMAGE_REPO@$DIGEST, not the scanned index. Nothing was tagged." >&2
+            exit 1
+          fi
 
       - name: Attest image provenance
-        if: ${{ !inputs.dry_run && steps.image.outputs.exists != 'true' }}
+        if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_REPO }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      # A fresh digest is signed unconditionally. A reused one is signed only when
-      # it lacks this workflow's own keyless signature: any other signature, from
-      # another workflow or a laptop, does not count.
+      # A new digest is signed. A reused one must already carry this workflow's
+      # own keyless signature, since the version tag is only ever added after
+      # signing; any other signature, from another workflow or a laptop, does
+      # not count, and a reused image without one needs a human.
       - name: Sign the image with cosign (keyless via GitHub OIDC)
         id: sign
         if: ${{ !inputs.dry_run }}
         env:
-          EXISTS: ${{ steps.image.outputs.exists }}
-          DIGEST: ${{ steps.image.outputs.digest || steps.push.outputs.digest }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          DIGEST: ${{ steps.mode.outputs.image_digest || steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          if [ "$EXISTS" = "true" ] && cosign verify \
-            --certificate-identity "$SIGNER_IDENTITY" \
-            --certificate-oidc-issuer "$SIGNER_ISSUER" \
-            "$IMAGE_REPO@$DIGEST" >/dev/null; then
-            echo "$IMAGE_REPO@$DIGEST already carries this workflow's signature."
+          if [ "$MODE" = "reuse" ]; then
+            if ! cosign verify \
+              --certificate-identity "$SIGNER_IDENTITY" \
+              --certificate-oidc-issuer "$SIGNER_ISSUER" \
+              "$IMAGE_REPO@$DIGEST" >/dev/null; then
+              echo "$IMAGE_REPO@$DIGEST is attested by this workflow but carries no signature from it. Nothing more was published: it needs a human - docs/release.md." >&2
+              exit 1
+            fi
+            echo "$IMAGE_REPO@$DIGEST carries this workflow's signature: reusing it."
           else
             cosign sign --yes "$IMAGE_REPO@$DIGEST"
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
+      # The reused image is already immutable and published, so its scan cannot
+      # stop anything: findings are reported as warnings, for a human to judge
+      # whether the next version should follow sooner.
+      - name: Scan the reused image
+        if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'reuse' }}
+        env:
+          DIGEST: ${{ steps.sign.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for platform in ${PLATFORMS//,/ }; do
+            if ! trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --platform "$platform" "$IMAGE_REPO@$DIGEST"; then
+              echo "::warning::The reused $IMAGE_REPO@$DIGEST ($platform) has HIGH or CRITICAL findings, or could not be scanned. It is already published and was not changed; consider releasing a new version."
+            fi
+          done
+
       - name: Tag the image with the version
-        if: ${{ !inputs.dry_run && steps.image.outputs.exists != 'true' }}
+        if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
           DIGEST: ${{ steps.sign.outputs.digest }}
         run: |
           set -euo pipefail
           # Checked again right before tagging: a version tag that appeared since
-          # the check above is never overwritten.
+          # the checks above is never overwritten.
           if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" 2>&1); then
             echo "$IMAGE_REPO:$VERSION appeared while this run was publishing. It was not overwritten: re-run to verify it, or hand it to a human - docs/release.md." >&2
             exit 1
@@ -758,7 +949,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           PREVIOUS: ${{ steps.version.outputs.previous }}
           RECOVERY: ${{ steps.tag.outputs.exists }}
-          IMAGE_REUSED: ${{ steps.image.outputs.exists }}
+          MODE: ${{ steps.mode.outputs.mode }}
           DIGEST: ${{ steps.sign.outputs.digest }}
           MOVED: ${{ steps.pointers.outputs.moved }}
           LATEST: ${{ steps.publish.outputs.latest }}
@@ -769,10 +960,10 @@ jobs:
           {
             echo "# Released $VERSION"
             echo
-            echo "Previous tag: ${PREVIOUS:-none}. Recovery: $RECOVERY."
+            echo "Previous tag: ${PREVIOUS:-none}. Recovery: $RECOVERY. Mode: $MODE."
             echo
             echo "- [Release](https://github.com/leinardi/swarm-scheduler-exporter/releases/tag/$VERSION) - marked latest: $LATEST"
-            echo "- [Image](https://github.com/leinardi/swarm-scheduler-exporter/pkgs/container/swarm-scheduler-exporter): \`$IMAGE_REPO:$VERSION\` (\`$DIGEST\`) - reused: $IMAGE_REUSED, :latest moved: $MOVED"
+            echo "- [Image](https://github.com/leinardi/swarm-scheduler-exporter/pkgs/container/swarm-scheduler-exporter): \`$IMAGE_REPO:$VERSION\` (\`$DIGEST\`) - :latest moved: $MOVED"
             echo "- Assets uploaded: ${UPLOADED:-none}"
             echo "- Assets verified by sha256: ${VERIFIED:-none}"
           } >> "$GITHUB_STEP_SUMMARY"

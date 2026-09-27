@@ -42,19 +42,15 @@ var (
 	lastEventsConnectUnixNano atomic.Int64
 
 	// Prometheus health metrics.
-	exporterHealthGauge prometheus.Gauge
+	exporterHealthGauge prometheus.GaugeFunc
 	buildInfoGauge      *prometheus.GaugeVec
 )
 
-// ConfigureHealthGauges registers the health and build info metrics.
-func ConfigureHealthGauges(version, commit, date string) {
-	exporterHealthGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusExporterSubsystem,
-		Name:        "health",
-		Help:        "Exporter health status: 1=healthy, 0=unhealthy.",
-		ConstLabels: nil,
-	})
+// ConfigureHealthGauges registers the health and build info metrics. The health gauge is
+// evaluated on every scrape with the same check as /healthz, so it turns 0 when polls stop
+// succeeding, even if the poller is stuck or never started.
+func ConfigureHealthGauges(version, commit, date string, pollDelay time.Duration) {
+	exporterHealthGauge = newHealthGauge(pollDelay)
 	prometheus.MustRegister(exporterHealthGauge)
 
 	buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -70,7 +66,29 @@ func ConfigureHealthGauges(version, commit, date string) {
 	buildInfoGauge.WithLabelValues(version, commit, date).Set(1)
 }
 
-// MarkPollOK records the time of the latest successful replicas-state publish.
+// newHealthGauge returns swarm_exporter_health, reporting HealthSnapshot at scrape time.
+//
+//nolint:ireturn // prometheus.NewGaugeFunc returns this interface; its implementation is unexported
+func newHealthGauge(pollDelay time.Duration) prometheus.GaugeFunc {
+	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
+		Name:        "health",
+		Help:        "Exporter health status: 1=healthy, 0=unhealthy.",
+		ConstLabels: nil,
+	}, func() float64 {
+		healthy, _ := HealthSnapshot(pollDelay, time.Now())
+		if healthy {
+			return 1
+		}
+
+		return 0
+	})
+}
+
+// MarkPollOK records the time of the latest successful replicas-state publish. Callers pass the
+// time the publish completed, not the time the poll started, so a slow poll does not look fresher
+// than it is.
 func MarkPollOK(now time.Time) {
 	lastPollSuccessUnixNano.Store(now.UnixNano())
 }
@@ -82,13 +100,28 @@ func MarkEventsConnected(now time.Time) {
 
 // HealthSnapshot returns whether the exporter is healthy and a human reason.
 // Healthy if:
-//   - we have at least one successful poll, and
-//   - that poll is not older than max(3*pollDelay, 30s).
+//   - the reconciler completed its first resync, so the caches hold every service and node,
+//   - we have at least one successful poll,
+//   - that poll is not older than max(3*pollDelay, 30s), and
+//   - no requested resync has been outstanding for longer than that same window: a resync that
+//     keeps failing leaves the caches behind Docker while polls still succeed.
 func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reason string) {
-	lastPoll := time.Unix(0, lastPollSuccessUnixNano.Load())
-	if lastPoll.IsZero() {
+	reconciler := activeReconciler.Load()
+	if reconciler == nil {
+		return false, "initial resync not completed"
+	}
+
+	requested, completed, outstandingSince := reconciler.resyncState()
+	if completed == 0 {
+		return false, "initial resync not completed"
+	}
+
+	lastPollUnixNano := lastPollSuccessUnixNano.Load()
+	if lastPollUnixNano == 0 {
 		return false, "no successful poll yet"
 	}
+
+	lastPoll := time.Unix(0, lastPollUnixNano)
 
 	// Staleness threshold: more lenient of the two
 	minWindow := 30 * time.Second
@@ -99,18 +132,9 @@ func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reaso
 		return false, "last poll too old"
 	}
 
+	if requested > completed && now.Sub(outstandingSince) > window {
+		return false, "resync outstanding"
+	}
+
 	return true, ""
-}
-
-// SetExporterHealth sets the health gauge to 1 or 0.
-func SetExporterHealth(healthy bool) {
-	if exporterHealthGauge == nil {
-		return
-	}
-
-	if healthy {
-		exporterHealthGauge.Set(1)
-	} else {
-		exporterHealthGauge.Set(0)
-	}
 }
