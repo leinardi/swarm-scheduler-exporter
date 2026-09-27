@@ -544,13 +544,14 @@ func TestPoll_ThirdConsecutiveRejectionOmitsAndFails(t *testing.T) {
 
 // ---- Completeness ----
 
-// TestPoll_MoreServicesThanOneTaskFilter runs a whole poll over one service more than a single
-// TaskList filter holds: every service must be counted and published, and the poll must count
-// as a success only then.
-func TestPoll_MoreServicesThanOneTaskFilter(t *testing.T) {
+// TestPoll_ManyServicesOneTaskList runs a whole poll over more services than a proxy's buffer could
+// carry as a task filter: one unfiltered TaskList call must cover them all, every service must be
+// counted and published, and the poll must count as a success only then.
+func TestPoll_ManyServicesOneTaskList(t *testing.T) {
 	resetHealthState(t)
 
-	serviceCount := maxServicesInTaskFilter + 1
+	const serviceCount = 10001
+
 	services := make([]swarm.Service, 0, serviceCount)
 	tasks := make([]swarm.Task, 0, serviceCount)
 
@@ -576,7 +577,8 @@ func TestPoll_MoreServicesThanOneTaskFilter(t *testing.T) {
 	filterSizes := slices.Clone(setup.docker.taskFilterSizes)
 	setup.docker.mu.Unlock()
 
-	if want := []int{maxServicesInTaskFilter, 1}; !slices.Equal(filterSizes, want) {
+	// One call, filtering on no service.
+	if want := []int{0}; !slices.Equal(filterSizes, want) {
 		t.Errorf("task filter sizes = %v, want %v", filterSizes, want)
 	}
 

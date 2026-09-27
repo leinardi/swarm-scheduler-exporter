@@ -70,7 +70,7 @@ type pollSnapshot struct {
 	epoch          uint64
 }
 
-// serviceIDs returns the snapshot's service IDs, sorted so the task filter is stable.
+// serviceIDs returns the snapshot's service IDs, sorted so iterating them is deterministic.
 func (snapshot *pollSnapshot) serviceIDs() []string {
 	return slices.Sorted(maps.Keys(snapshot.services))
 }

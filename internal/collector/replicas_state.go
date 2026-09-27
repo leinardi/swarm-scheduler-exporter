@@ -38,7 +38,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"sync"
 	"time"
 
@@ -50,14 +49,8 @@ import (
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
 )
 
-const (
-	// Capacity hint for the per-service state map.
-	defaultStatesCapacity = 16
-
-	// maxServicesInTaskFilter bounds the service IDs of one TaskList filter, so a large cluster
-	// never sends one huge query. A poll with more services lists their tasks in several calls.
-	maxServicesInTaskFilter = 10000
-)
+// Capacity hint for the per-service state map.
+const defaultStatesCapacity = 16
 
 // knownTaskStates enumerates all Swarm task states we expose.
 // We iterate this list during emission to ensure exhaustive output with zeros.
@@ -219,8 +212,8 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 	}
 }
 
-// pollReplicasState lists the tasks of the services in snapshot and aggregates them by state per
-// service, counting only the current task per (service, slot) for replicated services and
+// pollReplicasState lists the cluster's tasks (listAllTasks) and aggregates those of the services
+// in snapshot by state per service, counting only the current task per (service, slot) for replicated services and
 // replicated jobs and per (service, nodeID) for global services and global jobs, as chosen by
 // preferredTask. Job tasks from an older job iteration are skipped. Everything but the task list
 // comes from snapshot, never from the live caches, so the counts and the metadata they are judged
@@ -233,13 +226,13 @@ func pollReplicasState(
 ) (serviceCounter, error) {
 	replicasByService := make(serviceCounter)
 
-	// Build a service-scoped filter to avoid pulling tasks from unrelated or removed services.
+	// An empty snapshot has nothing to count: no task list at all.
 	serviceIDs := snapshot.serviceIDs()
 	if len(serviceIDs) == 0 {
 		return replicasByService, nil
 	}
 
-	tasks, listErr := listServiceTasks(parentContext, dockerClient, serviceIDs)
+	tasks, listErr := listAllTasks(parentContext, dockerClient)
 	if listErr != nil {
 		return serviceCounter{}, listErr
 	}
@@ -285,33 +278,22 @@ func pollReplicasState(
 	return replicasByService, nil
 }
 
-// listServiceTasks lists the tasks of serviceIDs, in calls of at most maxServicesInTaskFilter
-// services each, every call under its own request deadline. Any failed call fails the whole
-// list: a poll that saw only some services' tasks would count the others as having none.
-func listServiceTasks(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	serviceIDs []string,
-) ([]swarm.Task, error) {
-	var tasks []swarm.Task
+// listAllTasks lists every task of the cluster in one call, under one request deadline. It sends
+// no service filter on purpose: the IDs would travel URL-encoded in the query, about 41 bytes
+// each, and a socket proxy in front of the daemon rejects that URL long before the cluster is
+// large (HAProxy's default 16 KB buffer at roughly 400 services). A filter would not save work
+// either, because a poll queries every service of its snapshot; tasks of services outside the
+// snapshot are skipped by the caller.
+func listAllTasks(parentContext context.Context, dockerClient DockerAPI) ([]swarm.Task, error) {
+	listContext, cancelList := withDockerTimeout(parentContext)
+	defer cancelList()
 
-	for chunk := range slices.Chunk(serviceIDs, maxServicesInTaskFilter) {
-		listContext, cancelList := withDockerTimeout(parentContext)
-
-		taskListResult, listErr := dockerClient.TaskList(listContext, client.TaskListOptions{
-			Filters: make(client.Filters).Add("service", chunk...),
-		})
-
-		cancelList()
-
-		if listErr != nil {
-			return nil, fmt.Errorf("task list: %w", listErr)
-		}
-
-		tasks = append(tasks, taskListResult.Items...)
+	taskListResult, listErr := dockerClient.TaskList(listContext, client.TaskListOptions{})
+	if listErr != nil {
+		return nil, fmt.Errorf("task list: %w", listErr)
 	}
 
-	return tasks, nil
+	return taskListResult.Items, nil
 }
 
 // dedupeKeyForTask returns the dedupe key task is counted under, and false when task is not

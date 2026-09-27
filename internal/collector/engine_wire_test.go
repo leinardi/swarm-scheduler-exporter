@@ -1144,9 +1144,9 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		},
 	)
 
-	// Phase 2: task poll against the reconciler's polling snapshot. One service-scoped task list
-	// and nothing else: the task of svc-gone, a service the snapshot does not hold, is skipped
-	// without an inspect.
+	// Phase 2: task poll against the reconciler's polling snapshot. One unfiltered task list and
+	// nothing else: the task of svc-gone, a service the snapshot does not hold, is skipped without
+	// an inspect.
 	recorder.reset()
 
 	snapshot := reconciler.buildPollSnapshot()
@@ -1166,7 +1166,7 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		"pollReplicasState",
 		normalizedRequests(recorder.phaseRequests()),
 		[]string{
-			"GET /tasks?filters={service:[svc-agent,svc-api,svc-cron,svc-db]}",
+			"GET /tasks",
 		},
 	)
 
@@ -1344,7 +1344,14 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	assertWireProperties(t, recorder.allRequests())
 }
 
-func TestEngineWire_TaskFilterCap(t *testing.T) {
+// maxTaskListRequestURI bounds the request URI of the poll's task list. Socket proxies such as
+// HAProxy reject a request line past their buffer (16 KB by default); 8 KB leaves room for the
+// headers that share it.
+const maxTaskListRequestURI = 8 << 10
+
+// TestEngineWire_TaskListHasNoFilter polls a cache far larger than a proxy's buffer could carry as
+// a service filter: the poll must send one GET /tasks, with no filter and a short request URI.
+func TestEngineWire_TaskListHasNoFilter(t *testing.T) {
 	resetCollectorState(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), engineWireTestTimeout)
@@ -1356,7 +1363,9 @@ func TestEngineWire_TaskFilterCap(t *testing.T) {
 		map[string][]byte{"/tasks": []byte("[]")},
 	)
 
-	for index := range maxServicesInTaskFilter + 1 {
+	const serviceCount = 10001
+
+	for index := range serviceCount {
 		setServiceMetadata(fmt.Sprintf("svc-%05d", index), &serviceMetadata{
 			serviceMode:  serviceModeReplicated,
 			customLabels: map[string]string{},
@@ -1367,39 +1376,31 @@ func TestEngineWire_TaskFilterCap(t *testing.T) {
 
 	_, pollErr := pollReplicasState(ctx, dockerClient, cacheSnapshot())
 	if pollErr != nil {
-		t.Fatalf("PollReplicasState: %v", pollErr)
+		t.Fatalf("pollReplicasState: %v", pollErr)
 	}
 
-	// One service past the cap: two calls, the first at the cap, together covering every
-	// service exactly once.
+	// Compared by path and query rather than by normalized request: a filter of 10001 IDs would
+	// make the failure message unreadable.
 	requests := engine.recorder.phaseRequests()
-	if len(requests) != 2 || requests[0].path != "/tasks" || requests[1].path != "/tasks" {
-		t.Fatalf("requests = %v, want two GET /tasks", normalizedRequests(requests))
+	if len(requests) != 1 || requests[0].method != http.MethodGet || requests[0].path != "/tasks" {
+		t.Fatalf("%d requests, want exactly one GET /tasks", len(requests))
 	}
 
-	queried := make(map[string]int)
-
-	for index := range requests {
-		services := decodeFilters(t, requests[index].query.Get("filters"))["service"]
-		if len(services) > maxServicesInTaskFilter {
-			t.Errorf(
-				"task filter %d carries %d services, over the cap of %d",
-				index,
-				len(services),
-				maxServicesInTaskFilter,
-			)
-		}
-
-		for _, serviceID := range services {
-			queried[serviceID]++
-		}
+	if requests[0].query.Has("filters") {
+		t.Errorf("GET /tasks carries a filters query, want none")
 	}
 
-	for index := range maxServicesInTaskFilter + 1 {
-		serviceID := fmt.Sprintf("svc-%05d", index)
-		if queried[serviceID] != 1 {
-			t.Errorf("%s queried %d times, want once", serviceID, queried[serviceID])
-		}
+	requestURI := requests[0].rawPath
+	if requests[0].rawQuery != "" {
+		requestURI += "?" + requests[0].rawQuery
+	}
+
+	if len(requestURI) >= maxTaskListRequestURI {
+		t.Errorf(
+			"task list request URI is %d bytes, want under %d",
+			len(requestURI),
+			maxTaskListRequestURI,
+		)
 	}
 
 	assertWireProperties(t, engine.recorder.allRequests())
