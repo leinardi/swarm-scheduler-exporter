@@ -30,20 +30,29 @@ All metrics live under the `swarm_` namespace.
 
 ### Service-level
 
-`service_mode` is `replicated`, `global`, `replicated-job` or `global-job`, as in the `MODE` column of `docker service ls`.
+Every service-level metric, including the update/rollback metrics below, carries the same service labels:
 
-- `swarm_service_desired_replicas{stack,service,service_mode,...custom}`
+- `stack` — the stack namespace (`com.docker.stack.namespace`), empty for a service not deployed as part of a stack
+- `service` — the service name without the `<stack>_` prefix
+- `service_mode` — `replicated`, `global`, `replicated-job` or `global-job`, as in the `MODE` column of `docker service ls`
+- `display_name` — `stack service`, or just the stack (or service) name when the two are equal or the stack is empty
+- one label per `-label` flag (see [Custom label guardrails](#custom-label-guardrails)), with the value of that service label, empty
+  when the service does not set it
+
+`...custom` below stands for those custom labels.
+
+- `swarm_service_desired_replicas{stack,service,service_mode,display_name,...custom}`
   Desired replicas (**replicated**: configured replicas; **global**: number of eligible nodes, e.g. `6` on a healthy 6-node cluster with
   no constraints; **replicated-job**: the job's total completions; **global-job**: number of eligible nodes). A node is eligible when it is `ready` + `active` and meets the service's placement constraints and platforms.
   Placement-constraint evaluation follows Swarm: values are case-insensitive, a missing label compares as empty, and `node.ip`
   supports an IP or CIDR.
 
-- `swarm_task_replicas_state{stack,service,service_mode,state,...custom}`
+- `swarm_task_replicas_state{stack,service,service_mode,display_name,state,...custom}`
   Task count by state, counting the **current task per slot** for replicated services and replicated jobs or **per node** for global
   services and global jobs (always emits zeros for all known states per current service). Jobs count only the tasks of their **current
   iteration**: tasks left behind by an earlier run of the job are skipped.
 
-- `swarm_service_running_replicas{stack,service,service_mode,...custom}`
+- `swarm_service_running_replicas{stack,service,service_mode,display_name,...custom}`
   Number of **currently running** tasks per service (current task per slot or node, same snapshot as `replicas_state`).
   A service with no tasks at all (e.g. one never scheduled anywhere) still gets `0` here and in `replicas_state`, plus an `at_desired`
   series, so an alert on `at_desired == 0` also covers a service whose tasks were never created.
@@ -52,14 +61,14 @@ All metrics live under the `swarm_` namespace.
 > A retired task still reported as running, for example on a down node, is not counted. This is why `running_replicas` can differ from
 > the `REPLICAS` column of `docker service ls` during node outages and updates.
 
-- `swarm_service_at_desired{stack,service,service_mode,...custom}`
+- `swarm_service_at_desired{stack,service,service_mode,display_name,...custom}`
   `1` if `running_replicas == desired_replicas`, else `0`. Useful for dead-simple SLOs and alerting.
   **Jobs** are at desired once they have **finished**: every task of the current iteration that Swarm still wants is `complete`, and
   there are at least `desired_replicas` of them for a replicated job. For a global job, every node that is eligible **now** must have a
   completed task of the current iteration, so a node that becomes eligible after the job ran keeps it at `0` until its own task
   completes. While a job is still running, `at_desired` is `0`.
 
-- `swarm_service_schedulable_replicas{stack,service,service_mode,...custom}`
+- `swarm_service_schedulable_replicas{stack,service,service_mode,display_name,...custom}`
   Number of replicas that can currently be scheduled given node availability and placement constraints.
   **Replicated**: `min(configured_replicas, eligible_nodes)` — drops to `0` when the only eligible node for a constrained service is offline.
   **Global**: equal to `desired_replicas` (eligible-node count).
@@ -82,11 +91,11 @@ All metrics live under the `swarm_` namespace.
 
 ### Service update/rollback (info-style)
 
-- `swarm_service_update_state_info{stack,service,service_mode,state}` = `1` for the *current* state, else `0`.
+- `swarm_service_update_state_info{stack,service,service_mode,display_name,...custom,state}` = `1` for the *current* state, else `0`.
   States: `updating`, `completed`, `paused`, `rollback_started`, `rollback_completed`.
 
-- `swarm_service_update_started_timestamp_seconds{...}`
-- `swarm_service_update_completed_timestamp_seconds{...}`
+- `swarm_service_update_started_timestamp_seconds{stack,service,service_mode,display_name,...custom}`
+- `swarm_service_update_completed_timestamp_seconds{stack,service,service_mode,display_name,...custom}`
 
 ### Cluster / node visibility
 
@@ -119,14 +128,19 @@ the exporter can expose **container state** metrics when started with `-containe
       `created`, `restarting`, `running`, `removing`, `paused`, `exited`, `dead`, `healthy`, `unhealthy`, `health_starting`
     - `exit_code` — string exit code (only when `state="exited"`, otherwise empty)
 
-> ℹ️ The exporter inspects only a **bounded subset** of containers per poll:
-> running containers with healthchecks (for health state) and exited containers (for exit code).
+> ℹ️ The container list does not say which containers have a healthcheck, so the exporter inspects **every running container** (to
+> read its health state, if any) and **every exited container** (to read its exit code). Inspects are capped at **300 per poll**; a
+> container past the cap keeps its listed state and an empty `exit_code`.
 > Swarm task containers are skipped unless `-containers-include-swarm` is set.
 
 ## ✅ Health
 
-- HTTP: `/healthz` responds `200` when the exporter is healthy.
-- Metric: `swarm_exporter_health` mirrors health for scraping/alerting.
+The exporter is healthy once a task poll has succeeded and the latest successful poll is no older than
+`max(3 × -poll-delay, 30s)` (30s with the default 10s poll delay).
+
+- HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason (for example
+  `no successful poll yet` or `last poll too old`) when not.
+- Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy.
 
 ## 📋 Requirements
 
@@ -259,7 +273,9 @@ is available at:
 - Names are validated & **sanitized** to Prometheus label rules
   (e.g., `app.kubernetes.io/name` → `app_kubernetes_io_name`).
 - Duplicate/colliding sanitized names are rejected at startup.
-- Max number of custom label keys is bounded (sane default).
+- At most **8** custom label keys; more are rejected at startup.
+- A name that sanitizes to a label the exporter already uses (`stack`, `service`, `service_mode`, `display_name`, `state`) is
+  rejected at startup.
 - Suspicious **high-cardinality values** log a one-time warning.
 
 ## 🔔 Example Alerts
@@ -365,7 +381,7 @@ Prometheus Alert rule:
 ## 🧪 Quick checks
 
 - **Metrics**: `curl http://<host>:8888/metrics`
-- **Health**: `curl -s -o /dev/null -w "%{http_code}\n" http://<host>:8888/healthz` (200 healthy)
+- **Health**: `curl -s -o /dev/null -w "%{http_code}\n" http://<host>:8888/healthz` (`200` healthy, `503` unhealthy)
 
 ## 🔍 Example Prometheus scrape config
 
@@ -390,7 +406,7 @@ scrape_configs:
 
 - **Data races**: guarded metadata cache; removed global `nodeCount`; added worker pool; no per-event goroutines.
 - **Event resiliency**: reconnect with capped backoff; bounded workers; fixed pointer-to-loop-var; per-worker panic recovery.
-- **Series lifecycle**: `replicas_state` now `Reset()`s each publish; exhaustive zero emission per current service; delete series on service remove.
+- **Series lifecycle**: `replicas_state` is rebuilt and published as one snapshot per poll, so a scrape never sees it empty or partial; exhaustive zero emission per current service; delete series on service remove.
 - **Global desired replicas accuracy**: evaluate **eligible nodes** (status/availability/constraints/platforms), not total nodes.
 - **Label sanitation & validation**: full Prometheus regex, collision checks, max label keys, high-cardinality warning, raw→sanitized mapping.
 - **Operability**: graceful shutdown; `/healthz`; health/build/exporter metrics; quieter default logs; validated `-poll-delay`.
