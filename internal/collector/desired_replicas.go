@@ -34,6 +34,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -238,12 +239,23 @@ func ListenSwarmEvents(
 		// We will reconnect → count it.
 		IncEventReconnect()
 
-		// Log and backoff before reconnecting.
-		logger.L().Warn("event stream ended; will reconnect",
+		// Log and backoff before reconnecting. A stream the server or a proxy closed cleanly (io.EOF)
+		// is routine: HAProxy, in front of the daemon in a socket proxy, closes an idle stream after
+		// its client timeout, every 10 minutes on a quiet cluster. Anything else is worth a warning.
+		//
+		// The reconnect still resyncs either way (followEventStream): a clean close looks the same
+		// whether a proxy timed out or the daemon restarted, only the restart loses event history,
+		// and the resync is just two list calls.
+		reconnectFields := []any{
 			"err", runErr,
 			"backoff", backoffDelay,
 			"next_since", reconnectSince.Format(time.RFC3339Nano),
-		)
+		}
+		if errors.Is(runErr, io.EOF) {
+			logger.L().Info("event stream closed by the server; reconnecting", reconnectFields...)
+		} else {
+			logger.L().Warn("event stream ended; will reconnect", reconnectFields...)
+		}
 
 		// Wait for backoff or context cancellation.
 		waitErr := waitBackoff(parentContext, backoffDelay)

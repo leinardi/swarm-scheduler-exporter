@@ -39,10 +39,15 @@ const (
 
 	labelContainer   = "container"
 	labelDisplayName = "display_name"
+	labelResult      = "result"
 	labelService     = "service"
 	labelServiceMode = "service_mode"
 	labelStack       = "stack"
 	labelState       = "state"
+
+	// Values of labelResult on swarm_exporter_resyncs_total.
+	resyncResultSuccess = "success"
+	resyncResultFailure = "failure"
 
 	// Service modes, spelled as in the MODE column of "docker service ls".
 	serviceModeReplicated    = "replicated"

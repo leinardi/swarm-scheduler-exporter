@@ -27,6 +27,7 @@ package labels
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // resetWarnOnce clears the warnOnce sync.Map so high-cardinality tests are independent.
@@ -51,8 +52,16 @@ func TestSanitizeName(t *testing.T) {
 		{"foo bar", "foo_bar"},
 		{"123foo", "_123foo"},
 		{"_leading", "_leading"},
-		{"Ünïcödé", "Ünïcödé"},
+		{"Ünïcödé", "_n_c_d_"},
 		{"__reserved", "__reserved"},
+		// Non-ASCII letters are not valid in a label name: each rune becomes '_'.
+		{"équipe", "_quipe"},
+		{"tëam", "t_am"},
+		{"команда", "_______"},
+		{"\u56e2\u961f", "__"}, // 团队
+		{"9\u5718", "_9_"},     // 9團
+		// An invalid byte is a rune too.
+		{"a\xffb", "a_b"},
 	}
 	for _, tc := range cases {
 		got := sanitizeName(tc.input)
@@ -125,6 +134,43 @@ func TestValidateAndSanitizeLabelNames(t *testing.T) {
 			t.Fatal("expected error for too-long name")
 		}
 	})
+	t.Run("non-ASCII letter sanitized and accepted", func(t *testing.T) {
+		out, err := ValidateAndSanitizeLabelNames([]string{"équipe"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(out) != 1 || out[0] != "_quipe" {
+			t.Errorf("unexpected output: %v", out)
+		}
+	})
+	t.Run("leading non-ASCII runs hit the reserved prefix", func(t *testing.T) {
+		// Two or more non-ASCII characters first sanitize to "__...", which is reserved.
+		for _, name := range []string{"команда", "ÜÖteam"} {
+			_, err := ValidateAndSanitizeLabelNames([]string{name})
+			if err == nil || !strings.Contains(err.Error(), "reserved prefix") {
+				t.Errorf(
+					"ValidateAndSanitizeLabelNames(%q): err = %v, want the reserved prefix error",
+					name,
+					err,
+				)
+			}
+		}
+	})
+	t.Run("non-ASCII collision errors", func(t *testing.T) {
+		// Both sanitize to the same name. Before names were ASCII-only, "tëam" passed through
+		// unchanged, so there was no collision to report.
+		for _, name := range []string{"tëam", "t_am"} {
+			if got := sanitizeName(name); got != "t_am" {
+				t.Fatalf("sanitizeName(%q) = %q, want %q", name, got, "t_am")
+			}
+		}
+
+		_, err := ValidateAndSanitizeLabelNames([]string{"tëam", "t_am"})
+		if err == nil || !strings.Contains(err.Error(), "label name collides after sanitization") {
+			t.Fatalf("err = %v, want a collision after sanitization", err)
+		}
+	})
 	t.Run("post-sanitize collision errors", func(t *testing.T) {
 		_, err := ValidateAndSanitizeLabelNames([]string{"foo.bar", "foo-bar"})
 		if err == nil {
@@ -182,6 +228,14 @@ func TestIsHexString(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("isHexString(%q) = %v, want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestTruncate_RuneBoundary(t *testing.T) {
+	// Byte 2 is inside "é": a byte cut would return "a\xc3".
+	got := truncate("aéz", 2)
+	if got != "a" || !utf8.ValidString(got) {
+		t.Errorf("truncate(%q, 2) = %q, want %q", "aéz", got, "a")
 	}
 }
 

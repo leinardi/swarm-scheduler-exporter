@@ -31,11 +31,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -56,6 +59,12 @@ const (
 	// Operability constants.
 	minPollDelay        = 1 * time.Second
 	httpShutdownTimeout = 10 * time.Second
+
+	// healthcheckTimeout bounds a whole -healthcheck probe: connecting, the request and reading
+	// the reason. It stays under the image HEALTHCHECK's --timeout.
+	healthcheckTimeout = 3 * time.Second
+	// healthcheckReasonLimit bounds how much of an unhealthy answer's body the probe reads.
+	healthcheckReasonLimit = 4 << 10
 )
 
 // stringSlice implements flag.Value to support repeated -label flags
@@ -111,6 +120,12 @@ var (
 	logTime  = flag.Bool("log-time", false, "Include timestamp in logs")
 	help     = flag.Bool("help", false, "Display help message")
 
+	healthcheck = flag.Bool(
+		"healthcheck",
+		false,
+		"Probe this exporter's /healthz on -listen-addr and exit 0 if healthy, 1 otherwise",
+	)
+
 	customLabels stringSlice
 )
 
@@ -142,6 +157,12 @@ func run() int {
 		usage()
 
 		return 0
+	}
+
+	// A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no logger, no
+	// metric and no Docker client.
+	if *healthcheck {
+		return runHealthcheck(*listenAddr, os.Stdout)
 	}
 
 	if *pollDelay < minPollDelay {
@@ -211,6 +232,104 @@ func run() int {
 }
 
 // --- helpers to reduce main() complexity ---
+
+// runHealthcheck probes the /healthz of an exporter serving on listenAddr and returns the exit
+// code: 0 when it answers exactly 200, 1 otherwise, after writing why to out. It exists because
+// the image is distroless: there is no shell or curl a HEALTHCHECK could run instead.
+func runHealthcheck(listenAddr string, out io.Writer) int {
+	healthURL, urlErr := healthcheckURL(listenAddr)
+	if urlErr != nil {
+		_, _ = fmt.Fprintf(out, "healthcheck: %v\n", urlErr)
+
+		return 1
+	}
+
+	probeContext, cancelProbe := context.WithTimeout(context.Background(), healthcheckTimeout)
+	defer cancelProbe()
+
+	request, requestErr := http.NewRequestWithContext(
+		probeContext,
+		http.MethodGet,
+		healthURL,
+		http.NoBody,
+	)
+	if requestErr != nil {
+		_, _ = fmt.Fprintf(out, "healthcheck: %v\n", requestErr)
+
+		return 1
+	}
+
+	response, doErr := newHealthcheckClient().Do(request)
+	if doErr != nil {
+		_, _ = fmt.Fprintf(out, "healthcheck: %v\n", doErr)
+
+		return 1
+	}
+
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode == http.StatusOK {
+		return 0
+	}
+
+	reason := healthcheckReason(response.Body)
+	if reason == "" {
+		_, _ = fmt.Fprintf(out, "healthcheck: %s: %s\n", healthURL, response.Status)
+	} else {
+		_, _ = fmt.Fprintf(out, "healthcheck: %s: %s: %s\n", healthURL, response.Status, reason)
+	}
+
+	return 1
+}
+
+// healthcheckURL returns the /healthz URL of an exporter serving on listenAddr. A wildcard host
+// is not an address to connect to, so it becomes the loopback of the same family; any other host
+// is kept, since the exporter listens there only.
+func healthcheckURL(listenAddr string) (string, error) {
+	host, port, splitErr := net.SplitHostPort(listenAddr)
+	if splitErr != nil {
+		return "", fmt.Errorf("parse -listen-addr: %w", splitErr)
+	}
+
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+
+	healthURL := url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, port),
+		Path:   server.HealthzPath,
+	}
+
+	return healthURL.String(), nil
+}
+
+// newHealthcheckClient returns the client of the -healthcheck probe. Its transport has no proxy:
+// Go already skips HTTP_PROXY for loopback, but a non-loopback -listen-addr must not be probed
+// through one either. A redirect is not followed: the 3xx is the final answer, and not a 200.
+func newHealthcheckClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:             nil,
+			DisableKeepAlives: true,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// healthcheckReason returns the first line of an unhealthy answer's body, trimmed, reading at most
+// healthcheckReasonLimit bytes of it. What could be read before an error is still used.
+func healthcheckReason(body io.Reader) string {
+	limited, _ := io.ReadAll(io.LimitReader(body, healthcheckReasonLimit))
+	firstLine, _, _ := strings.Cut(string(limited), "\n")
+
+	return strings.TrimSpace(firstLine)
+}
 
 // serveUntilDone serves handler on address until rootContext ends or the server fails, then
 // cancels rootContext so the workers return, and waits for them. It returns the exit code:

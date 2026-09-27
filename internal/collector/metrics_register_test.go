@@ -82,12 +82,18 @@ func TestConfigureHealthGauges_RegistersWithoutPanic(t *testing.T) {
 
 func TestConfigureExporterOpsMetrics_RegistersWithoutPanic(t *testing.T) {
 	ConfigureExporterOpsMetrics()
-	t.Cleanup(func() {
-		prometheus.Unregister(pollDurationHistogram)
-		prometheus.Unregister(pollsTotalCounter)
-		prometheus.Unregister(pollErrorsTotalCounter)
-		prometheus.Unregister(eventsReconnectsTotalCounter)
-		prometheus.Unregister(eventsDroppedTotalCounter)
-		prometheus.Unregister(pollRejectionsTotalCounter)
-	})
+	t.Cleanup(unregisterExporterOpsMetrics)
+}
+
+// unregisterExporterOpsMetrics unregisters every collector ConfigureExporterOpsMetrics registered.
+func unregisterExporterOpsMetrics() {
+	prometheus.Unregister(pollDurationHistogram)
+	prometheus.Unregister(pollsTotalCounter)
+	prometheus.Unregister(pollErrorsTotalCounter)
+	prometheus.Unregister(eventsReconnectsTotalCounter)
+	prometheus.Unregister(eventsDroppedTotalCounter)
+	prometheus.Unregister(pollRejectionsTotalCounter)
+	prometheus.Unregister(resyncsTotalCounter)
+	prometheus.Unregister(lastPollSuccessTimestampGauge)
+	prometheus.Unregister(lastResyncSuccessTimestampGauge)
 }

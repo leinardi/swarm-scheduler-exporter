@@ -63,6 +63,9 @@ const (
 	// eventsSinceMargin is subtracted from every event-stream anchor. Replaying an event only
 	// marks a key dirty again, which is idempotent; missing one is not.
 	eventsSinceMargin = 500 * time.Millisecond
+
+	// resyncStep names the resync in recoverStep, which counts a panic in it as a failed resync.
+	resyncStep = "resync"
 )
 
 // serviceRetryDelays are the waits before retrying a service whose inspect failed with an error
@@ -229,7 +232,7 @@ func (r *Reconciler) cycle(ctx context.Context) {
 	}
 
 	if r.resyncDue(now) {
-		r.recoverStep("resync", func() { r.resync(ctx) })
+		r.recoverStep(resyncStep, func() { r.resync(ctx) })
 	}
 
 	for _, key := range r.takeDueKeys(now) {
@@ -255,6 +258,12 @@ func (r *Reconciler) recoverStep(step string, run func()) {
 			"panic", recovered,
 			"stack", string(debug.Stack()),
 		)
+
+		// A resync cut short by a panic neither completed nor went through its failure path.
+		if step == resyncStep {
+			IncResync(resyncResultFailure)
+		}
+
 		r.requestResyncAfterPanic(time.Now())
 	}()
 
@@ -679,9 +688,12 @@ func (r *Reconciler) resync(ctx context.Context) {
 
 	services, nodes, listErr := listServicesAndNodes(ctx, r.dockerClient)
 	if listErr != nil {
+		// A canceled resync is a shutdown, not a failure.
 		if ctx.Err() != nil {
 			return
 		}
+
+		IncResync(resyncResultFailure)
 
 		r.mu.Lock()
 		logger.L().Warn("resync failed; will retry", "err", listErr, "backoff", r.resyncBackoff)
@@ -711,8 +723,12 @@ func (r *Reconciler) resync(ctx context.Context) {
 	r.completeResync(target, passStart)
 }
 
-// completeResync records that every request up to target is served.
+// completeResync records that every request up to target is served, and counts the resync as a
+// success at the time it completed.
 func (r *Reconciler) completeResync(target uint64, passStart time.Time) {
+	IncResync(resyncResultSuccess)
+	lastResyncSuccessUnixNano.Store(time.Now().UnixNano())
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

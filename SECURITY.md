@@ -30,8 +30,10 @@ caught it.
 - **Read-only by code, not by mount.** The exporter only issues read requests to the Docker API (list, inspect and events), and
   the code enforces that: every Docker call goes through an interface that exposes nothing else. Mounting the socket with `:ro`
   does not make the API read-only, and access to the Docker socket is equivalent to root on the host. To enforce read-only access
-  at runtime, put a socket proxy in front of the Docker API that allows only `GET` on the endpoints the exporter uses. See
-  [Security & Permissions](README.md#-security--permissions).
+  at runtime, put a socket proxy in front of the Docker API: the tested example in
+  [Behind a socket proxy](README.md#-behind-a-socket-proxy-recommended) makes the API read-only, not least-privilege: its
+  sections match by path prefix, so the `SERVICES` and `TASKS` the exporter needs also allow service and task logs, and
+  `CONTAINERS=1` allows every `GET` under `/containers`. See also [Security & Permissions](README.md#-security--permissions).
 - **Unauthenticated endpoints.** `/metrics` and `/healthz` have no authentication and are meant for an internal scrape network.
   Neither takes input that turns into work: no request parameter causes a Docker call.
 - **Supply chain.** Every GitHub Action is pinned to a commit SHA and every image the workflows and the Dockerfile use to an index
@@ -39,7 +41,7 @@ caught it.
   release is scanned again every week, together with the Go dependencies. The release process is described in
   [docs/release.md](docs/release.md).
 
-## Verifying a release image
+## Verifying a release
 
 Release images carry a build provenance attestation and a keyless cosign signature from the release workflow. Verify an image by
 digest before you trust it:
@@ -58,3 +60,10 @@ cosign verify "$IMAGE@$DIGEST" \
 
 The signature is stored as a Sigstore bundle in an OCI 1.1 referring artifact, so `cosign verify` needs cosign v3, or v2.6 or later
 with `--new-bundle-format`.
+
+The release binaries carry a build provenance attestation from the same workflow. Verify a downloaded binary before you run it:
+
+```bash
+gh attestation verify swarm-scheduler-exporter-linux-amd64 --repo leinardi/swarm-scheduler-exporter \
+  --signer-workflow leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml --source-ref refs/heads/master
+```

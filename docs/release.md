@@ -8,7 +8,10 @@ is why it is shaped that way.
 
 - Two static binaries, `swarm-scheduler-exporter-linux-amd64` and `swarm-scheduler-exporter-linux-arm64`, built with `CGO_ENABLED=0`,
   `-trimpath`, `-buildvcs=false` and the version, commit and commit date compiled in, plus `checksums.txt` over both. All three
-  are attached to the GitHub release.
+  are attached to the GitHub release, and each binary has a
+  [build provenance attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations) from the release
+  workflow (verify one with `gh attestation verify <binary> --repo leinardi/swarm-scheduler-exporter --signer-workflow
+  leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml`).
 - A multi-arch (`linux/amd64`, `linux/arm64`) image at `ghcr.io/leinardi/swarm-scheduler-exporter:<version>`, with an SBOM and
   `mode=max` BuildKit provenance in its index, a [build provenance attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations)
   and a keyless [cosign](https://docs.sigstore.dev/) signature made with the release workflow's own OIDC identity. Both platform
@@ -130,7 +133,8 @@ A **fresh** release then runs these steps. They are numbered because the other m
 9. **Tag the image** `:<version>`, after checking once more that the tag is absent: a version tag that appeared since is never
    overwritten.
 
-The release assets and the latest pointers follow, as described under [Recovery guarantees](#recovery-guarantees).
+The binary attestations, the release assets and the latest pointers follow, in every mode, as described under
+[Recovery guarantees](#recovery-guarantees).
 
 Everything stamped into an artifact comes from the commit rather than from the clock: the version, a fixed seven-character commit
 prefix, the commit date as the build date, and the commit time as BuildKit's `SOURCE_DATE_EPOCH`. The binaries are built with
@@ -145,8 +149,9 @@ Dependabot moves the pins forward through reviewed pull requests.
 `dry_run: true` rehearses a fresh release: it resolves the version and decides the mode (so it stops, like a real run would, when
 the version is held by an image or needs a human), then runs fresh steps 1 to 5, and exercises step 7 by copying the index to a
 **second job-local registry** instead of GHCR. The copy is checked the same way: the copied index must hash to the scanned digest,
-and must still carry one attestation manifest per platform. It pushes no tag and publishes no image and no release. A dry run of a
-version whose image already exists stops at step 5.
+and must still carry one attestation manifest per platform. It also runs the binary attestation check, as a rehearsal, but
+attests nothing. It pushes no tag and publishes no image and no release. A dry run of a version whose image already exists stops
+at step 5.
 
 The job summary shows the version, the previous tag, whether the version was explicit, the mode a real run would take, the index
 digest, the scanned platform digests and the artifact list; `dist/` is uploaded as the workflow artifact
@@ -207,6 +212,13 @@ this run's**, never because something with the right name exists.
   `checksums.txt`) is inventoried one by one: a present asset is downloaded and compared by sha256 with this run's build, and with
   the published `checksums.txt` when that is present, and a mismatch fails the run; a missing asset is uploaded, never with
   `--clobber`. An asset that is not expected fails the run. A partial upload is therefore finished, never overwritten.
+- **The binary attestations.** The binaries are rebuilt byte-identically on every run, so an attestation an earlier run made for
+  one is reused, not duplicated. Before attesting, `.github/scripts/binary-attestation-status.sh` looks up each binary's sha256:
+  one with no attestation is attested; one with an attestation must pass
+  `gh attestation verify <binary> --repo leinardi/swarm-scheduler-exporter --signer-workflow leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml --source-ref refs/heads/master --source-digest <commit>`
+  and is then left alone. Any other answer (an attestation that fails that check, an HTTP error other than the "no attestations"
+  404, a network error, a body that does not parse) stops the run before the release is drafted, for a human. The script's tests
+  run in CI (`release-scripts`).
 - **The latest pointers.** `:latest`, `:<major>` and the GitHub "Latest" marker move only if the version is still the highest when
   that pointer is moved: the highest remote tag is read again immediately before retagging the image, and again immediately before
   the release is published out of draft.
@@ -312,7 +324,8 @@ every job below has run at least once on a pull request, keeping every existing 
       { "context": "integration", "integration_id": 15368 },
       { "context": "conventional-commits", "integration_id": 15368 },
       { "context": "pre-commit-hooks", "integration_id": 15368 },
-      { "context": "actionlint", "integration_id": 15368 }
+      { "context": "actionlint", "integration_id": 15368 },
+      { "context": "release-scripts", "integration_id": 15368 }
     ]
   }
 }

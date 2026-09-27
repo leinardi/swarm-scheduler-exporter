@@ -12,6 +12,14 @@ services:
     # Minimal, explicit args. Add any other flags here.
     command: [ "-poll-delay", "10s" ]
 
+    # The image's HEALTHCHECK probes /healthz on the default -listen-addr (0.0.0.0:8888). If you
+    # pass another -listen-addr in command, override the check with the same address:
+    # healthcheck:
+    #   test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "-healthcheck", "-listen-addr", "0.0.0.0:9100" ]
+    # Or turn it off:
+    # healthcheck:
+    #   disable: true
+
     restart: unless-stopped
 
     deploy:

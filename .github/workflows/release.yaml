@@ -788,6 +788,39 @@ jobs:
           fi
           docker buildx imagetools create -t "$IMAGE_REPO:$VERSION" "$IMAGE_REPO@$DIGEST"
 
+      # The binaries are rebuilt byte-identically on every run, a recovery included, so a
+      # binary an earlier run of this commit attested keeps that attestation: only the ones
+      # still missing one are attested, and a partial recovery never duplicates one. The
+      # script decides per binary and fails closed: an answer it cannot classify, or an
+      # attestation this workflow did not produce, stops the run before anything is drafted.
+      # A dry run runs it too, as a rehearsal; only the attestation itself is skipped.
+      - name: Check which binaries need an attestation
+        id: binattest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          MISSING=$(.github/scripts/binary-attestation-status.sh \
+            leinardi/swarm-scheduler-exporter \
+            "$SIGNER_WORKFLOW" \
+            "$GITHUB_SHA" \
+            "dist/$APP_NAME-linux-amd64" \
+            "dist/$APP_NAME-linux-arm64")
+          echo "Binaries without an attestation: ${MISSING:-none}"
+          {
+            echo "missing<<EOF"
+            if [ -n "$MISSING" ]; then
+              echo "$MISSING"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest the release binaries
+        if: ${{ !inputs.dry_run && steps.binattest.outputs.missing != '' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.binattest.outputs.missing }}
+
       # Every expected asset is rebuilt locally above, reproducibly (-trimpath,
       # the Go version from go.mod, a commit-derived date), so a published one can
       # be checked byte for byte. Present and matching: kept. Present and

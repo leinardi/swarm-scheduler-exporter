@@ -14,7 +14,8 @@ accurate eligibility for `global` services), **live task state** per service (cu
 - Watches Swarm **service** and **node** events to keep metrics fresh: events only mark what changed, and a single reconciler
   inspects it, backed by a full resync (service and node list) at startup, every 5 minutes, whenever it had to drop changes, and
   every time the event stream reconnects. A reconnect resumes the stream from just before the last event seen; the resync covers
-  what the daemon no longer replays, such as the events of a restart.
+  what the daemon no longer replays, such as the events of a restart. A socket proxy closing an idle stream (HAProxy does so after
+  its 10-minute client timeout on a quiet cluster) is expected: that clean close is logged at info, any other stream end at warn.
 - Periodically polls **tasks** and aggregates **current** states per service (current task per slot for replicated services or per node for
   global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only: status/availability/constraints/platforms).
@@ -123,6 +124,30 @@ Every service-level metric, including the update/rollback metrics below, carries
 - `swarm_exporter_events_dropped_total` — Swarm events ignored because they carried no actor ID.
 - `swarm_exporter_poll_rejections_total` — per-service poll counts not published because the service changed while its tasks were
   listed (see **Consistency** above).
+- `swarm_exporter_resyncs_total{result}` — resyncs (service and node list) by `result`: `success` or `failure`. Both series exist
+  at `0` from startup, so `increase()` and "never failed" rules work before the first resync. A resync interrupted by shutdown is
+  not counted.
+- `swarm_exporter_last_poll_success_timestamp_seconds` — Unix time of the latest successfully published task poll; `0` until the
+  first one.
+- `swarm_exporter_last_resync_success_timestamp_seconds` — Unix time of the latest completed resync; `0` until the first one.
+
+For example:
+
+```yaml
+- alert: SwarmExporterResyncsFailing
+  expr: increase(swarm_exporter_resyncs_total{result="failure"}[30m]) > 3
+  labels:
+    severity: warning
+  annotations:
+    summary: "Swarm exporter resyncs keep failing"
+
+- alert: SwarmExporterPollsStale
+  expr: time() - swarm_exporter_last_poll_success_timestamp_seconds > 120
+  labels:
+    severity: warning
+  annotations:
+    summary: "Swarm exporter has not published a task poll for over 2 minutes"
+```
 
 ### Container-level (opt-in)
 
@@ -157,6 +182,24 @@ stays outstanding for longer than that same window, for example because listing 
 - HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason (`initial resync not completed`,
   `no successful poll yet`, `last poll too old` or `resync outstanding`) when not.
 - Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy, evaluated at every scrape.
+- Container health: the image is distroless (no shell, no curl), so it ships a `HEALTHCHECK` that runs the binary itself with
+  `-healthcheck`. That mode requests `/healthz` on `-listen-addr` (a wildcard host such as `0.0.0.0` or `::` is probed on
+  loopback), never through a proxy and without following redirects, and exits `0` on a `200` and `1` otherwise, printing the
+  status and the reason. The check allows a 90s start period for the first resync, then probes every 30s; after 3 failures the
+  container is unhealthy and Swarm replaces the task, which is the intended remedy for a stuck exporter.
+
+The image's check uses the default `-listen-addr`. If you change it, override the check with the same address:
+
+```yaml
+services:
+  exporter:
+    command: [ "-listen-addr", "0.0.0.0:9100" ]
+    healthcheck:
+      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "-healthcheck", "-listen-addr", "0.0.0.0:9100" ]
+```
+
+To turn it off, set `healthcheck: disable: true` in compose or a stack file, or pass `--no-healthcheck` to `docker run` or
+`docker service create`.
 
 ## 📋 Requirements
 
@@ -179,7 +222,7 @@ stat -c %g /var/run/docker.sock
 ```
 
 Use that GID in the `--group` or `--group-add` flag so the container’s user
-(in the distroless image it’s a nonroot user, UID 65532) can connect to the socket.
+(the image sets an explicit non-root `USER 65532:65532`) can connect to the socket.
 
 If you skip this step, you’ll see errors like:
 
@@ -204,7 +247,7 @@ docker run --rm \
 
 Replace `140` with the value from `stat -c %g /var/run/docker.sock`.
 
-### 🐝 Swarm service (recommended)
+### 🐝 Swarm service (socket mount)
 
 ```bash
 docker service create \
@@ -222,6 +265,41 @@ docker service create \
 
 > ℹ️ **Why the `manager` constraint?**
 > Only manager nodes can access cluster-wide service, node, and event data required by the exporter.
+
+### 🔒 Behind a socket proxy (recommended)
+
+The exporter only reads, but whatever holds the Docker socket can do anything. Put
+[tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) in front of it: the exporter then reaches
+the Docker API over an internal overlay network, and the proxy refuses every write and every API section the allowlist leaves
+off. A ready Swarm stack is in
+[`deployments/docker/docker-compose.socket-proxy.yaml`](deployments/docker/docker-compose.socket-proxy.yaml), with the
+allowlist in [`deployments/docker/socket-proxy.env`](deployments/docker/socket-proxy.env):
+
+```bash
+cd deployments/docker
+docker stack deploy -c docker-compose.socket-proxy.yaml monitoring
+```
+
+The allowlist sets every ACL variable of the pinned proxy image explicitly (the image enables `EVENTS` and `VERSION` by default)
+and opens only `PING`, `EVENTS`, `SERVICES`, `NODES`, `TASKS` and `CONTAINERS`. `TestSocketProxy_ExampleAllowlist` runs the pinned
+image with that file against a real Swarm, and checks that the exporter works through it and that what is left off is refused.
+
+> ⚠️ **Scope:** this makes the Docker API **read-only** for the exporter, not least-privilege. The proxy matches each section by
+> path prefix, so every enabled section allows every `GET` under it, and logs, specs and container files can hold secrets:
+>
+> - `SERVICES=1` and `TASKS=1`, which the exporter always needs, also allow service and task logs (`/services/<id>/logs`,
+>   `/tasks/<id>/logs`: the containers' logs, from across the Swarm), and the service list the exporter reads carries every
+>   service spec, environment variables included.
+> - `CONTAINERS=1` allows every `GET` under `/containers`, including logs, stats, `top`, `archive` and `export`. `CONTAINERS` is
+>   needed only with `-containers`: without that flag, set it to `0`. That narrows the exposure, but log access stays.
+>
+> Exact per-endpoint rules would need a custom `haproxy.cfg`, which the example does not attempt.
+
+Two proxy behaviours to know:
+
+- HAProxy closes an idle event stream after its 10-minute client timeout. The exporter reconnects (and resyncs), and logs that
+  clean close at info, not as a warning.
+- The task poll sends no filter in its URL, so a large cluster never runs into HAProxy's request size limit.
 
 ### 🔐 Alternative: TCP/TLS (no socket mount)
 
@@ -250,7 +328,8 @@ This avoids group and permission issues, relying instead on proper TLS authentic
 
 A complete Compose setup (replicated mode, manager constraint, and environment hints)
 is available at:
-[`deployments/docker/docker-compose.yaml`](deployments/docker/docker-compose.yaml)
+[`deployments/docker/docker-compose.yaml`](deployments/docker/docker-compose.yaml). The socket-proxy stack is in
+[`deployments/docker/docker-compose.socket-proxy.yaml`](deployments/docker/docker-compose.socket-proxy.yaml).
 
 ## ⚙️ Configuration
 
@@ -261,6 +340,8 @@ is available at:
         Expose container state metrics (opt-in).
   -containers-include-swarm
         Include containers belonging to Swarm tasks.
+  -healthcheck
+        Probe this exporter's /healthz on -listen-addr and exit 0 if healthy, 1 otherwise
   -help
         Display help message
   -label value
@@ -286,9 +367,15 @@ is available at:
 
 ### Custom label guardrails
 
-- Names are validated & **sanitized** to Prometheus label rules
-  (e.g., `app.kubernetes.io/name` → `app_kubernetes_io_name`).
-- Duplicate/colliding sanitized names are rejected at startup.
+- Names are validated & **sanitized** to Prometheus label rules: ASCII `[a-zA-Z0-9_]` only, every other character (non-ASCII
+  letters included) becomes `_`, and a name that would start with a digit gets a leading `_`
+  (e.g., `app.kubernetes.io/name` → `app_kubernetes_io_name`, `équipe` → `_quipe`). Label values are kept as they are.
+  > ⚠️ Earlier versions kept non-ASCII letters in label names. If a `-label` name has one, its series label name changes
+  > (`tëam` is now `t_am`): update the queries, dashboards and alerts that use it. A name that starts with two or more non-ASCII
+  > characters (`команда`, `团队`, `ÜÖteam`) now sanitizes to a name starting with `__`, which is reserved: the exporter
+  > rejects it at startup, and the `-label` must be renamed.
+- Duplicate/colliding sanitized names are rejected at startup, and so is a sanitized name starting with `__` (reserved by
+  Prometheus).
 - At most **8** custom label keys; more are rejected at startup.
 - A name that sanitizes to a label the exporter already uses (`stack`, `service`, `service_mode`, `display_name`, `state`) is
   rejected at startup.
@@ -413,8 +500,9 @@ scrape_configs:
 - The exporter only **issues read requests** to the Docker API (list, inspect and events).
   Mounting the socket with `:ro` does **not** make the API read-only: it only stops the container from
   modifying the socket file, and any client holding the socket can still create, update or remove resources.
-  To enforce read-only access, put a socket proxy in front of the Docker API (for example a
-  docker-socket-proxy that allows only `GET` requests on the endpoints the exporter uses).
+  To enforce read-only access, put a socket proxy in front of the Docker API: see
+  [Behind a socket proxy](#-behind-a-socket-proxy-recommended) for a tested example, and its scope note (read-only, not
+  least-privilege).
 - Must run on a **manager** node in Swarm to receive cluster-wide events and inspect services.
 - Avoid exposing the exporter to untrusted networks; it exposes metrics only, but your scrape endpoint should be internal.
 

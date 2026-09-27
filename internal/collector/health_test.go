@@ -42,10 +42,12 @@ func resetHealthState(t *testing.T) {
 
 	t.Cleanup(func() {
 		lastPollSuccessUnixNano.Store(0)
+		lastResyncSuccessUnixNano.Store(0)
 		activeReconciler.Store(previous)
 	})
 
 	lastPollSuccessUnixNano.Store(0)
+	lastResyncSuccessUnixNano.Store(0)
 
 	ready := NewReconciler(&fakeDocker{})
 	ready.resyncCompleted = ready.resyncRequested
