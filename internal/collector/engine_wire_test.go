@@ -205,6 +205,7 @@ var engineWireExcludedFamilies = map[string]string{
 	"swarm_exporter_build_info":              "ldflags, not SDK data",
 	"swarm_exporter_events_reconnects_total": "asserted by the reconnect case instead",
 	"swarm_exporter_events_dropped_total":    "asserted by the reconciler unit tests instead",
+	"swarm_exporter_poll_rejections_total":   "asserted by the poll protocol unit tests instead",
 }
 
 func engineWireExpectations(t *testing.T) wireExpectations {
@@ -735,7 +736,7 @@ func restoreCollectorGlobals(t *testing.T) {
 	nodesByState := nodesByStateGauge
 	pollDuration, polls, pollErrors, reconnects := pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter,
 		eventsReconnectsTotalCounter
-	dropped := eventsDroppedTotalCounter
+	dropped, rejections := eventsDroppedTotalCounter, pollRejectionsTotalCounter
 	updateState, updateStarted, updateCompleted := serviceUpdateStateGauge, serviceUpdateStartedTimestamp,
 		serviceUpdateCompletedTimestamp
 	containersState, enabled, includeSwarm := containersStateGauge, containersEnabled, containersIncludeSwarm
@@ -750,7 +751,7 @@ func restoreCollectorGlobals(t *testing.T) {
 		nodesByStateGauge = nodesByState
 		pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter, eventsReconnectsTotalCounter = pollDuration,
 			polls, pollErrors, reconnects
-		eventsDroppedTotalCounter = dropped
+		eventsDroppedTotalCounter, pollRejectionsTotalCounter = dropped, rejections
 		serviceUpdateStateGauge, serviceUpdateStartedTimestamp, serviceUpdateCompletedTimestamp = updateState,
 			updateStarted, updateCompleted
 		containersStateGauge, containersEnabled, containersIncludeSwarm = containersState, enabled, includeSwarm
@@ -1143,27 +1144,29 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		},
 	)
 
-	// Phase 2: task poll. Sequential: one service-scoped task list, then an inspect for the task
-	// whose service is not cached; the daemon's 404 makes the poll skip it.
+	// Phase 2: task poll against the reconciler's polling snapshot. One service-scoped task list
+	// and nothing else: the task of svc-gone, a service the snapshot does not hold, is skipped
+	// without an inspect.
 	recorder.reset()
 
-	polled, pollErr := PollReplicasState(ctx, dockerClient)
+	snapshot := reconciler.buildPollSnapshot()
+
+	polled, pollErr := pollReplicasState(ctx, dockerClient, snapshot)
 	if pollErr != nil {
-		t.Fatalf("PollReplicasState: %v", pollErr)
+		t.Fatalf("pollReplicasState: %v", pollErr)
 	}
 
-	publishErr := UpdateReplicasStateGauge(polled)
-	if publishErr != nil {
-		t.Fatalf("UpdateReplicasStateGauge: %v", publishErr)
+	applyErr := reconciler.applyPollCounts(snapshot, polled)
+	if applyErr != nil {
+		t.Fatalf("applyPollCounts: %v", applyErr)
 	}
 
 	assertRequestSequence(
 		t,
-		"PollReplicasState",
+		"pollReplicasState",
 		normalizedRequests(recorder.phaseRequests()),
 		[]string{
 			"GET /tasks?filters={service:[svc-agent,svc-api,svc-cron,svc-db]}",
-			serviceInspectRequest(expectations.serviceInspectQuery, "svc-gone"),
 		},
 	)
 
@@ -1355,7 +1358,7 @@ func TestEngineWire_TaskFilterCap(t *testing.T) {
 
 	engine.recorder.reset()
 
-	_, pollErr := PollReplicasState(ctx, dockerClient)
+	_, pollErr := pollReplicasState(ctx, dockerClient, cacheSnapshot())
 	if pollErr != nil {
 		t.Fatalf("PollReplicasState: %v", pollErr)
 	}

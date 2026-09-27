@@ -169,21 +169,7 @@ func run() int {
 		return 1
 	}
 
-	// Register metrics (including health/build info)
-	collector.ConfigureDesiredReplicasGauge()
-	collector.ConfigureReplicasStateGauge()
-	collector.ConfigureHealthGauges(version, commit, date, *pollDelay)
-	collector.ConfigureNodesByStateGauge()
-	collector.ConfigureExporterOpsMetrics()
-	collector.ConfigureServiceUpdateMetrics()
-
-	// Containers (opt-in)
-	if *enableContainers {
-		collector.EnableContainersMetrics(true, *containersIncludeSwarm)
-		collector.ConfigureContainersStateGauge()
-	} else {
-		collector.EnableContainersMetrics(false, false)
-	}
+	registerMetrics(*pollDelay, *enableContainers, *containersIncludeSwarm)
 
 	// Root context canceled on SIGINT/SIGTERM
 	rootContext, cancelRoot := signal.NotifyContext(
@@ -302,6 +288,24 @@ func validateAndSetCustomLabels(rawKeys []string) error {
 	return nil
 }
 
+// registerMetrics registers every metric family on the default registerer, including health and
+// build info; the containers family only when enabled.
+func registerMetrics(pollDelay time.Duration, enableContainers, containersIncludeSwarm bool) {
+	collector.ConfigureDesiredReplicasGauge()
+	collector.ConfigureReplicasStateGauge()
+	collector.ConfigureHealthGauges(version, commit, date, pollDelay)
+	collector.ConfigureNodesByStateGauge()
+	collector.ConfigureExporterOpsMetrics()
+	collector.ConfigureServiceUpdateMetrics()
+
+	if enableContainers {
+		collector.EnableContainersMetrics(true, containersIncludeSwarm)
+		collector.ConfigureContainersStateGauge()
+	} else {
+		collector.EnableContainersMetrics(false, false)
+	}
+}
+
 // startWorkers starts the reconciler, the event listener and the poller. The event-stream anchor
 // is captured before the reconciler's first resync lists anything, so every change made while
 // that resync runs reaches the reconciler as an event. The poller waits for that first resync.
@@ -316,7 +320,7 @@ func startWorkers(
 
 	waitGroup.Go(func() { reconciler.Run(parentContext) })
 	startEventListener(parentContext, waitGroup, dockerAPI, reconciler, anchor)
-	startPoller(parentContext, waitGroup, dockerAPI, delay, reconciler.Ready())
+	startPoller(parentContext, waitGroup, dockerAPI, delay, reconciler)
 }
 
 // startEventListener starts the goroutine that follows the event stream from anchor, handing
@@ -336,15 +340,15 @@ func startEventListener(
 	})
 }
 
-// startPoller starts the goroutine that polls tasks (and containers, when enabled) every delay.
-// It waits for ready first, closed once the reconciler's first resync completed: before it the
-// metadata cache is empty, and a poll would publish services without their desired counts.
+// startPoller starts the goroutine that polls tasks (and containers, when enabled) every delay,
+// against reconciler's polling snapshots. It waits for the reconciler's first resync first:
+// before it the caches are empty, and there is nothing to poll.
 func startPoller(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
 	dockerAPI collector.DockerAPI,
 	delay time.Duration,
-	ready <-chan struct{},
+	reconciler *collector.Reconciler,
 ) {
 	waitGroup.Go(func() {
 		loggerInstance := logger.L()
@@ -354,7 +358,7 @@ func startPoller(
 			loggerInstance.Debug("polling loop: context canceled before the first resync completed")
 
 			return
-		case <-ready:
+		case <-reconciler.Ready():
 		}
 
 		loggerInstance.Debug("start polling replicas state", "every", delay)
@@ -363,7 +367,7 @@ func startPoller(
 		defer ticker.Stop()
 
 		// --- Immediate first poll (no waiting for the first tick) ---
-		pollOnce(parentContext, dockerAPI)
+		pollOnce(parentContext, dockerAPI, reconciler)
 
 		for {
 			select {
@@ -372,18 +376,22 @@ func startPoller(
 
 				return
 			case <-ticker.C:
-				pollOnce(parentContext, dockerAPI)
+				pollOnce(parentContext, dockerAPI, reconciler)
 			}
 		}
 	})
 }
 
 // pollOnce runs one poll cycle: the replicas state, then the containers when enabled.
-func pollOnce(parentContext context.Context, dockerAPI collector.DockerAPI) {
+func pollOnce(
+	parentContext context.Context,
+	dockerAPI collector.DockerAPI,
+	reconciler *collector.Reconciler,
+) {
 	loggerInstance := logger.L()
 	startTime := time.Now()
 
-	pollErr := collector.PollAndPublishReplicasState(parentContext, dockerAPI)
+	pollErr := collector.PollAndPublishReplicasState(parentContext, dockerAPI, reconciler)
 
 	collector.ObservePollDuration(time.Since(startTime))
 	collector.IncPolls()

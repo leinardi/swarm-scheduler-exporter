@@ -50,6 +50,7 @@ func resetHealthState(t *testing.T) {
 	ready := NewReconciler(&fakeDocker{})
 	ready.resyncCompleted = ready.resyncRequested
 	ready.resyncOutstandingSince = time.Time{}
+	ready.nextPeriodicResync = time.Now().Add(time.Hour)
 	activeReconciler.Store(ready)
 }
 
@@ -158,7 +159,10 @@ func TestPollAndPublishReplicasState_SuccessMovesTimestamp(t *testing.T) {
 
 	before := time.Now()
 
-	publishErr := PollAndPublishReplicasState(context.Background(), &fakeDocker{})
+	reconciler := activeReconciler.Load()
+	runReconciler(t, reconciler)
+
+	publishErr := PollAndPublishReplicasState(context.Background(), &fakeDocker{}, reconciler)
 	if publishErr != nil {
 		t.Fatalf("PollAndPublishReplicasState: %v", publishErr)
 	}
@@ -182,7 +186,10 @@ func TestPollAndPublishReplicasState_FailedBuildLeavesTimestamp(t *testing.T) {
 	previous := time.Now().Add(-time.Minute).UnixNano()
 	lastPollSuccessUnixNano.Store(previous)
 
-	publishErr := PollAndPublishReplicasState(context.Background(), &fakeDocker{})
+	reconciler := activeReconciler.Load()
+	runReconciler(t, reconciler)
+
+	publishErr := PollAndPublishReplicasState(context.Background(), &fakeDocker{}, reconciler)
 	if !errors.Is(publishErr, errSnapshotLabelsMismatch) {
 		t.Fatalf("err = %v, want a snapshot build failure", publishErr)
 	}
@@ -197,12 +204,19 @@ func TestPollAndPublishReplicasState_FailedPollLeavesTimestamp(t *testing.T) {
 	resetCollectorState(t)
 	installReplicasStateGauges(t)
 
+	metadata := makeTestMetadata("s", "web", serviceModeReplicated)
+	setServiceMetadata("svc", &metadata)
+
 	previous := time.Now().Add(-time.Minute).UnixNano()
 	lastPollSuccessUnixNano.Store(previous)
+
+	reconciler := activeReconciler.Load()
+	runReconciler(t, reconciler)
 
 	publishErr := PollAndPublishReplicasState(
 		context.Background(),
 		&fakeDocker{taskListErr: errTaskListFailed},
+		reconciler,
 	)
 	if !errors.Is(publishErr, errTaskListFailed) {
 		t.Fatalf("err = %v, want the task list failure", publishErr)

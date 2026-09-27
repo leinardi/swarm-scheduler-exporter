@@ -99,6 +99,19 @@ type Reconciler struct {
 
 	// wake has room for one signal: an event that arrives while one is pending needs no other.
 	wake chan struct{}
+
+	// snapshotRequests and applyRequests carry the poll protocol (reconciler_poll.go).
+	snapshotRequests chan snapshotRequest
+	applyRequests    chan applyRequest
+
+	// pollRequestHook runs when a poll request is accepted, before it is answered; nil outside
+	// tests, which use it to order a cancellation against the answer.
+	pollRequestHook func()
+
+	// Loop-owned poll state: what the last poll published per service, and how many polls in a
+	// row each service was rejected.
+	lastPublished  serviceCounter
+	pollRejections map[string]int
 	// ready is closed once the first resync completed.
 	ready     chan struct{}
 	readyOnce sync.Once
@@ -142,6 +155,10 @@ func NewReconciler(dockerClient DockerAPI) *Reconciler {
 		backoffMax:             backoffMaxDelay,
 		resyncInterval:         periodicResyncInterval,
 		wake:                   make(chan struct{}, 1),
+		snapshotRequests:       make(chan snapshotRequest),
+		applyRequests:          make(chan applyRequest),
+		lastPublished:          make(serviceCounter),
+		pollRejections:         make(map[string]int),
 		ready:                  make(chan struct{}),
 		serviceGeneration:      make(map[string]uint64),
 		resyncRequested:        1,
@@ -186,15 +203,21 @@ func (r *Reconciler) Run(ctx context.Context) {
 			return
 		case <-r.wake:
 		case <-timer.C:
+		case request := <-r.snapshotRequests:
+			r.serveSnapshotRequest(ctx, request)
+		case request := <-r.applyRequests:
+			r.serveApplyRequest(ctx, request)
 		}
 
 		timer.Stop()
 	}
 }
 
-// cycle runs one round of due work, in fairness order: the nodes, a resync, then at most
-// serviceKeysPerCycle service keys.
+// cycle runs one round of due work, in fairness order: waiting poll requests, the nodes, a
+// resync, then at most serviceKeysPerCycle service keys.
 func (r *Reconciler) cycle(ctx context.Context) {
+	r.servePendingPollRequests(ctx)
+
 	now := time.Now()
 
 	if r.periodicResyncDue(now) {

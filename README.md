@@ -61,6 +61,14 @@ Every service-level metric, including the update/rollback metrics below, carries
 > ℹ️ **Current task:** the task Swarm still wants (desired state not `shutdown`, `remove`, …), preferring a running one, then the newest.
 > A retired task still reported as running, for example on a down node, is not counted. This is why `running_replicas` can differ from
 > the `REPLICAS` column of `docker service ls` during node outages and updates.
+>
+> ℹ️ **Consistency:** each poll counts tasks against one snapshot of the exporter's service and node caches, and a service's counts are
+> published only if nothing about it changed while its tasks were listed: not its spec (replica count, mode, placement, job
+> iteration), not a pending event for it, not the node list for a global service or global job, and no resync was requested. A
+> rejected service keeps its previously published `replicas_state`, `running_replicas` and `at_desired` series for up to **2** polls
+> in a row (only if its labels did not change); on the 3rd rejection in a row its series are dropped and the poll counts as failed,
+> so health turns red instead of the exporter publishing stale numbers. Rejections are counted in
+> `swarm_exporter_poll_rejections_total`.
 
 - `swarm_service_at_desired{stack,service,service_mode,display_name,...custom}`
   `1` if `running_replicas == desired_replicas`, else `0`. Useful for dead-simple SLOs and alerting.
@@ -111,6 +119,8 @@ Every service-level metric, including the update/rollback metrics below, carries
 - `swarm_exporter_poll_duration_seconds` (histogram).
 - `swarm_exporter_events_reconnects_total`.
 - `swarm_exporter_events_dropped_total` — Swarm events ignored because they carried no actor ID.
+- `swarm_exporter_poll_rejections_total` — per-service poll counts not published because the service changed while its tasks were
+  listed (see **Consistency** above).
 
 ### Container-level (opt-in)
 

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -43,8 +44,9 @@ import (
 
 var errListUnavailable = errors.New("service list unavailable")
 
-// lifecycleDocker is a collector.DockerAPI for the wiring tests: an empty swarm whose ServiceList
-// fails its first resyncFailures calls, and whose event stream stays open until its context ends.
+// lifecycleDocker is a collector.DockerAPI for the wiring tests: a swarm of one replicated service
+// whose ServiceList fails its first resyncFailures calls, and whose event stream stays open until
+// its context ends. The poller lists tasks only when there is a service to count.
 type lifecycleDocker struct {
 	resyncFailures int
 
@@ -79,7 +81,17 @@ func (d *lifecycleDocker) ServiceList(
 
 	d.resynced = true
 
-	return client.ServiceListResult{}, nil
+	replicas := uint64(1)
+
+	return client.ServiceListResult{Items: []swarm.Service{{
+		ID: "svc1",
+		Spec: swarm.ServiceSpec{
+			Annotations: swarm.Annotations{Name: "web"},
+			Mode: swarm.ServiceMode{
+				Replicated: &swarm.ReplicatedService{Replicas: &replicas},
+			},
+		},
+	}}}, nil
 }
 
 func (*lifecycleDocker) ServiceInspect(
@@ -183,6 +195,8 @@ func waitWorkers(t *testing.T, workerGroup *sync.WaitGroup) {
 }
 
 func TestWorkers_FirstResyncRetryThenPollAndListenOnce(t *testing.T) {
+	configureMetrics(t, time.Hour)
+
 	dockerAPI := &lifecycleDocker{resyncFailures: 1}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -220,6 +234,8 @@ func TestWorkers_FirstResyncRetryThenPollAndListenOnce(t *testing.T) {
 }
 
 func TestWorkers_CancelBeforeFirstResyncStopsPoller(t *testing.T) {
+	configureMetrics(t, time.Hour)
+
 	dockerAPI := &lifecycleDocker{resyncFailures: 1 << 30}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -249,10 +265,10 @@ func TestWorkers_CancelBeforeFirstResyncStopsPoller(t *testing.T) {
 	}
 }
 
-// configureHealthMetrics registers the health gauge and the replicas-state families on a private
-// registry, so a poll that runs publishes and marks health the way it does in run, and clears
-// the process-wide poll timestamp before and after the test.
-func configureHealthMetrics(t *testing.T, pollDelay time.Duration) *prometheus.Registry {
+// configureMetrics registers every metric family the way run does, on a private registry, so the
+// workers publish and mark health as they do in production, and clears the process-wide poll
+// timestamp before and after the test.
+func configureMetrics(t *testing.T, pollDelay time.Duration) *prometheus.Registry {
 	t.Helper()
 
 	registry := prometheus.NewRegistry()
@@ -268,8 +284,7 @@ func configureHealthMetrics(t *testing.T, pollDelay time.Duration) *prometheus.R
 		collector.MarkPollOK(time.Unix(0, 0))
 	})
 
-	collector.ConfigureHealthGauges("test", "none", "unknown", pollDelay)
-	collector.ConfigureReplicasStateGauge()
+	registerMetrics(pollDelay, false, false)
 
 	return registry
 }
@@ -293,7 +308,7 @@ func getHealthz(t *testing.T, pollDelay time.Duration) *httptest.ResponseRecorde
 
 func TestWorkers_PermanentResyncFailureIsUnhealthy(t *testing.T) {
 	pollDelay := time.Second
-	registry := configureHealthMetrics(t, pollDelay)
+	registry := configureMetrics(t, pollDelay)
 
 	dockerAPI := &lifecycleDocker{resyncFailures: 1 << 30}
 
@@ -330,7 +345,7 @@ func TestWorkers_PermanentResyncFailureIsUnhealthy(t *testing.T) {
 
 func TestWorkers_ResyncThenPublishIsHealthy(t *testing.T) {
 	pollDelay := time.Second
-	registry := configureHealthMetrics(t, pollDelay)
+	registry := configureMetrics(t, pollDelay)
 
 	dockerAPI := &lifecycleDocker{resyncFailures: 1}
 

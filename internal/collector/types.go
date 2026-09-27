@@ -102,23 +102,6 @@ func getCachedNodes() []swarm.Node {
 
 // --- Service metadata helpers ---
 
-// getAllServiceIDs returns a stable copy of all known service IDs from the metadata cache.
-func getAllServiceIDs() []string {
-	metadataMu.RLock()
-	defer metadataMu.RUnlock()
-
-	if len(metadataCache) == 0 {
-		return nil
-	}
-
-	ids := make([]string, 0, len(metadataCache))
-	for serviceID := range metadataCache {
-		ids = append(ids, serviceID)
-	}
-
-	return ids
-}
-
 // getAllServiceMetadata returns a point-in-time copy of the metadata cache, keyed by service ID.
 func getAllServiceMetadata() map[string]serviceMetadata {
 	metadataMu.RLock()
@@ -304,19 +287,6 @@ func setServiceDesiredReplicas(serviceID string, desired float64) {
 
 	metadata.desiredReplicas = desired
 	metadataCache[serviceID] = metadata
-}
-
-// getServiceDesiredReplicas returns the last cached desired replicas for a service.
-func getServiceDesiredReplicas(serviceID string) (float64, bool) {
-	metadataMu.RLock()
-	defer metadataMu.RUnlock()
-
-	md, ok := metadataCache[serviceID]
-	if !ok {
-		return 0, false
-	}
-
-	return md.desiredReplicas, true
 }
 
 // shortServiceName returns the visible service name without the "<stack>_" prefix

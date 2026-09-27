@@ -36,6 +36,7 @@ var (
 	pollErrorsTotalCounter       prometheus.Counter
 	eventsReconnectsTotalCounter prometheus.Counter
 	eventsDroppedTotalCounter    prometheus.Counter
+	pollRejectionsTotalCounter   prometheus.Counter
 )
 
 // ConfigureExporterOpsMetrics registers exporter self-observability metrics.
@@ -86,6 +87,16 @@ func ConfigureExporterOpsMetrics() {
 		ConstLabels: nil,
 	})
 	prometheus.MustRegister(eventsDroppedTotalCounter)
+
+	pollRejectionsTotalCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: prometheusNamespace,
+		Subsystem: prometheusExporterSubsystem,
+		Name:      "poll_rejections_total",
+		Help: "Total number of per-service poll results not published because the service changed " +
+			"while its tasks were being listed.",
+		ConstLabels: nil,
+	})
+	prometheus.MustRegister(pollRejectionsTotalCounter)
 }
 
 // ObservePollDuration records a single poll duration.
@@ -122,5 +133,12 @@ func IncEventReconnect() {
 func IncEventsDropped() {
 	if eventsDroppedTotalCounter != nil {
 		eventsDroppedTotalCounter.Inc()
+	}
+}
+
+// IncPollRejections increments the poll rejections counter.
+func IncPollRejections() {
+	if pollRejectionsTotalCounter != nil {
+		pollRejectionsTotalCounter.Inc()
 	}
 }

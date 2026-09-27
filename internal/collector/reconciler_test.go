@@ -54,6 +54,7 @@ type reconcilerDocker struct {
 
 	services       []swarm.Service
 	nodes          []swarm.Node
+	tasks          []swarm.Task
 	serviceListErr error
 	nodeListErr    error
 	inspectErr     map[string]error
@@ -141,11 +142,14 @@ func (d *reconcilerDocker) ServiceInspect(
 	)
 }
 
-func (*reconcilerDocker) TaskList(
+func (d *reconcilerDocker) TaskList(
 	context.Context,
 	client.TaskListOptions,
 ) (client.TaskListResult, error) {
-	return client.TaskListResult{}, nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return client.TaskListResult{Items: append([]swarm.Task(nil), d.tasks...)}, nil
 }
 
 func (*reconcilerDocker) ContainerList(
@@ -175,6 +179,13 @@ func (d *reconcilerDocker) setServices(services ...swarm.Service) {
 	defer d.mu.Unlock()
 
 	d.services = services
+}
+
+func (d *reconcilerDocker) setTasks(tasks ...swarm.Task) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.tasks = tasks
 }
 
 func (d *reconcilerDocker) setNodes(nodes ...swarm.Node) {
@@ -533,8 +544,8 @@ func TestReconciler_EventDuringStartupSnapshot(t *testing.T) {
 		return cached
 	})
 
-	if got, _ := getServiceDesiredReplicas("svc2"); got != 4 {
-		t.Errorf("svc2 desired = %v, want 4", got)
+	if metadata, _ := getServiceMetadata("svc2"); metadata.desiredReplicas != 4 {
+		t.Errorf("svc2 desired = %v, want 4", metadata.desiredReplicas)
 	}
 }
 
@@ -1174,7 +1185,6 @@ func (d *deadlineDocker) check(ctx context.Context, method string) {
 func TestDockerCalls_HaveDeadlines(t *testing.T) {
 	global := makeGlobalService("glb1", "stack", "agent")
 	replicated := makeReplicatedService("svc1", "stack", "web", 2)
-	uncached := makeReplicatedService("svc2", "other", "late", 1)
 
 	inner := newReconcilerDocker(
 		[]swarm.Service{global, replicated},
@@ -1192,10 +1202,8 @@ func TestDockerCalls_HaveDeadlines(t *testing.T) {
 	reconciler.enqueueEvent(nodeEvent("n1"))
 	reconciler.cycle(root)
 
-	// svc2 is not cached, so the poll takes the slow path and inspects it.
-	inner.setServices(global, replicated, uncached)
-
-	_, pollErr := PollReplicasState(root, dockerClient)
+	// The poll makes one Docker call, its task list.
+	_, pollErr := pollReplicasState(root, dockerClient, cacheSnapshot())
 	if pollErr != nil {
 		t.Fatalf("poll: %v", pollErr)
 	}
