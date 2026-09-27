@@ -71,12 +71,17 @@ const (
 	orchestratorSwarm   = "swarm"
 	orchestratorNone    = "none"
 
-	// Cap the number of container inspects per poll to bound overhead.
+	// Cap the number of container inspects per poll to bound overhead. Failed inspects count
+	// too: each one is still a round-trip to the daemon.
 	// We only inspect running+healthcheck (to read health) and exited (to read exit code).
 	containersInspectCapDefault = 300
 
-	// Short timeout per poll just for container listing/inspection.
+	// Short timeout per poll just for container listing.
 	containersPollTimeout = 5 * time.Second
+
+	// containersEnrichTimeoutDefault bounds all the inspects of one poll together. A per-inspect
+	// timeout alone would let a slow daemon hold a poll for the cap times that timeout.
+	containersEnrichTimeoutDefault = 10 * time.Second
 )
 
 var (
@@ -89,6 +94,9 @@ var (
 
 	// Optional hard cap override; kept private with a sensible default.
 	containersInspectCap = containersInspectCapDefault
+
+	// Overall enrichment deadline per poll; a variable so tests can shorten it.
+	containersEnrichTimeout = containersEnrichTimeoutDefault
 
 	// Metric: info-style gauge with a 'state' label (exactly one is 1, others 0).
 	// Labels:
@@ -365,6 +373,28 @@ func displayNameForContainer(group, service, containerName string) string {
 	return containerName
 }
 
+// canInspect reports whether one more inspect fits in this poll: fewer than containersInspectCap
+// were attempted and the enrichment deadline has not passed.
+func canInspect(ctx context.Context, inspected int) bool {
+	if inspected >= containersInspectCap {
+		logger.L().Debug("containers inspect cap reached, skipping remaining enrichments",
+			"cap", containersInspectCap,
+		)
+
+		return false
+	}
+
+	if ctx.Err() != nil {
+		logger.L().Debug("containers enrichment deadline reached, skipping remaining enrichments",
+			"timeout", containersEnrichTimeout,
+		)
+
+		return false
+	}
+
+	return true
+}
+
 // enrichContainers performs bounded ContainerInspect calls to read:
 //   - health overlay for running containers with healthcheck (healthy/unhealthy/health_starting)
 //   - exit_code for exited containers
@@ -373,6 +403,10 @@ func displayNameForContainer(group, service, containerName string) string {
 //   - 'state' is either the base docker state or a health overlay
 //   - 'exit_code' is "" unless state == "exited"
 func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
+	// One deadline for every inspect of this poll; rows not reached in time keep their base state.
+	ctx, cancel := context.WithTimeout(parentCtx, containersEnrichTimeout)
+	defer cancel()
+
 	inspected := 0
 
 	for rowIdx := range rows {
@@ -386,18 +420,15 @@ func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 			continue
 		}
 
-		// Respect the inspect cap for the poll.
-		if inspected >= containersInspectCap {
-			logger.L().Debug("containers inspect cap reached, skipping remaining enrichments",
-				"cap", containersInspectCap,
-			)
-
+		// Respect the inspect cap and the enrichment deadline for the poll.
+		if !canInspect(ctx, inspected) {
 			rows[rowIdx].labels[labelState] = rows[rowIdx].state
 
 			continue
 		}
 
-		ctx, cancel := context.WithTimeout(parentCtx, containersPollTimeout)
+		inspected++
+
 		inspectResult, inspectErr := cli.ContainerInspect(
 			ctx,
 			rows[rowIdx].id,
@@ -405,9 +436,6 @@ func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 				Size: false,
 			},
 		)
-
-		cancel()
-
 		if inspectErr != nil {
 			// Keep base state; leave exit_code empty.
 			logger.L().Warn("container inspect failed; using base state",
@@ -417,8 +445,6 @@ func enrichContainers(parentCtx context.Context, cli DockerAPI, rows []row) {
 
 			continue
 		}
-
-		inspected++
 
 		// Delegate per-need logic to reduce complexity.
 		switch rows[rowIdx].need {

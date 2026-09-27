@@ -129,8 +129,9 @@ the exporter can expose **container state** metrics when started with `-containe
     - `exit_code` — string exit code (only when `state="exited"`, otherwise empty)
 
 > ℹ️ The container list does not say which containers have a healthcheck, so the exporter inspects **every running container** (to
-> read its health state, if any) and **every exited container** (to read its exit code). Inspects are capped at **300 per poll**; a
-> container past the cap keeps its listed state and an empty `exit_code`.
+> read its health state, if any) and **every exited container** (to read its exit code). Inspects are capped at **300 per poll**,
+> failed ones included, and share one **10s** deadline per poll; a container past the cap or the deadline keeps its listed state and an
+> empty `exit_code`.
 > Swarm task containers are skipped unless `-containers-include-swarm` is set.
 
 ## ✅ Health

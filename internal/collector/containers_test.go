@@ -27,10 +27,14 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -304,11 +308,13 @@ func resetContainersState(t *testing.T) {
 	prevEnabled := containersEnabled
 	prevIncludeSwarm := containersIncludeSwarm
 	prevCap := containersInspectCap
+	prevEnrichTimeout := containersEnrichTimeout
 
 	t.Cleanup(func() {
 		containersEnabled = prevEnabled
 		containersIncludeSwarm = prevIncludeSwarm
 		containersInspectCap = prevCap
+		containersEnrichTimeout = prevEnrichTimeout
 	})
 }
 
@@ -497,6 +503,115 @@ func TestPollContainersState_InspectCapHonored(t *testing.T) {
 
 	if calls != 1 {
 		t.Errorf("inspect calls = %d, want 1 (cap=1)", calls)
+	}
+}
+
+func TestPollContainersState_FailedInspectsCountTowardCap(t *testing.T) {
+	resetContainersState(t)
+	EnableContainersMetrics(true, false)
+
+	containersInspectCap = 1
+
+	c1 := container.Summary{ID: "c1", State: "exited", Names: []string{"/a"}}
+	c2 := container.Summary{ID: "c2", State: "exited", Names: []string{"/b"}}
+
+	fd := &fakeDocker{
+		containers: []container.Summary{c1, c2},
+		inspectErr: errInspectFailed,
+	}
+
+	rows, err := PollContainersState(context.Background(), fd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	fd.mu.Lock()
+	calls := fd.inspectCalls
+	fd.mu.Unlock()
+
+	if calls != 1 {
+		t.Errorf("inspect calls = %d, want 1: a failed inspect still counts toward cap=1", calls)
+	}
+
+	for _, row := range rows {
+		if row[labelState] != containerStateExited || row["exit_code"] != "" {
+			t.Errorf("row %s = state %q exit_code %q, want the listed state and no exit code",
+				row[labelContainer], row[labelState], row["exit_code"])
+		}
+	}
+}
+
+// blockingInspectDocker wraps fakeDocker with a ContainerInspect that blocks until its context
+// is done, counting calls.
+type blockingInspectDocker struct {
+	*fakeDocker
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (d *blockingInspectDocker) ContainerInspect(
+	ctx context.Context,
+	_ string,
+	_ client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
+
+	<-ctx.Done()
+
+	return client.ContainerInspectResult{}, fmt.Errorf("blocked inspect: %w", ctx.Err())
+}
+
+func TestPollContainersState_EnrichmentDeadlineBoundsAllInspects(t *testing.T) {
+	resetContainersState(t)
+	EnableContainersMetrics(true, false)
+
+	containersEnrichTimeout = 50 * time.Millisecond
+
+	containers := make([]container.Summary, 0, 5)
+	for _, id := range []string{"c1", "c2", "c3", "c4", "c5"} {
+		containers = append(
+			containers,
+			container.Summary{ID: id, State: "running", Names: []string{"/" + id}},
+		)
+	}
+
+	fd := &blockingInspectDocker{fakeDocker: &fakeDocker{containers: containers}}
+
+	started := time.Now()
+
+	rows, err := PollContainersState(context.Background(), fd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Each inspect waiting out its own containersPollTimeout would take 25s here.
+	if elapsed := time.Since(started); elapsed > containersPollTimeout {
+		t.Errorf(
+			"poll took %s, want it bounded by the %s enrichment deadline",
+			elapsed,
+			containersEnrichTimeout,
+		)
+	}
+
+	fd.mu.Lock()
+	calls := fd.calls
+	fd.mu.Unlock()
+
+	if calls != 1 {
+		t.Errorf("inspect calls = %d, want 1: none after the enrichment deadline", calls)
+	}
+
+	for _, row := range rows {
+		if row[labelState] != containerStateRunning {
+			t.Errorf(
+				"row %s state = %q, want the listed state",
+				row[labelContainer],
+				row[labelState],
+			)
+		}
 	}
 }
 
