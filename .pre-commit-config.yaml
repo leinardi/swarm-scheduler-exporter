@@ -102,7 +102,7 @@ repos:
     hooks:
       - id: dclint
         language_version: 22.15.0
-        files: ^(?:.*/)?(?:docker-)?compose\.ya?ml$
+        files: ^(?:.*/)?(?:docker-)?compose(?:\.[\w-]+)?\.ya?ml$
         args: [--fix]
   - repo: https://github.com/hadolint/hadolint
     rev: v2.15.1

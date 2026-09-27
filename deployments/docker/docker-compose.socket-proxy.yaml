@@ -1,0 +1,101 @@
+# swarm-scheduler-exporter behind tecnativa/docker-socket-proxy, as a Swarm stack:
+#
+#   docker stack deploy -c docker-compose.socket-proxy.yaml monitoring
+#
+# The exporter never mounts the Docker socket. It talks to the proxy over an internal overlay
+# network, and the proxy forwards only the API sections socket-proxy.env enables.
+#
+# Scope: this makes the Docker API read-only for the exporter, not least-privilege. The proxy's ACL
+# matches on a path prefix, so every enabled section allows every GET under it. SERVICES and TASKS,
+# which the exporter always needs, also allow service and task logs from across the Swarm, and the
+# service list carries every spec, environment variables included. CONTAINERS=1 (needed by
+# -containers) allows every GET under /containers: logs, stats, top, archive and export. Logs,
+# specs and container files can hold secrets. Drop -containers and set CONTAINERS=0 if you do not
+# need container metrics: that narrows the exposure, but log access stays. Exact per-endpoint rules
+# would need a custom haproxy.cfg, which this example does not attempt.
+#
+# HAProxy closes an idle event stream after 10 minutes (its "timeout client"): the exporter
+# reconnects and logs that at info. The task poll sends no filter in its URL, so a large cluster
+# does not run into the proxy's request size limit.
+
+services:
+  docker-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+
+    # The bind is read-only so the socket file cannot be replaced; what the API allows is up to
+    # the allowlist in env_file.
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+
+    # The allowlist: every ACL variable of the image, set explicitly.
+    env_file:
+      - socket-proxy.env
+
+    networks:
+      - socket-proxy
+
+    cap_drop:
+      - ALL
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          # Only a manager's daemon answers the cluster-wide service, node and task calls.
+          - node.role == manager
+    security_opt:
+      - no-new-privileges:true
+
+  exporter:
+    image: ghcr.io/leinardi/swarm-scheduler-exporter:latest # dclint disable-line service-image-require-explicit-tag
+
+    environment:
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+
+    ports:
+      - target: 8888
+        published: 8888
+        protocol: tcp
+        mode: ingress
+
+    networks:
+      - socket-proxy
+
+    # -containers needs CONTAINERS=1 in socket-proxy.env; drop both if you do not need it.
+    command: [ "-poll-delay", "10s", "-containers" ]
+
+    # The image's HEALTHCHECK, spelled out: the binary probes its own /healthz, and Swarm replaces
+    # a task that stays unhealthy. If you change -listen-addr in command, add the same
+    # "-listen-addr", "<addr>" to test.
+    healthcheck:
+      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "-healthcheck" ]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+    cap_drop:
+      - ALL
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  # Internal: no external connectivity. Attach nothing else to it: whatever is on this network can
+  # reach the proxy. Encrypted: the exporter may run on another node than the proxy, and the API
+  # traffic between them (service specs included) would otherwise cross the nodes as plaintext
+  # VXLAN. Encryption needs IPsec ESP (IP protocol 50) allowed between the nodes.
+  socket-proxy:
+    driver: overlay
+    internal: true
+    driver_opts:
+      encrypted: "true"

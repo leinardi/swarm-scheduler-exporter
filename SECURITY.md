@@ -30,8 +30,10 @@ caught it.
 - **Read-only by code, not by mount.** The exporter only issues read requests to the Docker API (list, inspect and events), and
   the code enforces that: every Docker call goes through an interface that exposes nothing else. Mounting the socket with `:ro`
   does not make the API read-only, and access to the Docker socket is equivalent to root on the host. To enforce read-only access
-  at runtime, put a socket proxy in front of the Docker API that allows only `GET` on the endpoints the exporter uses. See
-  [Security & Permissions](README.md#-security--permissions).
+  at runtime, put a socket proxy in front of the Docker API: the tested example in
+  [Behind a socket proxy](README.md#-behind-a-socket-proxy-recommended) makes the API read-only, not least-privilege: its
+  sections match by path prefix, so the `SERVICES` and `TASKS` the exporter needs also allow service and task logs, and
+  `CONTAINERS=1` allows every `GET` under `/containers`. See also [Security & Permissions](README.md#-security--permissions).
 - **Unauthenticated endpoints.** `/metrics` and `/healthz` have no authentication and are meant for an internal scrape network.
   Neither takes input that turns into work: no request parameter causes a Docker call.
 - **Supply chain.** Every GitHub Action is pinned to a commit SHA and every image the workflows and the Dockerfile use to an index

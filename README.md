@@ -247,7 +247,7 @@ docker run --rm \
 
 Replace `140` with the value from `stat -c %g /var/run/docker.sock`.
 
-### 🐝 Swarm service (recommended)
+### 🐝 Swarm service (socket mount)
 
 ```bash
 docker service create \
@@ -265,6 +265,41 @@ docker service create \
 
 > ℹ️ **Why the `manager` constraint?**
 > Only manager nodes can access cluster-wide service, node, and event data required by the exporter.
+
+### 🔒 Behind a socket proxy (recommended)
+
+The exporter only reads, but whatever holds the Docker socket can do anything. Put
+[tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) in front of it: the exporter then reaches
+the Docker API over an internal overlay network, and the proxy refuses every write and every API section the allowlist leaves
+off. A ready Swarm stack is in
+[`deployments/docker/docker-compose.socket-proxy.yaml`](deployments/docker/docker-compose.socket-proxy.yaml), with the
+allowlist in [`deployments/docker/socket-proxy.env`](deployments/docker/socket-proxy.env):
+
+```bash
+cd deployments/docker
+docker stack deploy -c docker-compose.socket-proxy.yaml monitoring
+```
+
+The allowlist sets every ACL variable of the pinned proxy image explicitly (the image enables `EVENTS` and `VERSION` by default)
+and opens only `PING`, `EVENTS`, `SERVICES`, `NODES`, `TASKS` and `CONTAINERS`. `TestSocketProxy_ExampleAllowlist` runs the pinned
+image with that file against a real Swarm, and checks that the exporter works through it and that what is left off is refused.
+
+> ⚠️ **Scope:** this makes the Docker API **read-only** for the exporter, not least-privilege. The proxy matches each section by
+> path prefix, so every enabled section allows every `GET` under it, and logs, specs and container files can hold secrets:
+>
+> - `SERVICES=1` and `TASKS=1`, which the exporter always needs, also allow service and task logs (`/services/<id>/logs`,
+>   `/tasks/<id>/logs`: the containers' logs, from across the Swarm), and the service list the exporter reads carries every
+>   service spec, environment variables included.
+> - `CONTAINERS=1` allows every `GET` under `/containers`, including logs, stats, `top`, `archive` and `export`. `CONTAINERS` is
+>   needed only with `-containers`: without that flag, set it to `0`. That narrows the exposure, but log access stays.
+>
+> Exact per-endpoint rules would need a custom `haproxy.cfg`, which the example does not attempt.
+
+Two proxy behaviours to know:
+
+- HAProxy closes an idle event stream after its 10-minute client timeout. The exporter reconnects (and resyncs), and logs that
+  clean close at info, not as a warning.
+- The task poll sends no filter in its URL, so a large cluster never runs into HAProxy's request size limit.
 
 ### 🔐 Alternative: TCP/TLS (no socket mount)
 
@@ -293,7 +328,8 @@ This avoids group and permission issues, relying instead on proper TLS authentic
 
 A complete Compose setup (replicated mode, manager constraint, and environment hints)
 is available at:
-[`deployments/docker/docker-compose.yaml`](deployments/docker/docker-compose.yaml)
+[`deployments/docker/docker-compose.yaml`](deployments/docker/docker-compose.yaml). The socket-proxy stack is in
+[`deployments/docker/docker-compose.socket-proxy.yaml`](deployments/docker/docker-compose.socket-proxy.yaml).
 
 ## ⚙️ Configuration
 
@@ -458,8 +494,9 @@ scrape_configs:
 - The exporter only **issues read requests** to the Docker API (list, inspect and events).
   Mounting the socket with `:ro` does **not** make the API read-only: it only stops the container from
   modifying the socket file, and any client holding the socket can still create, update or remove resources.
-  To enforce read-only access, put a socket proxy in front of the Docker API (for example a
-  docker-socket-proxy that allows only `GET` requests on the endpoints the exporter uses).
+  To enforce read-only access, put a socket proxy in front of the Docker API: see
+  [Behind a socket proxy](#-behind-a-socket-proxy-recommended) for a tested example, and its scope note (read-only, not
+  least-privilege).
 - Must run on a **manager** node in Swarm to receive cluster-wide events and inspect services.
 - Avoid exposing the exporter to untrusted networks; it exposes metrics only, but your scrape endpoint should be internal.
 

@@ -90,10 +90,14 @@ Blockers:
   exporter only *issues* read requests and that enforcing it needs a proxy; a diff that walks
   that back is a finding.
 
-Runtime enforcement would need an authorization proxy in front of the socket — for example
-a docker-socket-proxy that allows only `GET` on the endpoints the exporter uses. That is not
-part of this repo today; recommend it as hardening when a review touches deployment docs or
-compose files, but do not block on its absence.
+Runtime enforcement needs an authorization proxy in front of the socket. The repo ships one
+example, `deployments/docker/docker-compose.socket-proxy.yaml` with its allowlist
+`socket-proxy.env`, pinned by `TestSocketProxy_ExampleAllowlist` against the real proxy image.
+It makes the API read-only, not least-privilege: the proxy's ACL is per path prefix, so the
+`SERVICES` and `TASKS` the exporter needs also allow service and task logs, and `CONTAINERS=1`
+allows every `GET` under `/containers` (logs, archive, export). Docs that call it
+least-privilege or exact per endpoint, an allowlist line relying on an image default, or a
+change to `socket-proxy.env` without the test still passing are findings.
 
 ### Metrics are the public contract
 

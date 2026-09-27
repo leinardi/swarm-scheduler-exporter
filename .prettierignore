@@ -4,3 +4,4 @@
 
 # DCLint
 deployments/docker/docker-compose.yaml
+deployments/docker/docker-compose.socket-proxy.yaml

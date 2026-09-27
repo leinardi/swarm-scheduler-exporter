@@ -136,6 +136,18 @@ func (c *Cluster) Down(ctx context.Context) error {
 	return errors.Join(cleanupErr, closeErr)
 }
 
+// HostClient returns the client of the host daemon the nodes run on, for a test that needs a
+// helper container beside the cluster. Label what it creates with LabelEnvID and the cluster's
+// EnvID, so Down removes it even when the test's own cleanup never runs.
+func (c *Cluster) HostClient() *dockerclient.Client {
+	return c.hostClient
+}
+
+// EnsureHostImage pulls imageRef on the host daemon unless it is already there.
+func (c *Cluster) EnsureHostImage(ctx context.Context, imageRef string) error {
+	return ensureHostImage(ctx, c.hostClient, imageRef, c.Spec.Logger)
+}
+
 // PauseNode freezes the node's DinD container. Its daemon stops answering, so the manager marks
 // the node down once heartbeats lapse, while the tasks it ran keep their last reported state.
 func (c *Cluster) PauseNode(ctx context.Context, node *Node) error {
