@@ -25,17 +25,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/moby/moby/client"
 
 	"github.com/leinardi/swarm-scheduler-exporter/internal/collector"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/server"
 )
 
 func TestStringSlice_Set_EmptyErrors(t *testing.T) {
@@ -427,5 +433,211 @@ func TestServeHTTP_ShutdownWaitsForInFlightRequest(t *testing.T) {
 		}
 	case <-time.After(serveUntilDoneBound):
 		t.Fatalf("no response within %s", serveUntilDoneBound)
+	}
+}
+
+// healthcheckServer starts a loopback HTTP server whose /healthz answers with status and body,
+// and returns its listen address.
+func healthcheckServer(t *testing.T, status int, body string) string {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(server.HealthzPath, func(responseWriter http.ResponseWriter, _ *http.Request) {
+		responseWriter.WriteHeader(status)
+		_, _ = io.WriteString(responseWriter, body)
+	})
+
+	testServer := httptest.NewServer(mux)
+	t.Cleanup(testServer.Close)
+
+	return testServer.Listener.Addr().String()
+}
+
+func TestRunHealthcheck_Healthy(t *testing.T) {
+	address := healthcheckServer(t, http.StatusOK, "ok\n")
+
+	var out bytes.Buffer
+	if exitCode := runHealthcheck(address, &out); exitCode != 0 {
+		t.Errorf("exit code = %d, want 0 (output %q)", exitCode, out.String())
+	}
+}
+
+func TestRunHealthcheck_UnhealthyPrintsReason(t *testing.T) {
+	address := healthcheckServer(t, http.StatusServiceUnavailable, "initial resync not completed\n")
+
+	var out bytes.Buffer
+	if exitCode := runHealthcheck(address, &out); exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+
+	if !strings.Contains(out.String(), "503") ||
+		!strings.Contains(out.String(), "initial resync not completed") {
+		t.Errorf("output = %q, want the status and the reason", out.String())
+	}
+}
+
+func TestRunHealthcheck_NothingListening(t *testing.T) {
+	var out bytes.Buffer
+	if exitCode := runHealthcheck(freeLocalAddress(t), &out); exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+
+	if out.Len() == 0 {
+		t.Error("output is empty, want the connection error")
+	}
+}
+
+// TestRunHealthcheck_RedirectIsUnhealthy answers /healthz with a redirect to a path that answers
+// 200: the probe must take the redirect itself as the answer, and never request its target.
+func TestRunHealthcheck_RedirectIsUnhealthy(t *testing.T) {
+	var targetRequests atomic.Int64
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(
+		server.HealthzPath,
+		func(responseWriter http.ResponseWriter, request *http.Request) {
+			http.Redirect(responseWriter, request, "/ok", http.StatusFound)
+		},
+	)
+	mux.HandleFunc("/ok", func(responseWriter http.ResponseWriter, _ *http.Request) {
+		targetRequests.Add(1)
+		responseWriter.WriteHeader(http.StatusOK)
+	})
+
+	testServer := httptest.NewServer(mux)
+	t.Cleanup(testServer.Close)
+
+	var out bytes.Buffer
+	if exitCode := runHealthcheck(testServer.Listener.Addr().String(), &out); exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+
+	if !strings.Contains(out.String(), "302") {
+		t.Errorf("output = %q, want the 302 status", out.String())
+	}
+
+	if got := targetRequests.Load(); got != 0 {
+		t.Errorf("redirect target requested %d times, want 0", got)
+	}
+}
+
+func TestRunHealthcheck_ReasonBodies(t *testing.T) {
+	oversized := strings.Repeat("x", 1<<20)
+
+	tests := []struct {
+		name string
+		body string
+		// wantSuffix is how the single output line must end.
+		wantSuffix string
+		// wantReasonBytes, when set, bounds how many bytes of the body may be printed.
+		wantReasonBytes int
+	}{
+		{name: "empty", body: "", wantSuffix: "503 Service Unavailable"},
+		{
+			name:       "no trailing newline",
+			body:       "resync outstanding",
+			wantSuffix: "503 Service Unavailable: resync outstanding",
+		},
+		{
+			name:       "multi-line",
+			body:       "last poll too old\nsecond line\n",
+			wantSuffix: "503 Service Unavailable: last poll too old",
+		},
+		{
+			name:            "oversized without a newline",
+			body:            oversized,
+			wantSuffix:      strings.Repeat("x", healthcheckReasonLimit),
+			wantReasonBytes: healthcheckReasonLimit,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			address := healthcheckServer(t, http.StatusServiceUnavailable, test.body)
+
+			var out bytes.Buffer
+			if exitCode := runHealthcheck(address, &out); exitCode != 1 {
+				t.Errorf("exit code = %d, want 1", exitCode)
+			}
+
+			line, rest, _ := strings.Cut(out.String(), "\n")
+			if rest != "" {
+				t.Errorf("output has more than one line: %q", out.String())
+			}
+
+			if !strings.HasSuffix(line, test.wantSuffix) {
+				t.Errorf("output = %.200q, want it to end with %.200q", line, test.wantSuffix)
+			}
+
+			if test.wantReasonBytes > 0 {
+				if printed := strings.Count(line, "x"); printed > test.wantReasonBytes {
+					t.Errorf(
+						"printed %d bytes of the reason, want at most %d",
+						printed,
+						test.wantReasonBytes,
+					)
+				}
+			}
+		})
+	}
+}
+
+// TestRunHealthcheck_NoProxy checks the probe's client never routes through a proxy. A behavior
+// test alone cannot show it for loopback, which Go already exempts from HTTP_PROXY, so the
+// transport is inspected too.
+func TestRunHealthcheck_NoProxy(t *testing.T) {
+	transport, isTransport := newHealthcheckClient().Transport.(*http.Transport)
+	if !isTransport {
+		t.Fatalf("transport = %T, want *http.Transport", newHealthcheckClient().Transport)
+	}
+
+	if transport.Proxy != nil {
+		t.Error("transport Proxy is set, want nil")
+	}
+
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+
+	address := healthcheckServer(t, http.StatusOK, "ok\n")
+
+	var out bytes.Buffer
+	if exitCode := runHealthcheck(address, &out); exitCode != 0 {
+		t.Errorf("exit code with HTTP_PROXY set = %d, want 0 (output %q)", exitCode, out.String())
+	}
+}
+
+func TestHealthcheckURL(t *testing.T) {
+	tests := []struct {
+		listenAddr string
+		want       string
+	}{
+		{listenAddr: "0.0.0.0:8888", want: "http://127.0.0.1:8888/healthz"},
+		{listenAddr: ":8888", want: "http://127.0.0.1:8888/healthz"},
+		{listenAddr: "[::]:8888", want: "http://[::1]:8888/healthz"},
+		{listenAddr: "10.0.0.5:9000", want: "http://10.0.0.5:9000/healthz"},
+		{listenAddr: "[fd00::5]:9000", want: "http://[fd00::5]:9000/healthz"},
+	}
+
+	for _, test := range tests {
+		got, urlErr := healthcheckURL(test.listenAddr)
+		if urlErr != nil {
+			t.Errorf("healthcheckURL(%q): %v", test.listenAddr, urlErr)
+
+			continue
+		}
+
+		if got != test.want {
+			t.Errorf("healthcheckURL(%q) = %q, want %q", test.listenAddr, got, test.want)
+		}
+	}
+}
+
+func TestRunHealthcheck_MalformedListenAddr(t *testing.T) {
+	var out bytes.Buffer
+	if exitCode := runHealthcheck("8888", &out); exitCode != 1 {
+		t.Errorf("exit code = %d, want 1", exitCode)
+	}
+
+	if !strings.Contains(out.String(), "missing port in address") {
+		t.Errorf("output = %q, want the parse error", out.String())
 	}
 }

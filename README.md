@@ -157,6 +157,24 @@ stays outstanding for longer than that same window, for example because listing 
 - HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason (`initial resync not completed`,
   `no successful poll yet`, `last poll too old` or `resync outstanding`) when not.
 - Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy, evaluated at every scrape.
+- Container health: the image is distroless (no shell, no curl), so it ships a `HEALTHCHECK` that runs the binary itself with
+  `-healthcheck`. That mode requests `/healthz` on `-listen-addr` (a wildcard host such as `0.0.0.0` or `::` is probed on
+  loopback), never through a proxy and without following redirects, and exits `0` on a `200` and `1` otherwise, printing the
+  status and the reason. The check allows a 90s start period for the first resync, then probes every 30s; after 3 failures the
+  container is unhealthy and Swarm replaces the task, which is the intended remedy for a stuck exporter.
+
+The image's check uses the default `-listen-addr`. If you change it, override the check with the same address:
+
+```yaml
+services:
+  exporter:
+    command: [ "-listen-addr", "0.0.0.0:9100" ]
+    healthcheck:
+      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "-healthcheck", "-listen-addr", "0.0.0.0:9100" ]
+```
+
+To turn it off, set `healthcheck: disable: true` in compose or a stack file, or pass `--no-healthcheck` to `docker run` or
+`docker service create`.
 
 ## 📋 Requirements
 
@@ -261,6 +279,8 @@ is available at:
         Expose container state metrics (opt-in).
   -containers-include-swarm
         Include containers belonging to Swarm tasks.
+  -healthcheck
+        Probe this exporter's /healthz on -listen-addr and exit 0 if healthy, 1 otherwise
   -help
         Display help message
   -label value

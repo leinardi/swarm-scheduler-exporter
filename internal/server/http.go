@@ -36,9 +36,11 @@ import (
 // HealthFunc returns whether the exporter is healthy and, if not, a short reason.
 type HealthFunc func() (bool, string)
 
+// HealthzPath is the path of the health endpoint, which the -healthcheck probe requests.
+const HealthzPath = "/healthz"
+
 const (
 	metricsPath = "/metrics"
-	healthzPath = "/healthz"
 
 	okBody       = "ok\n"
 	defaultCause = "unhealthy\n"
@@ -50,7 +52,7 @@ const (
 func NewMuxWithHealth(isHealthy HealthFunc) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle(metricsPath, promhttp.Handler())
-	mux.HandleFunc(healthzPath, healthHandler(isHealthy))
+	mux.HandleFunc(HealthzPath, healthHandler(isHealthy))
 
 	return mux
 }
