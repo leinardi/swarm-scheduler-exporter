@@ -32,8 +32,8 @@ import (
 )
 
 // dockerRequestTimeout bounds every request/response call into Docker. Without it a daemon that
-// accepts a request and never answers would hang the worker that made it forever: the seed would
-// never finish, a poll would never publish, and an event worker would stop draining its queue.
+// accepts a request and never answers would hang the goroutine that made it forever: a resync
+// would never finish, a poll would never publish, and the reconciler would stop applying changes.
 // It is well below the 30s floor of the health window, so a hung call surfaces as a failed poll
 // before health turns red on its own. The event stream is long-lived and is not bounded by it.
 const dockerRequestTimeout = 15 * time.Second

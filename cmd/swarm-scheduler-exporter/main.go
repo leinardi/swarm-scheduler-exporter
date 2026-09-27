@@ -195,7 +195,7 @@ func run() int {
 
 	// Docker client is configured from environment variables (DOCKER_HOST, DOCKER_API_VERSION,
 	// etc.). API version negotiation is lazy: it happens on the first request.
-	dockerClient, newClientErr := client.New(client.FromEnv)
+	dockerClient, newClientErr := newDockerClient()
 	if newClientErr != nil {
 		loggerInstance.Error("docker client init failed", "err", newClientErr)
 
@@ -210,12 +210,10 @@ func run() int {
 		return 1
 	}
 
-	// WaitGroup to wait for goroutines (event listener + poller).
+	// WaitGroup to wait for goroutines (reconciler + event listener + poller).
 	var workerGroup sync.WaitGroup
 
-	seeded := make(chan struct{})
-	startEventListener(rootContext, &workerGroup, dockerClient, seeded)
-	startPoller(rootContext, &workerGroup, dockerClient, *pollDelay, seeded)
+	startWorkers(rootContext, &workerGroup, dockerClient, *pollDelay)
 
 	// HTTP server with sane timeouts + graceful shutdown.
 	isHealthy := func() (bool, string) {
@@ -304,58 +302,59 @@ func validateAndSetCustomLabels(rawKeys []string) error {
 	return nil
 }
 
-// startEventListener starts the one goroutine that seeds the caches, retrying until the seed
-// succeeds, closes seeded, and then follows the event stream until parentContext is done.
+// startWorkers starts the reconciler, the event listener and the poller. The event-stream anchor
+// is captured before the reconciler's first resync lists anything, so every change made while
+// that resync runs reaches the reconciler as an event. The poller waits for that first resync.
+func startWorkers(
+	parentContext context.Context,
+	waitGroup *sync.WaitGroup,
+	dockerAPI collector.DockerAPI,
+	delay time.Duration,
+) {
+	reconciler := collector.NewReconciler(dockerAPI)
+	anchor := time.Now()
+
+	waitGroup.Go(func() { reconciler.Run(parentContext) })
+	startEventListener(parentContext, waitGroup, dockerAPI, reconciler, anchor)
+	startPoller(parentContext, waitGroup, dockerAPI, delay, reconciler.Ready())
+}
+
+// startEventListener starts the goroutine that follows the event stream from anchor, handing
+// every event to reconciler, until parentContext is done.
 func startEventListener(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
 	dockerAPI collector.DockerAPI,
-	seeded chan<- struct{},
+	reconciler *collector.Reconciler,
+	anchor time.Time,
 ) {
 	waitGroup.Go(func() {
-		loggerInstance := logger.L()
-
-		// The seed returns an anchor to use as the initial "since" for events.
-		initialSinceAnchor, seedErr := collector.SeedWithRetry(parentContext, dockerAPI)
-		if seedErr != nil {
-			// SeedWithRetry only gives up when parentContext is done.
-			loggerInstance.Debug(
-				"event listener stopped before the first successful seed",
-				"err",
-				seedErr,
-			)
-
-			return
-		}
-
-		close(seeded)
-
-		listenErr := collector.ListenSwarmEvents(parentContext, dockerAPI, initialSinceAnchor)
+		listenErr := collector.ListenSwarmEvents(parentContext, dockerAPI, reconciler, anchor)
 		if !errors.Is(listenErr, context.Canceled) {
-			loggerInstance.Error("event listener exited with error", "err", listenErr)
+			logger.L().Error("event listener exited with error", "err", listenErr)
 		}
 	})
 }
 
 // startPoller starts the goroutine that polls tasks (and containers, when enabled) every delay.
-// It waits for seeded first: before the seed the metadata cache is empty, and a poll would
-// publish services without their desired counts.
+// It waits for ready first, closed once the reconciler's first resync completed: before it the
+// metadata cache is empty, and a poll would publish services without their desired counts.
 func startPoller(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
 	dockerAPI collector.DockerAPI,
 	delay time.Duration,
-	seeded <-chan struct{},
+	ready <-chan struct{},
 ) {
 	waitGroup.Go(func() {
 		loggerInstance := logger.L()
 
 		select {
 		case <-parentContext.Done():
-			loggerInstance.Debug("polling loop: context canceled before the first successful seed")
+			loggerInstance.Debug("polling loop: context canceled before the first resync completed")
 
 			return
-		case <-seeded:
+		case <-ready:
 		}
 
 		loggerInstance.Debug("start polling replicas state", "every", delay)

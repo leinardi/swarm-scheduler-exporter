@@ -41,19 +41,19 @@ import (
 	"github.com/leinardi/swarm-scheduler-exporter/internal/server"
 )
 
-var errSeedUnavailable = errors.New("service list unavailable")
+var errListUnavailable = errors.New("service list unavailable")
 
 // lifecycleDocker is a collector.DockerAPI for the wiring tests: an empty swarm whose ServiceList
-// fails its first seedFailures calls, and whose event stream stays open until its context ends.
+// fails its first resyncFailures calls, and whose event stream stays open until its context ends.
 type lifecycleDocker struct {
-	seedFailures int
+	resyncFailures int
 
-	mu                 sync.Mutex
-	serviceListCalls   int
-	seeded             bool
-	taskListCalls      int
-	taskListBeforeSeed bool
-	eventsCalls        int
+	mu                   sync.Mutex
+	serviceListCalls     int
+	resynced             bool
+	taskListCalls        int
+	taskListBeforeResync bool
+	eventsCalls          int
 }
 
 var _ collector.DockerAPI = (*lifecycleDocker)(nil)
@@ -73,11 +73,11 @@ func (d *lifecycleDocker) ServiceList(
 	defer d.mu.Unlock()
 
 	d.serviceListCalls++
-	if d.serviceListCalls <= d.seedFailures {
-		return client.ServiceListResult{}, errSeedUnavailable
+	if d.serviceListCalls <= d.resyncFailures {
+		return client.ServiceListResult{}, errListUnavailable
 	}
 
-	d.seeded = true
+	d.resynced = true
 
 	return client.ServiceListResult{}, nil
 }
@@ -98,8 +98,8 @@ func (d *lifecycleDocker) TaskList(
 	defer d.mu.Unlock()
 
 	d.taskListCalls++
-	if !d.seeded {
-		d.taskListBeforeSeed = true
+	if !d.resynced {
+		d.taskListBeforeResync = true
 	}
 
 	return client.TaskListResult{}, nil
@@ -129,20 +129,18 @@ func (d *lifecycleDocker) Events(context.Context, client.EventsListOptions) clie
 	return client.EventsResult{Messages: make(chan events.Message), Err: make(chan error)}
 }
 
-func (d *lifecycleDocker) snapshot() (serviceListCalls, taskListCalls, eventsCalls int, taskListBeforeSeed bool) {
+func (d *lifecycleDocker) snapshot() (serviceListCalls, taskListCalls, eventsCalls int, taskListBeforeResync bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	return d.serviceListCalls, d.taskListCalls, d.eventsCalls, d.taskListBeforeSeed
+	return d.serviceListCalls, d.taskListCalls, d.eventsCalls, d.taskListBeforeResync
 }
 
-// startWorkers starts the event listener and the poller the way run does.
-func startWorkers(ctx context.Context, dockerAPI collector.DockerAPI) *sync.WaitGroup {
+// runWorkers starts the reconciler, the event listener and the poller the way run does.
+func runWorkers(ctx context.Context, dockerAPI collector.DockerAPI) *sync.WaitGroup {
 	var workerGroup sync.WaitGroup
 
-	seeded := make(chan struct{})
-	startEventListener(ctx, &workerGroup, dockerAPI, seeded)
-	startPoller(ctx, &workerGroup, dockerAPI, time.Hour, seeded)
+	startWorkers(ctx, &workerGroup, dockerAPI, time.Hour)
 
 	return &workerGroup
 }
@@ -184,15 +182,15 @@ func waitWorkers(t *testing.T, workerGroup *sync.WaitGroup) {
 	}
 }
 
-func TestWorkers_SeedRetryThenPollAndListenOnce(t *testing.T) {
-	dockerAPI := &lifecycleDocker{seedFailures: 1}
+func TestWorkers_FirstResyncRetryThenPollAndListenOnce(t *testing.T) {
+	dockerAPI := &lifecycleDocker{resyncFailures: 1}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	workerGroup := startWorkers(ctx, dockerAPI)
+	workerGroup := runWorkers(ctx, dockerAPI)
 
-	waitUntil(t, "the first poll after the seed", func() bool {
+	waitUntil(t, "the first poll after the first resync", func() bool {
 		_, taskListCalls, _, _ := dockerAPI.snapshot()
 
 		return taskListCalls > 0
@@ -206,14 +204,14 @@ func TestWorkers_SeedRetryThenPollAndListenOnce(t *testing.T) {
 	cancel()
 	waitWorkers(t, workerGroup)
 
-	serviceListCalls, _, eventsCalls, taskListBeforeSeed := dockerAPI.snapshot()
+	serviceListCalls, _, eventsCalls, taskListBeforeResync := dockerAPI.snapshot()
 
-	if taskListBeforeSeed {
-		t.Error("the poller listed tasks before the seed succeeded")
+	if taskListBeforeResync {
+		t.Error("the poller listed tasks before the first resync succeeded")
 	}
 
 	if serviceListCalls != 2 {
-		t.Errorf("ServiceList calls = %d, want 2 (one failed seed, one retry)", serviceListCalls)
+		t.Errorf("ServiceList calls = %d, want 2 (one failed resync, one retry)", serviceListCalls)
 	}
 
 	if eventsCalls != 1 {
@@ -221,32 +219,33 @@ func TestWorkers_SeedRetryThenPollAndListenOnce(t *testing.T) {
 	}
 }
 
-func TestWorkers_CancelBeforeSeedStopsBoth(t *testing.T) {
-	dockerAPI := &lifecycleDocker{seedFailures: 1 << 30}
+func TestWorkers_CancelBeforeFirstResyncStopsPoller(t *testing.T) {
+	dockerAPI := &lifecycleDocker{resyncFailures: 1 << 30}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	workerGroup := startWorkers(ctx, dockerAPI)
+	workerGroup := runWorkers(ctx, dockerAPI)
 
-	waitUntil(t, "the first seed attempt", func() bool {
+	waitUntil(t, "the first resync attempt", func() bool {
 		serviceListCalls, _, _, _ := dockerAPI.snapshot()
 
 		return serviceListCalls > 0
 	})
 
-	// The listener is now waiting out its backoff and the poller is waiting for the seed.
+	// The reconciler is now waiting out its backoff and the poller is waiting for the first
+	// resync; the event stream is open, since it must be before the resync lists anything.
 	cancel()
 	waitWorkers(t, workerGroup)
 
 	_, taskListCalls, eventsCalls, _ := dockerAPI.snapshot()
 
 	if taskListCalls != 0 {
-		t.Errorf("TaskList calls = %d, want 0: the seed never succeeded", taskListCalls)
+		t.Errorf("TaskList calls = %d, want 0: the first resync never succeeded", taskListCalls)
 	}
 
-	if eventsCalls != 0 {
-		t.Errorf("event streams opened = %d, want 0: the seed never succeeded", eventsCalls)
+	if eventsCalls > 1 {
+		t.Errorf("event streams opened = %d, want at most 1", eventsCalls)
 	}
 }
 
@@ -292,20 +291,20 @@ func getHealthz(t *testing.T, pollDelay time.Duration) *httptest.ResponseRecorde
 	return recorder
 }
 
-func TestWorkers_PermanentSeedFailureIsUnhealthy(t *testing.T) {
+func TestWorkers_PermanentResyncFailureIsUnhealthy(t *testing.T) {
 	pollDelay := time.Second
 	registry := configureHealthMetrics(t, pollDelay)
 
-	dockerAPI := &lifecycleDocker{seedFailures: 1 << 30}
+	dockerAPI := &lifecycleDocker{resyncFailures: 1 << 30}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	workerGroup := startWorkers(ctx, dockerAPI)
+	workerGroup := runWorkers(ctx, dockerAPI)
 
-	// A second attempt comes after the first backoff. A poller that did not wait for the seed
-	// polls as soon as it starts, so by then it would have published and turned health green.
-	waitUntil(t, "a second failed seed attempt", func() bool {
+	// A second attempt comes after the first backoff. A poller that did not wait for the first
+	// resync polls as soon as it starts, so by then it would have published a poll.
+	waitUntil(t, "a second failed resync attempt", func() bool {
 		serviceListCalls, _, _, _ := dockerAPI.snapshot()
 
 		return serviceListCalls > 1
@@ -317,8 +316,8 @@ func TestWorkers_PermanentSeedFailureIsUnhealthy(t *testing.T) {
 		t.Errorf("/healthz status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
 
-	if body := recorder.Body.String(); body != "no successful poll yet\n" {
-		t.Errorf("/healthz body = %q, want the never-polled reason", body)
+	if body := recorder.Body.String(); body != "initial resync not completed\n" {
+		t.Errorf("/healthz body = %q, want the not-ready reason", body)
 	}
 
 	if got := gatheredValue(t, registry, "swarm_exporter_health"); got != 0 {
@@ -329,18 +328,18 @@ func TestWorkers_PermanentSeedFailureIsUnhealthy(t *testing.T) {
 	waitWorkers(t, workerGroup)
 }
 
-func TestWorkers_SeedThenPublishIsHealthy(t *testing.T) {
+func TestWorkers_ResyncThenPublishIsHealthy(t *testing.T) {
 	pollDelay := time.Second
 	registry := configureHealthMetrics(t, pollDelay)
 
-	dockerAPI := &lifecycleDocker{seedFailures: 1}
+	dockerAPI := &lifecycleDocker{resyncFailures: 1}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	workerGroup := startWorkers(ctx, dockerAPI)
+	workerGroup := runWorkers(ctx, dockerAPI)
 
-	waitUntil(t, "/healthz to report healthy after the retried seed", func() bool {
+	waitUntil(t, "/healthz to report healthy after the retried resync", func() bool {
 		return getHealthz(t, pollDelay).Code == http.StatusOK
 	})
 

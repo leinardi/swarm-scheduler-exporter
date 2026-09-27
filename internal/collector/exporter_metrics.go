@@ -35,6 +35,7 @@ var (
 	pollsTotalCounter            prometheus.Counter
 	pollErrorsTotalCounter       prometheus.Counter
 	eventsReconnectsTotalCounter prometheus.Counter
+	eventsDroppedTotalCounter    prometheus.Counter
 )
 
 // ConfigureExporterOpsMetrics registers exporter self-observability metrics.
@@ -76,6 +77,15 @@ func ConfigureExporterOpsMetrics() {
 		ConstLabels: nil,
 	})
 	prometheus.MustRegister(eventsReconnectsTotalCounter)
+
+	eventsDroppedTotalCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
+		Name:        "events_dropped_total",
+		Help:        "Total number of Swarm events dropped because they carried no actor ID.",
+		ConstLabels: nil,
+	})
+	prometheus.MustRegister(eventsDroppedTotalCounter)
 }
 
 // ObservePollDuration records a single poll duration.
@@ -105,5 +115,12 @@ func IncPollErrors() {
 func IncEventReconnect() {
 	if eventsReconnectsTotalCounter != nil {
 		eventsReconnectsTotalCounter.Inc()
+	}
+}
+
+// IncEventsDropped increments the dropped events counter.
+func IncEventsDropped() {
+	if eventsDroppedTotalCounter != nil {
+		eventsDroppedTotalCounter.Inc()
 	}
 }

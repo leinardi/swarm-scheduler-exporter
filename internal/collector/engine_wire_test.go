@@ -204,6 +204,7 @@ var engineWireExcludedFamilies = map[string]string{
 	"swarm_exporter_health":                  "derived from wall-clock poll freshness",
 	"swarm_exporter_build_info":              "ldflags, not SDK data",
 	"swarm_exporter_events_reconnects_total": "asserted by the reconnect case instead",
+	"swarm_exporter_events_dropped_total":    "asserted by the reconciler unit tests instead",
 }
 
 func engineWireExpectations(t *testing.T) wireExpectations {
@@ -734,6 +735,7 @@ func restoreCollectorGlobals(t *testing.T) {
 	nodesByState := nodesByStateGauge
 	pollDuration, polls, pollErrors, reconnects := pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter,
 		eventsReconnectsTotalCounter
+	dropped := eventsDroppedTotalCounter
 	updateState, updateStarted, updateCompleted := serviceUpdateStateGauge, serviceUpdateStartedTimestamp,
 		serviceUpdateCompletedTimestamp
 	containersState, enabled, includeSwarm := containersStateGauge, containersEnabled, containersIncludeSwarm
@@ -748,6 +750,7 @@ func restoreCollectorGlobals(t *testing.T) {
 		nodesByStateGauge = nodesByState
 		pollDurationHistogram, pollsTotalCounter, pollErrorsTotalCounter, eventsReconnectsTotalCounter = pollDuration,
 			polls, pollErrors, reconnects
+		eventsDroppedTotalCounter = dropped
 		serviceUpdateStateGauge, serviceUpdateStartedTimestamp, serviceUpdateCompletedTimestamp = updateState,
 			updateStarted, updateCompleted
 		containersStateGauge, containersEnabled, containersIncludeSwarm = containersState, enabled, includeSwarm
@@ -921,19 +924,20 @@ func requestsTo(entries []recordedRequest, path string) []recordedRequest {
 // runListener starts ListenSwarmEvents and returns a stop that cancels it and asserts it returned
 // a context.Canceled wrap within engineWireCancelBound. stop is idempotent and also registered as
 // a cleanup, so a failed wait still stops the listener before earlier cleanups restore the package
-// globals its workers read.
+// globals it reads.
 func runListener(
 	t *testing.T,
 	ctx context.Context,
 	dockerClient DockerAPI,
-	since time.Time,
+	reconciler *Reconciler,
+	anchor time.Time,
 ) (stop func()) {
 	t.Helper()
 
 	listenerContext, cancel := context.WithCancel(ctx)
 	listenerDone := make(chan error, 1)
 
-	go func() { listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, since) }()
+	go func() { listenerDone <- ListenSwarmEvents(listenerContext, dockerClient, reconciler, anchor) }()
 
 	var stopOnce sync.Once
 
@@ -1115,21 +1119,23 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	expectations := engineWireExpectations(t)
 	recorder := engine.recorder
 
-	// Phase 1: startup seeding. Sequential: service list, then node list.
+	// Phase 1: the reconciler's first resync. Sequential: service list, then node list.
 	recorder.reset()
 
-	beforeInit := time.Now()
+	reconciler := NewReconciler(dockerClient)
 
-	since, initErr := InitDesiredReplicasGauge(ctx, dockerClient)
-	if initErr != nil {
-		t.Fatalf("InitDesiredReplicasGauge: %v", initErr)
+	// The event-stream anchor, captured before the resync lists anything, as main does.
+	anchor := time.Now()
+
+	reconciler.resync(ctx)
+
+	if _, completed, _ := reconciler.resyncState(); completed == 0 {
+		t.Fatal("first resync did not complete")
 	}
-
-	afterInit := time.Now()
 
 	assertRequestSequence(
 		t,
-		"InitDesiredReplicasGauge",
+		"first resync",
 		normalizedRequests(recorder.phaseRequests()),
 		[]string{
 			"GET /services",
@@ -1186,8 +1192,10 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	)
 
 	// Phase 4: events, happy path. One connection streams a service update and a node update and
-	// then stays open. Workers handle the two events concurrently, so their requests are compared
-	// as a multiset; only "/events first" is an ordering the code guarantees.
+	// then stays open. The reconciler inspects the updated service and refreshes the nodes,
+	// recomputing every service from the cached placement; when the two events land in the same
+	// cycle is timing, so their requests are compared as a multiset, and only "/events first" is
+	// an ordering the code guarantees.
 	recorder.reset()
 	engine.scriptEvents(eventsConnection{fixture: "events-happy.jsonl", hold: true})
 
@@ -1196,10 +1204,11 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		"GET /events?filters={type:[node,service]}&since=<time>",
 		serviceInspectRequest(expectations.serviceInspectQuery, "svc-api"),
 		"GET /nodes",
-		serviceInspectRequest(expectations.serviceInspectQuery, "svc-agent"),
 	}
 
-	stopListener := runListener(t, ctx, dockerClient, since)
+	runReconciler(t, reconciler)
+
+	stopListener := runListener(t, ctx, dockerClient, reconciler, anchor)
 	apiLabels := serviceSeriesLabels(t, "svc-api")
 
 	waitForEngineWire(
@@ -1234,11 +1243,10 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 	}
 
 	if connections := requestsTo(eventRequests, "/events"); len(connections) == 1 {
-		// The anchor is formatted with second resolution before it is sent.
+		// The anchor minus the margin, sent with nanosecond resolution.
 		gotSince := eventsSince(t, &connections[0])
-		if gotSince.Before(beforeInit.Truncate(time.Second)) || gotSince.After(afterInit) {
-			t.Errorf("events since = %s, want the Init anchor, taken between %s and %s", gotSince,
-				beforeInit, afterInit)
+		if wantSince := anchor.Add(-eventsSinceMargin); !gotSince.Equal(wantSince) {
+			t.Errorf("events since = %s, want the anchor minus the margin, %s", gotSince, wantSince)
 		}
 	} else {
 		t.Errorf("happy path: %d /events requests, want exactly 1", len(connections))
@@ -1286,7 +1294,7 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		"GET /events?filters={type:[node,service]}&since=<time>",
 	}
 
-	stopListener = runListener(t, ctx, dockerClient, since)
+	stopListener = runListener(t, ctx, dockerClient, reconciler, anchor)
 
 	waitForEngineWire(t, ctx, "the event's inspect and a second /events connection", func() bool {
 		return len(recorder.phaseRequests()) >= len(wantReconnectRequests)
@@ -1304,8 +1312,8 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 
 	if connections := requestsTo(reconnectRequests, "/events"); len(connections) == 2 {
 		lastEvent := time.Unix(0, engineWireReconnectEventTimeNano)
-		// Resume 500 ms before the last event, sent with second resolution.
-		wantSince := lastEvent.Add(-500 * time.Millisecond).Truncate(time.Second)
+		// Resume eventsSinceMargin before the last event, sent with nanosecond resolution.
+		wantSince := lastEvent.Add(-eventsSinceMargin)
 
 		if gotSince := eventsSince(t, &connections[1]); !gotSince.Equal(wantSince) {
 			t.Errorf(

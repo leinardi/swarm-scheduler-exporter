@@ -87,5 +87,6 @@ func TestConfigureExporterOpsMetrics_RegistersWithoutPanic(t *testing.T) {
 		prometheus.Unregister(pollsTotalCounter)
 		prometheus.Unregister(pollErrorsTotalCounter)
 		prometheus.Unregister(eventsReconnectsTotalCounter)
+		prometheus.Unregister(eventsDroppedTotalCounter)
 	})
 }

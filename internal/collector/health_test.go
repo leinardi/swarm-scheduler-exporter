@@ -33,10 +33,24 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
+// resetHealthState clears the poll timestamp and installs a reconciler whose first resync
+// completed, so the tests below see only the poll-freshness checks unless they change it.
 func resetHealthState(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() { lastPollSuccessUnixNano.Store(0) })
+
+	previous := activeReconciler.Load()
+
+	t.Cleanup(func() {
+		lastPollSuccessUnixNano.Store(0)
+		activeReconciler.Store(previous)
+	})
+
 	lastPollSuccessUnixNano.Store(0)
+
+	ready := NewReconciler(&fakeDocker{})
+	ready.resyncCompleted = ready.resyncRequested
+	ready.resyncOutstandingSince = time.Time{}
+	activeReconciler.Store(ready)
 }
 
 func TestHealthSnapshot_NeverPolled(t *testing.T) {

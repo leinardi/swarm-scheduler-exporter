@@ -100,9 +100,22 @@ func MarkEventsConnected(now time.Time) {
 
 // HealthSnapshot returns whether the exporter is healthy and a human reason.
 // Healthy if:
-//   - we have at least one successful poll, and
-//   - that poll is not older than max(3*pollDelay, 30s).
+//   - the reconciler completed its first resync, so the caches hold every service and node,
+//   - we have at least one successful poll,
+//   - that poll is not older than max(3*pollDelay, 30s), and
+//   - no requested resync has been outstanding for longer than that same window: a resync that
+//     keeps failing leaves the caches behind Docker while polls still succeed.
 func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reason string) {
+	reconciler := activeReconciler.Load()
+	if reconciler == nil {
+		return false, "initial resync not completed"
+	}
+
+	requested, completed, outstandingSince := reconciler.resyncState()
+	if completed == 0 {
+		return false, "initial resync not completed"
+	}
+
 	lastPollUnixNano := lastPollSuccessUnixNano.Load()
 	if lastPollUnixNano == 0 {
 		return false, "no successful poll yet"
@@ -117,6 +130,10 @@ func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reaso
 
 	if now.Sub(lastPoll) > window {
 		return false, "last poll too old"
+	}
+
+	if requested > completed && now.Sub(outstandingSince) > window {
+		return false, "resync outstanding"
 	}
 
 	return true, ""

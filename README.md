@@ -11,7 +11,8 @@ accurate eligibility for `global` services), **live task state** per service (cu
 
 ## 📦 What This Exporter Does
 
-- Watches Swarm **service** and **node** events to keep metrics fresh (resilient reconnect, bounded worker pool).
+- Watches Swarm **service** and **node** events to keep metrics fresh: events only mark what changed, and a single reconciler
+  inspects it, backed by a full resync (service and node list) at startup, every 5 minutes, and whenever it had to drop changes.
 - Periodically polls **tasks** and aggregates **current** states per service (current task per slot for replicated services or per node for
   global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only: status/availability/constraints/platforms).
@@ -109,6 +110,7 @@ Every service-level metric, including the update/rollback metrics below, carries
 - `swarm_exporter_polls_total` / `swarm_exporter_poll_errors_total`.
 - `swarm_exporter_poll_duration_seconds` (histogram).
 - `swarm_exporter_events_reconnects_total`.
+- `swarm_exporter_events_dropped_total` — Swarm events ignored because they carried no actor ID.
 
 ### Container-level (opt-in)
 
@@ -136,11 +138,12 @@ the exporter can expose **container state** metrics when started with `-containe
 
 ## ✅ Health
 
-The exporter is healthy once a task poll has been published and the latest published poll is no older than
-`max(3 × -poll-delay, 30s)` (30s with the default 10s poll delay).
+The exporter is healthy once its first resync (service and node list) has completed, a task poll has been published, and the
+latest published poll is no older than `max(3 × -poll-delay, 30s)` (30s with the default 10s poll delay). A requested resync that
+stays outstanding for longer than that same window, for example because listing services keeps failing, makes it unhealthy too.
 
-- HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason (for example
-  `no successful poll yet` or `last poll too old`) when not.
+- HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason (`initial resync not completed`,
+  `no successful poll yet`, `last poll too old` or `resync outstanding`) when not.
 - Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy, evaluated at every scrape.
 
 ## 📋 Requirements
@@ -405,13 +408,13 @@ scrape_configs:
 
 ## 🛠 Addressed vs Original Project
 
-- **Data races**: guarded metadata cache; removed global `nodeCount`; added worker pool; no per-event goroutines.
-- **Event resiliency**: reconnect with capped backoff; bounded workers; fixed pointer-to-loop-var; per-worker panic recovery.
+- **Data races**: one reconciler goroutine owns every cache and per-service metric write; removed global `nodeCount`; no per-event goroutines.
+- **Event resiliency**: reconnect with capped backoff; a bounded dirty set that falls back to a full resync; periodic resync.
 - **Series lifecycle**: `replicas_state` is rebuilt and published as one snapshot per poll, so a scrape never sees it empty or partial; exhaustive zero emission per current service; delete series on service remove.
 - **Global desired replicas accuracy**: evaluate **eligible nodes** (status/availability/constraints/platforms), not total nodes.
 - **Label sanitation & validation**: full Prometheus regex, collision checks, max label keys, high-cardinality warning, raw→sanitized mapping.
 - **Operability**: graceful shutdown; `/healthz`; health/build/exporter metrics; quieter default logs; validated `-poll-delay`.
-- **Performance**: node snapshot cache; on node events recompute **only** global services; task poll optimized to “current task per slot/node”; worker pool.
+- **Performance**: node snapshot cache; on node events recompute every service from cached placement, without inspecting it; task poll optimized to “current task per slot/node”; burst events coalesced per service.
 - **Metrics namespace**: consistent `swarm_*` names & labels aligned with Prometheus best practices.
 - **Service update visibility**: `swarm_service_update_state_info` + timestamps for rollbacks/paused/update flows.
 - **SLO helpers**: `swarm_service_running_replicas` and `swarm_service_at_desired` for direct alerting/dashboards.

@@ -35,12 +35,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"runtime/debug"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
@@ -60,12 +57,9 @@ var desiredReplicasGauge *prometheus.GaugeVec
 // For jobs and RestartPolicy.Condition=="none" services it is always 0.
 var schedulableReplicasGauge *prometheus.GaugeVec
 
-// Event stream / worker pool configuration.
-// These defaults keep memory bounded and provide good throughput.
+// Backoff for event-stream reconnects, node refreshes and resyncs.
 const (
-	eventWorkerCount    = 4                      // number of concurrent event workers
-	eventQueueCapacity  = 256                    // buffered queue size for incoming events
-	backoffInitialDelay = 500 * time.Millisecond // first reconnect delay
+	backoffInitialDelay = 500 * time.Millisecond // first retry delay
 	backoffMaxDelay     = 30 * time.Second       // cap for exponential backoff
 	backoffMultiplier   = 2                      // multiplier for exponential backoff
 )
@@ -120,82 +114,6 @@ func ConfigureDesiredReplicasGauge() {
 		ConstLabels: nil,
 	}, labelutil.SanitizeLabelNames(baseLabels))
 	prometheus.MustRegister(schedulableReplicasGauge)
-}
-
-// InitDesiredReplicasGauge seeds the gauge with current desired replica counts
-// by listing services and nodes once, at startup.
-// It returns a time anchor captured immediately before the first API call,
-// which should be used as the initial "Since" value when starting the events stream.
-func InitDesiredReplicasGauge(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-) (time.Time, error) {
-	// Capture an anchor *before* we read the world, so any concurrent changes
-	// during seeding will still be caught by the event stream started with this "since".
-	initialSinceAnchor := time.Now()
-
-	// Both lists are fetched before anything is written, so a failed attempt leaves no partial
-	// state behind for the next one.
-	services, serviceListErr := listServices(parentContext, dockerClient)
-	if serviceListErr != nil {
-		return time.Time{}, serviceListErr
-	}
-
-	nodes, nodeListErr := listNodes(parentContext, dockerClient)
-	if nodeListErr != nil {
-		return time.Time{}, nodeListErr
-	}
-
-	setCachedNodes(nodes)
-	UpdateNodesByStateFromSlice(nodes)
-
-	// No Reset before seeding: this runs once, at startup, on empty vectors, and a Reset here
-	// would let a scrape see the families empty. Removed services are dropped by the Delete
-	// calls in processEvent.
-	for index := range services { // avoid copying large struct
-		service := &services[index]
-		builtMetadata := buildMetadata(service)
-		setServiceMetadata(service.ID, &builtMetadata)
-		metadata := mustGetServiceMetadata(service.ID)
-		updateServiceReplicasGauge(
-			parentContext,
-			dockerClient,
-			service,
-			&metadata,
-		)
-		UpdateServiceUpdateMetricsForService(service, &metadata)
-	}
-
-	return initialSinceAnchor, nil
-}
-
-// SeedWithRetry runs InitDesiredReplicasGauge until it succeeds, waiting between attempts with
-// the capped exponential backoff used for event-stream reconnects. A failed seed must not end the
-// event listener: without the seed nothing would ever fill the metadata cache, so desired,
-// schedulable and update metrics would never be emitted. It returns the anchor of the successful
-// attempt, or an error wrapping parentContext.Err() once parentContext is done.
-func SeedWithRetry(parentContext context.Context, dockerClient DockerAPI) (time.Time, error) {
-	backoffDelay := backoffInitialDelay
-
-	for {
-		anchor, seedErr := InitDesiredReplicasGauge(parentContext, dockerClient)
-		if seedErr == nil {
-			return anchor, nil
-		}
-
-		if parentContext.Err() != nil {
-			return time.Time{}, fmt.Errorf("seed stopping: %w", parentContext.Err())
-		}
-
-		logger.L().Warn("seed failed; will retry", "err", seedErr, "backoff", backoffDelay)
-
-		waitErr := waitBackoff(parentContext, backoffDelay)
-		if waitErr != nil {
-			return time.Time{}, fmt.Errorf("seed canceled during backoff: %w", waitErr)
-		}
-
-		backoffDelay = nextBackoff(backoffDelay)
-	}
 }
 
 // waitBackoff waits for delay, or returns parentContext.Err() as soon as parentContext is done.
@@ -266,17 +184,18 @@ func inspectService(
 	return inspectResult.Service, nil
 }
 
-// ListenSwarmEvents listens to Docker events for service and node changes.
-// It maintains a resilient connection with capped exponential backoff,
-// and uses a bounded worker pool to process events without unbounded goroutines.
-// The stream will include events "since" the given time anchor, so that no changes
-// are missed between the initial seeding and the first stream connection.
-// It only returns once parentContext is done, and the error it returns always wraps
-// parentContext.Err(); it never returns nil.
+// ListenSwarmEvents follows the Docker event stream for service and node changes and hands every
+// event to reconciler, which only marks what changed dirty, so the stream is always drained. It
+// reconnects with capped exponential backoff. The first connection starts eventsSinceMargin
+// before anchor, which the caller captures before the reconciler's first resync lists anything,
+// so no change made while that resync runs is missed; a reconnect resumes eventsSinceMargin
+// before the last event seen. It only returns once parentContext is done, and the error it
+// returns always wraps parentContext.Err(); it never returns nil.
 func ListenSwarmEvents(
 	parentContext context.Context,
 	dockerClient DockerAPI,
-	initialSince time.Time,
+	reconciler *Reconciler,
+	anchor time.Time,
 ) error {
 	filterArgs := make(client.Filters).Add("type", "service", "node")
 
@@ -284,7 +203,7 @@ func ListenSwarmEvents(
 	backoffDelay := backoffInitialDelay
 
 	// Track where to resume from on reconnects.
-	reconnectSince := initialSince
+	reconnectSince := anchor.Add(-eventsSinceMargin)
 
 	for {
 		select {
@@ -293,50 +212,21 @@ func ListenSwarmEvents(
 		default:
 		}
 
-		eventsResult := dockerClient.Events(parentContext, client.EventsListOptions{
-			Since:   reconnectSince.Format(time.RFC3339), // include events since our last anchor
-			Filters: filterArgs,
-			Until:   "",
-		})
-
-		// Mark event stream connected for health.
-		MarkEventsConnected(time.Now())
-
-		logger.L().Info("event stream connected; starting dispatcher and workers",
-			"worker_count", eventWorkerCount,
-			"queue_capacity", eventQueueCapacity,
-			"since", reconnectSince.Format(time.RFC3339Nano),
-		)
-
-		// Run the dispatcher + worker pool until the stream ends or errors.
-		lastSeenEventTime, runErr := runEventPump(
+		lastSeenEventTime, runErr := followEventStream(
 			parentContext,
 			dockerClient,
-			eventsResult.Messages,
-			eventsResult.Err,
+			reconciler,
+			filterArgs,
+			reconnectSince,
 		)
 
-		// Reset backoff after a healthy stream that saw at least one event
+		// Reset backoff after a healthy stream that saw at least one event, and resume from it.
 		if !lastSeenEventTime.IsZero() {
-			// We processed at least one event → consider the connection healthy.
-			// Reset backoff so the next transient failure won’t be penalized.
-			if backoffDelay != backoffInitialDelay {
-				logger.L().Debug("resetting events backoff to initial after healthy stream",
-					"previous_backoff", backoffDelay,
-					"initial_backoff", backoffInitialDelay,
-				)
-			}
-
 			backoffDelay = backoffInitialDelay
-		}
-		// -------------------------------------------------------------------------------
-
-		// Update the resume point for the next connection.
-		if !lastSeenEventTime.IsZero() {
-			reconnectSince = lastSeenEventTime.Add(-500 * time.Millisecond)
+			reconnectSince = lastSeenEventTime.Add(-eventsSinceMargin)
 		}
 
-		// runEventPump always returns an error. When it ended because we are shutting down,
+		// followEventStream always returns an error. When it ended because we are shutting down,
 		// stop here: counting a reconnect and logging "will reconnect" would be wrong.
 		if parentContext.Err() != nil {
 			return fmt.Errorf("event listener stopping: %w", parentContext.Err())
@@ -362,261 +252,95 @@ func ListenSwarmEvents(
 	}
 }
 
-// runEventPump wires a bounded queue and a fixed pool of workers to process events.
-// It returns when the stream errors/closes or when the context is canceled.
-// The returned time is the timestamp of the last event that was dequeued
-// (and therefore eligible for processing).
-func runEventPump(
+// followEventStream opens one event-stream connection and dispatches its events until it ends.
+// The connection gets its own context, with no deadline: the stream is long-lived, so the
+// request deadline of the other calls would cut it. It is canceled when the connection ends,
+// which releases the connection before a reconnect, and with parentContext on shutdown.
+func followEventStream(
 	parentContext context.Context,
 	dockerClient DockerAPI,
-	eventChannel <-chan events.Message,
-	errorChannel <-chan error,
+	reconciler *Reconciler,
+	filterArgs client.Filters,
+	since time.Time,
 ) (time.Time, error) {
-	// Bounded queue so we never spawn unbounded goroutines.
-	jobsChannel := make(chan events.Message, eventQueueCapacity)
+	streamContext, cancelStream := context.WithCancel(parentContext)
+	defer cancelStream()
 
-	var workerGroup sync.WaitGroup
-	workerGroup.Add(eventWorkerCount)
+	eventsResult := dockerClient.Events(streamContext, client.EventsListOptions{
+		// RFC 3339 with nanoseconds: the client turns it into "<seconds>.<nanoseconds>", so the
+		// margin is not rounded away.
+		Since:   since.UTC().Format(time.RFC3339Nano),
+		Filters: filterArgs,
+		Until:   "",
+	})
 
-	// Start workers.
-	startEventWorkers(parentContext, dockerClient, jobsChannel, eventWorkerCount, &workerGroup)
+	// Mark event stream connected for health.
+	MarkEventsConnected(time.Now())
 
-	// Run dispatcher.
-	var lastSeenEventTime time.Time
+	logger.L().Info("event stream connected", "since", since.Format(time.RFC3339Nano))
 
-	dispatcherErr := dispatchEvents(
-		parentContext,
-		jobsChannel,
-		eventChannel,
-		errorChannel,
-		&lastSeenEventTime,
-	)
-
-	// Stop accepting new jobs and wait for workers to finish.
-	close(jobsChannel)
-	workerGroup.Wait()
-
-	return lastSeenEventTime, dispatcherErr
+	return dispatchEvents(parentContext, reconciler, eventsResult.Messages, eventsResult.Err)
 }
 
-// dispatchEvents fans in Docker events into jobs; returns when stream ends or context cancels.
-// It also tracks the timestamp of the last event observed, which is used to resume the stream
+// dispatchEvents hands every event to reconciler until the stream ends or the context is
+// canceled. It returns the timestamp of the last event seen, which is used to resume the stream
 // on reconnect without missing changes.
 func dispatchEvents(
 	parentContext context.Context,
-	jobsChannel chan<- events.Message,
+	reconciler *Reconciler,
 	eventChannel <-chan events.Message,
 	errorChannel <-chan error,
-	lastSeenEventTime *time.Time,
-) error {
-	var dispatcherErr error
+) (time.Time, error) {
+	var lastSeenEventTime time.Time
 
-dispatchLoop:
 	for {
 		select {
 		case <-parentContext.Done():
-			dispatcherErr = fmt.Errorf("event pump context canceled: %w", parentContext.Err())
-
-			break dispatchLoop
+			return lastSeenEventTime, fmt.Errorf(
+				"event pump context canceled: %w",
+				parentContext.Err(),
+			)
 
 		case streamErr := <-errorChannel:
 			// A canceled stream can end with a closed-body error instead of context.Canceled:
 			// report the cancellation, so shutdown is not taken for a stream failure.
 			if parentContext.Err() != nil {
-				dispatcherErr = fmt.Errorf("event pump context canceled: %w", parentContext.Err())
-
-				break dispatchLoop
+				return lastSeenEventTime, fmt.Errorf(
+					"event pump context canceled: %w",
+					parentContext.Err(),
+				)
 			}
 
 			// Stream error—trigger reconnect at the caller.
-			dispatcherErr = fmt.Errorf("events stream error: %w", streamErr)
-
-			break dispatchLoop
+			return lastSeenEventTime, fmt.Errorf("events stream error: %w", streamErr)
 
 		case eventMessage, ok := <-eventChannel:
 			if !ok {
 				if parentContext.Err() != nil {
-					dispatcherErr = fmt.Errorf("event pump context canceled: %w", parentContext.Err())
-
-					break dispatchLoop
+					return lastSeenEventTime, fmt.Errorf(
+						"event pump context canceled: %w",
+						parentContext.Err(),
+					)
 				}
 
 				// Channel closed by Docker client—treat as EOF and reconnect.
-				dispatcherErr = fmt.Errorf("events stream closed: %w", ErrEventsStreamClosed)
-
-				break dispatchLoop
+				return lastSeenEventTime, fmt.Errorf(
+					"events stream closed: %w",
+					ErrEventsStreamClosed,
+				)
 			}
 
 			// Update last seen event time from Docker's event timestamps.
 			// Prefer TimeNano when present; fall back to Time (seconds).
 			if eventMessage.TimeNano > 0 {
-				*lastSeenEventTime = time.Unix(0, eventMessage.TimeNano)
+				lastSeenEventTime = time.Unix(0, eventMessage.TimeNano)
 			} else if eventMessage.Time > 0 {
-				*lastSeenEventTime = time.Unix(eventMessage.Time, 0)
+				lastSeenEventTime = time.Unix(eventMessage.Time, 0)
 			}
 
-			// Enqueue respecting context.
-			select {
-			case <-parentContext.Done():
-				dispatcherErr = fmt.Errorf("event pump context canceled while enqueueing: %w", parentContext.Err())
-
-				break dispatchLoop
-			case jobsChannel <- eventMessage:
-			}
+			reconciler.enqueueEvent(&eventMessage)
 		}
 	}
-
-	return dispatcherErr
-}
-
-// startEventWorkers launches a fixed-size pool consuming from jobs.
-func startEventWorkers(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	jobsChannel <-chan events.Message,
-	workerCount int,
-	workerGroup *sync.WaitGroup,
-) {
-	for workerIndex := range workerCount {
-		go workerLoop(workerIndex, parentContext, dockerClient, jobsChannel, workerGroup)
-	}
-}
-
-// workerLoop consumes events from jobs until context is canceled or the channel closes.
-func workerLoop(
-	workerID int,
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	jobsChannel <-chan events.Message,
-	workerGroup *sync.WaitGroup,
-) {
-	defer workerGroup.Done()
-
-	for {
-		select {
-		case <-parentContext.Done():
-			return
-		case eventMessage, ok := <-jobsChannel:
-			if !ok {
-				// Dispatcher closed the queue—drain done.
-				return
-			}
-
-			// Take address of a local copy to avoid pointer-to-loop-var issues.
-			localMessage := eventMessage
-			processEventMessage(workerID, parentContext, dockerClient, &localMessage)
-		}
-	}
-}
-
-// processEventMessage handles a single event with panic recovery and logging.
-func processEventMessage(
-	workerID int,
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	eventMsg *events.Message,
-) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			logger.L().Error("event worker recovered from panic",
-				"worker", workerID,
-				"panic", recovered,
-				"evt.type", eventMsg.Type,
-				"evt.action", eventMsg.Action,
-				"actor.id", eventMsg.Actor.ID,
-				"stack", string(debug.Stack()),
-			)
-		}
-	}()
-
-	processErr := processEvent(parentContext, dockerClient, eventMsg)
-	if processErr != nil {
-		logger.L().Error("error processing event", "worker", workerID, "err", processErr)
-	}
-}
-
-// processEvent handles node and service events. For nodes, only create/remove
-// matters for desired replica approximation. For services, remove deletes the series;
-// all other actions trigger a fresh inspect to update the cache and gauge.
-func processEvent(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	evt *events.Message,
-) error {
-	if evt.Type == "node" {
-		switch evt.Action { //nolint:exhaustive // only create/remove affect desired replica approximation here
-		case events.ActionCreate, events.ActionRemove, events.ActionUpdate:
-			// Node topology/schedulability changed → refresh nodes, recompute only the
-			// services whose counts follow the nodes.
-			refreshErr := refreshNodesAndRecomputeNodeDependent(parentContext, dockerClient)
-			if refreshErr != nil {
-				logger.L().
-					Warn("refresh nodes and recompute node-dependent services", "err", refreshErr)
-			}
-		default:
-			// Ignore other node events (e.g., updates) for this gauge.
-		}
-
-		return nil
-	}
-
-	serviceID := evt.Actor.ID
-
-	switch evt.Action { //nolint:exhaustive // for services we only handle remove vs others
-	case events.ActionRemove:
-		metadata, ok := getServiceMetadata(serviceID)
-		if !ok {
-			return ErrNoCachedMetadata
-		}
-		// Delete the series entirely to avoid stale zero-valued metrics.
-		_ = desiredReplicasGauge.Delete(labelsForMetadata(&metadata))
-		_ = schedulableReplicasGauge.Delete(labelsForMetadata(&metadata))
-		ClearServiceUpdateMetrics(&metadata)
-		deleteServiceMetadata(serviceID)
-
-		atDesiredLogState.Delete(serviceID)
-
-		return nil
-	default:
-		// treat other service actions as update
-	}
-
-	service, inspectErr := inspectService(parentContext, dockerClient, serviceID)
-	if inspectErr != nil {
-		return inspectErr
-	}
-
-	builtMetadata := buildMetadata(&service)
-	setServiceMetadata(serviceID, &builtMetadata)
-	metadata := mustGetServiceMetadata(serviceID)
-	updateServiceReplicasGauge(
-		parentContext,
-		dockerClient,
-		&service,
-		&metadata,
-	)
-	UpdateServiceUpdateMetricsForService(&service, &metadata)
-
-	return nil
-}
-
-// mustGetServiceMetadata loads metadata for serviceID; it logs a warning and
-// returns an empty (but fully constructed) metadata instance if missing.
-func mustGetServiceMetadata(serviceID string) serviceMetadata {
-	metadata, ok := getServiceMetadata(serviceID)
-	if !ok {
-		// This should not happen in current flows; log and return empty labels instead of panicking.
-		logger.L().Warn("metadata missing unexpectedly", "service_id", serviceID)
-
-		return serviceMetadata{
-			stack:        "",
-			service:      "",
-			serviceMode:  "",
-			customLabels: map[string]string{},
-		}
-	}
-
-	return metadata
 }
 
 // labelsForMetadata builds a sanitized label set (same keys used for With/Delete).
@@ -634,87 +358,6 @@ func labelsForMetadata(metadata *serviceMetadata) prometheus.Labels {
 	}
 
 	return labelutil.SanitizeMetricLabels(labels)
-}
-
-// updateServiceReplicasGauge sets the per-service desired and schedulable replica values.
-// For replicated services, desired = configured replicas, schedulable = min(configured, eligible_nodes).
-// For replicated jobs, desired = total completions and schedulable = 0.
-// For global services and global jobs, desired is the eligible-node count, and so is schedulable
-// for global services (0 for global jobs).
-func updateServiceReplicasGauge(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	service *swarm.Service,
-	metadata *serviceMetadata,
-) {
-	switch metadata.serviceMode {
-	case serviceModeReplicated:
-		desired := float64(*service.Spec.Mode.Replicated.Replicas)
-		setServiceDesiredReplicas(service.ID, desired)
-		setDesiredReplicasGauge(metadata, desired)
-
-		// Compute schedulable: min(desired, eligible nodes given constraints+availability).
-		// Fall back to desired when no node snapshot is available (startup race).
-		schedulable := desired
-
-		if nodes := getCachedNodes(); len(nodes) > 0 {
-			eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
-			schedulable = min(desired, eligible)
-		}
-
-		setSchedulableReplicasGauge(metadata, schedulable)
-
-		return
-	case serviceModeReplicatedJob:
-		// The target is the number of completions, whatever the nodes; schedulable is forced to 0.
-		desired := jobTotalCompletions(service.Spec.Mode.ReplicatedJob)
-		setServiceDesiredReplicas(service.ID, desired)
-		setDesiredReplicasGauge(metadata, desired)
-		setSchedulableReplicasGauge(metadata, desired)
-
-		return
-	default:
-		// Global services and global jobs follow the eligible-node count below.
-	}
-
-	// Global service or global job: desired equals the eligible-node count, and so does
-	// schedulable before setSchedulableReplicasGauge forces jobs to 0.
-
-	// Attempt to use cached nodes if available.
-	if nodes := getCachedNodes(); len(nodes) > 0 {
-		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
-		setServiceDesiredReplicas(service.ID, eligible)
-		setDesiredReplicasGauge(metadata, eligible)
-		setSchedulableReplicasGauge(metadata, eligible)
-
-		return
-	}
-
-	eligible, eligibleErr := countEligibleNodesForService(parentContext, dockerClient, service)
-	if eligibleErr != nil {
-		logger.L().
-			Warn("countEligibleNodesForService failed; falling back to counting active nodes", "err", eligibleErr)
-
-		// Fallback: count READY+active nodes ignoring constraints.
-		activeCount, fallbackErr := countActiveNodes(parentContext, dockerClient)
-		if fallbackErr != nil {
-			logger.L().Warn("countActiveNodes fallback failed", "err", fallbackErr)
-
-			return
-		}
-
-		desired := float64(activeCount)
-		setServiceDesiredReplicas(service.ID, desired)
-		setDesiredReplicasGauge(metadata, desired)
-		setSchedulableReplicasGauge(metadata, desired)
-
-		return
-	}
-
-	desired := float64(eligible)
-	setServiceDesiredReplicas(service.ID, desired)
-	setDesiredReplicasGauge(metadata, desired)
-	setSchedulableReplicasGauge(metadata, desired)
 }
 
 // setDesiredReplicasGauge writes the gauge value with sanitized label keys.
@@ -740,44 +383,8 @@ func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
 // ---- Helpers for global desired replicas accuracy ----
 //
 
-// countActiveNodes returns the number of nodes that are READY and Availability=active.
-func countActiveNodes(parentContext context.Context, dockerClient DockerAPI) (int, error) {
-	nodes, listErr := listNodes(parentContext, dockerClient)
-	if listErr != nil {
-		return 0, listErr
-	}
-
-	activeCount := 0
-
-	for index := range nodes {
-		node := &nodes[index]
-		if isNodeSchedulable(node) {
-			activeCount++
-		}
-	}
-
-	return activeCount, nil
-}
-
-// countEligibleNodesForService returns the number of nodes where a global service or global job
-// would place tasks, based on node schedulability + placement constraints + platforms.
-func countEligibleNodesForService(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-	service *swarm.Service,
-) (int, error) {
-	nodes, listErr := listNodes(parentContext, dockerClient)
-	if listErr != nil {
-		return 0, listErr
-	}
-
-	return countEligibleNodesForServiceFromNodes(nodes, service), nil
-}
-
-// countEligibleNodesForServiceFromNodes returns eligible nodes count using a provided snapshot,
-// without a NodeList round-trip (countEligibleNodesForService lists the nodes, then calls it).
-func countEligibleNodesForServiceFromNodes(nodes []swarm.Node, service *swarm.Service) int {
-	placement := service.Spec.TaskTemplate.Placement
+// countEligibleNodes returns how many nodes of a snapshot a task with placement could be placed on.
+func countEligibleNodes(nodes []swarm.Node, placement *swarm.Placement) int {
 	eligibleCount := 0
 
 	for index := range nodes {
@@ -1015,70 +622,4 @@ func matchNodeIPConstraint(operator, expected, nodeAddr string) bool {
 	}
 
 	return matched
-}
-
-// refreshNodesAndRecomputeNodeDependent refreshes the nodes cache once and recomputes, using
-// the cached nodes, the desired replicas of every service whose desired count is the
-// eligible-node count (global services and global jobs), then the schedulable replicas of
-// replicated services. It avoids a full metric Reset or ServiceList.
-func refreshNodesAndRecomputeNodeDependent(
-	parentContext context.Context,
-	dockerClient DockerAPI,
-) error {
-	nodes, listErr := listNodes(parentContext, dockerClient)
-	if listErr != nil {
-		return listErr
-	}
-
-	setCachedNodes(nodes)
-	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
-
-	nodeDependentIDs := getNodeDependentServiceIDs()
-	for index := range nodeDependentIDs {
-		serviceID := nodeDependentIDs[index]
-
-		// We need the current service spec to properly evaluate constraints/platforms.
-		service, inspectErr := inspectService(parentContext, dockerClient, serviceID)
-		if inspectErr != nil {
-			// If service disappeared during the window, skip.
-			if errdefs.IsNotFound(inspectErr) {
-				continue
-			}
-
-			return inspectErr
-		}
-
-		metadata, ok := getServiceMetadata(serviceID)
-		if !ok {
-			// Should be rare; skip with a warning.
-			logger.L().
-				Warn("metadata missing during node-dependent recompute", "service_id", serviceID)
-
-			continue
-		}
-
-		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, &service))
-		setServiceDesiredReplicas(service.ID, eligible)
-		setDesiredReplicasGauge(&metadata, eligible)
-		setSchedulableReplicasGauge(
-			&metadata,
-			eligible,
-		) // same as desired for globals, 0 for global jobs
-	}
-
-	// Recompute schedulable_replicas for replicated services using cached constraints.
-	// This keeps the gauge accurate when a constrained node changes availability.
-	replicatedMetadata := getReplicatedServiceMetadata()
-	for index := range replicatedMetadata {
-		metadata := replicatedMetadata[index]
-
-		stub := &swarm.Service{}
-		stub.Spec.TaskTemplate.Placement = placementFromMetadata(&metadata)
-
-		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, stub))
-		schedulable := min(metadata.configuredReplicas, eligible)
-		setSchedulableReplicasGauge(&metadata, schedulable)
-	}
-
-	return nil
 }

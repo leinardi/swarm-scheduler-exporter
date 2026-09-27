@@ -25,7 +25,6 @@
 package collector
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -410,57 +409,5 @@ func TestSetServiceMetadata_PreservesDesiredReplicas(t *testing.T) {
 
 	if md.desiredReplicas != 5.0 {
 		t.Errorf("desiredReplicas = %v, want 5.0 (should have been preserved)", md.desiredReplicas)
-	}
-}
-
-func TestGetReplicatedServiceMetadata_FiltersCorrectly(t *testing.T) {
-	resetCollectorState(t)
-
-	setServiceMetadata(
-		"rep1",
-		&serviceMetadata{serviceMode: serviceModeReplicated, customLabels: map[string]string{}},
-	)
-	setServiceMetadata(
-		"glb1",
-		&serviceMetadata{serviceMode: serviceModeGlobal, customLabels: map[string]string{}},
-	)
-	setServiceMetadata(
-		"rep2",
-		&serviceMetadata{serviceMode: serviceModeReplicated, customLabels: map[string]string{}},
-	)
-
-	results := getReplicatedServiceMetadata()
-	if len(results) != 2 {
-		t.Errorf("expected 2 replicated entries, got %d", len(results))
-	}
-
-	for _, md := range results {
-		if md.serviceMode != serviceModeReplicated {
-			t.Errorf("unexpected mode %q", md.serviceMode)
-		}
-	}
-}
-
-func TestGetNodeDependentServiceIDs_GlobalAndGlobalJobOnly(t *testing.T) {
-	resetCollectorState(t)
-
-	for serviceID, mode := range map[string]string{
-		"rep":    serviceModeReplicated,
-		"glb":    serviceModeGlobal,
-		"repjob": serviceModeReplicatedJob,
-		"glbjob": serviceModeGlobalJob,
-	} {
-		setServiceMetadata(
-			serviceID,
-			&serviceMetadata{serviceMode: mode, customLabels: map[string]string{}},
-		)
-	}
-
-	got := getNodeDependentServiceIDs()
-	slices.Sort(got)
-
-	want := []string{"glb", "glbjob"}
-	if !slices.Equal(got, want) {
-		t.Errorf("getNodeDependentServiceIDs() = %v, want %v", got, want)
 	}
 }

@@ -25,8 +25,6 @@
 package collector
 
 import (
-	"context"
-
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -56,23 +54,9 @@ func newNodesByStateFamily() *snapshotFamily {
 	)
 }
 
-// UpdateNodesByState refreshes the nodes list from Docker and updates the gauge.
-func UpdateNodesByState(ctx context.Context, cli DockerAPI) error {
-	nodes, listErr := listNodes(ctx, cli)
-	if listErr != nil {
-		return listErr
-	}
-
-	setCachedNodes(nodes) // keep the cache fresh for other computations
-	UpdateNodesByStateFromSlice(nodes)
-
-	return nil
-}
-
 // UpdateNodesByStateFromSlice publishes the gauge from a pre-fetched snapshot. The whole set is
 // built first and replaces the previous one in a single swap: a scrape never sees it half
-// rebuilt, and concurrent refreshes from the event workers each publish a complete set (the last
-// one wins) instead of interleaving their writes. If the build fails, the previous set stays.
+// rebuilt. If the build fails, the previous set stays.
 func UpdateNodesByStateFromSlice(nodes []swarm.Node) {
 	if nodesByStateGauge == nil {
 		return
