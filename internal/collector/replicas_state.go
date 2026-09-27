@@ -75,8 +75,21 @@ var knownTaskStates = []string{
 // retiredDesiredStates are the desired states of a task Swarm no longer wants running. They
 // mirror swarmkit's "DesiredState > Completed" check in its restart supervisor: a task in one
 // of them has been shut down or replaced, even if its node still reports it as running (a down
-// node's tasks keep their last status for up to 24h).
+// node's tasks keep their last status for up to 24h). A retired task that has not reported
+// stopping is skipped outright (retiredNotStopped), not just outranked by a wanted one.
 var retiredDesiredStates = map[swarm.TaskState]struct{}{
+	swarm.TaskStateShutdown: {},
+	swarm.TaskStateFailed:   {},
+	swarm.TaskStateRejected: {},
+	swarm.TaskStateRemove:   {},
+	swarm.TaskStateOrphaned: {},
+}
+
+// stoppedTaskStates are the reported states of a task that has stopped, or never will run again.
+// Any other reported state, an empty or unknown one included, counts as not stopped: a retired
+// task in it is then never counted, rather than counted as something it may no longer be.
+var stoppedTaskStates = map[swarm.TaskState]struct{}{
+	swarm.TaskStateComplete: {},
 	swarm.TaskStateShutdown: {},
 	swarm.TaskStateFailed:   {},
 	swarm.TaskStateRejected: {},
@@ -119,7 +132,8 @@ type taskCounter struct {
 
 	// wanted counts the counted tasks Swarm still wants (not retiredTask), and wantedComplete
 	// those of them that are complete. A job is finished when they are equal; retired tasks
-	// still show in states but take no part in that decision.
+	// that stopped still show in states but take no part in that decision (retired tasks that
+	// did not stop are not counted at all, see retiredNotStopped).
 	wanted         float64
 	wantedComplete float64
 
@@ -215,7 +229,8 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 // pollReplicasState lists the cluster's tasks (listAllTasks) and aggregates those of the services
 // in snapshot by state per service, counting only the current task per (service, slot) for replicated services and
 // replicated jobs and per (service, nodeID) for global services and global jobs, as chosen by
-// preferredTask. Job tasks from an older job iteration are skipped. Everything but the task list
+// preferredTask. Job tasks from an older job iteration are skipped, and so are tasks Swarm has
+// retired that have not reported stopping (retiredNotStopped). Everything but the task list
 // comes from snapshot, never from the live caches, so the counts and the metadata they are judged
 // against describe the same moment; tasks of a service not in snapshot are skipped, the
 // reconciler will add it to a later one. Every service of snapshot gets a counter.
@@ -245,6 +260,10 @@ func pollReplicasState(
 
 		service, known := snapshot.services[task.ServiceID]
 		if !known {
+			continue
+		}
+
+		if retiredNotStopped(task) {
 			continue
 		}
 
@@ -570,10 +589,11 @@ func setAtDesiredForService(
 }
 
 // jobAtDesired reports whether a job has finished, from the tasks of its current iteration.
-// Only tasks Swarm still wants count: Swarm shuts down (DesiredState=Shutdown) a global job's
-// running task when its node goes down or is drained (swarmkit jobs/global/reconciler.go), and
-// the restart supervisor does the same to a failed task before replacing it, so a retired task
-// left in the total would keep a finished job at 0 forever. A slot whose restarts are exhausted
+// Only tasks Swarm still wants count: the restart supervisor shuts down (DesiredState=Shutdown)
+// a failed task before replacing it, and Swarm does the same to a global job's task when its node
+// goes down or is drained (swarmkit jobs/global/reconciler.go), so a retired task left in the
+// total would keep a finished job at 0 forever. (A retired task that has not stopped, such as a
+// down node's task still reported running, is not counted at all; see retiredNotStopped.) A slot whose restarts are exhausted
 // is left with a retired failed task and no replacement, so wantedComplete stays below the
 // total completions and the replicated job stays at 0.
 func jobAtDesired(mode string, counter *taskCounter, desired float64) bool {
@@ -668,8 +688,8 @@ func newTaskCounter(labels map[string]string) taskCounter {
 // preferredTask returns true if candidate should replace current as the task counted for a
 // dedupe key. The first rule that tells them apart decides:
 //  1. a task Swarm still wants beats a retired one: after a failed start-first update the
-//     newer, failed task is retired while the older one keeps serving, and a stale task on a
-//     down node is retired while its replacement starts;
+//     newer, failed task is retired while the older one keeps serving, and after a crash the
+//     failed task is retired while its replacement starts;
 //  2. a running task beats one that is not: during a start-first update the old task keeps
 //     serving until its replacement is running;
 //  3. the newer task wins (newerThan).
@@ -695,6 +715,21 @@ func retiredTask(task *swarm.Task) bool {
 	_, retired := retiredDesiredStates[task.DesiredState]
 
 	return retired
+}
+
+// retiredNotStopped reports whether Swarm has retired task but it has not reported stopping (its
+// state is not in stoppedTaskStates). Either its node is down and still shows the task's last
+// state, for up to 24h, or a live node is stopping it (a scale-down, a drain, a stop-first
+// update) and has not reported the stop yet. Neither is a replica Swarm runs for the service, so
+// such a task is not counted at all.
+func retiredNotStopped(task *swarm.Task) bool {
+	if !retiredTask(task) {
+		return false
+	}
+
+	_, stopped := stoppedTaskStates[task.Status.State]
+
+	return !stopped
 }
 
 // newerThan returns true if candidate is strictly newer than current.
