@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,9 +81,9 @@ func TestPreferredTask(t *testing.T) {
 			loser:  makeStateTask(later, swarm.TaskStateShutdown, swarm.TaskStateFailed),
 		},
 		{
-			name:   "node down: replacement beats stale task still reported running",
+			name:   "node down: replacement beats the older task that did stop",
 			winner: makeStateTask(later, swarm.TaskStateRunning, swarm.TaskStatePending),
-			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateRunning),
+			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateShutdown),
 		},
 		{
 			name:   "crash and restart: replacement beats failed task",
@@ -100,9 +101,9 @@ func TestPreferredTask(t *testing.T) {
 			loser:  makeStateTask(base, swarm.TaskStateRunning, swarm.TaskStateRunning),
 		},
 		{
-			name:   "stop-first in progress: new task desired ready beats old one being stopped",
-			winner: makeStateTask(later, swarm.TaskStateReady, swarm.TaskStatePending),
-			loser:  makeStateTask(base, swarm.TaskStateShutdown, swarm.TaskStateRunning),
+			name:   "wanted task beats a newer retired one that stopped",
+			winner: makeStateTask(base, swarm.TaskStateReady, swarm.TaskStatePending),
+			loser:  makeStateTask(later, swarm.TaskStateShutdown, swarm.TaskStateShutdown),
 		},
 		{
 			name:   "late shutdown status: new task wins despite older task's newer status timestamp",
@@ -142,9 +143,15 @@ func TestPreferredTask(t *testing.T) {
 func TestPreferredTask_AllRulesTie(t *testing.T) {
 	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	for _, desired := range []swarm.TaskState{swarm.TaskStateRunning, swarm.TaskStateShutdown} {
-		first := makeStateTask(base, desired, swarm.TaskStateRunning)
-		second := makeStateTask(base, desired, swarm.TaskStateRunning)
+	// A retired task that has not stopped never reaches preferredTask (pollReplicasState skips
+	// it), so the retired pair reports shutdown.
+	for _, pair := range []struct{ desired, state swarm.TaskState }{
+		{swarm.TaskStateRunning, swarm.TaskStateRunning},
+		{swarm.TaskStateShutdown, swarm.TaskStateShutdown},
+	} {
+		desired := pair.desired
+		first := makeStateTask(base, desired, pair.state)
+		second := makeStateTask(base, desired, pair.state)
 
 		// Identical rank: neither replaces the other, so the first one listed is kept.
 		if preferredTask(first, second) || preferredTask(second, first) {
@@ -173,6 +180,58 @@ func TestRetiredTask(t *testing.T) {
 		task := &swarm.Task{DesiredState: tc.desired}
 		if got := retiredTask(task); got != tc.want {
 			t.Errorf("retiredTask(desired=%q) = %v, want %v", tc.desired, got, tc.want)
+		}
+	}
+}
+
+func TestRetiredNotStopped(t *testing.T) {
+	stopped := []swarm.TaskState{
+		swarm.TaskStateComplete,
+		swarm.TaskStateShutdown,
+		swarm.TaskStateFailed,
+		swarm.TaskStateRejected,
+		swarm.TaskStateRemove,
+		swarm.TaskStateOrphaned,
+	}
+	notStopped := []swarm.TaskState{
+		swarm.TaskStateNew,
+		swarm.TaskStatePending,
+		swarm.TaskStateAssigned,
+		swarm.TaskStatePreparing,
+		swarm.TaskStateStarting,
+		swarm.TaskStateRunning,
+		"",
+	}
+
+	check := func(desired, state swarm.TaskState, want bool) {
+		t.Helper()
+
+		task := &swarm.Task{DesiredState: desired, Status: swarm.TaskStatus{State: state}}
+		if got := retiredNotStopped(task); got != want {
+			t.Errorf("retiredNotStopped(desired=%q, state=%q) = %v, want %v",
+				desired, state, got, want)
+		}
+	}
+
+	for _, state := range append(append([]swarm.TaskState{}, stopped...), notStopped...) {
+		// A task Swarm still wants is never skipped, whatever its state.
+		for _, desired := range []swarm.TaskState{
+			swarm.TaskStateRunning,
+			swarm.TaskStateReady,
+			swarm.TaskStateComplete,
+			"",
+		} {
+			check(desired, state, false)
+		}
+	}
+
+	for _, desired := range []swarm.TaskState{swarm.TaskStateShutdown, swarm.TaskStateRemove} {
+		for _, state := range stopped {
+			check(desired, state, false)
+		}
+
+		for _, state := range notStopped {
+			check(desired, state, true)
 		}
 	}
 }
@@ -410,6 +469,173 @@ func TestPollReplicasState_GlobalService_DedupeByNodeID(t *testing.T) {
 
 	if c.states[string(swarm.TaskStateRunning)] != 2 {
 		t.Errorf("running = %v, want 2 (one per node)", c.states[string(swarm.TaskStateRunning)])
+	}
+}
+
+// placedTask returns a task of svc1 on node in slot, created at createdAt, with the given desired
+// and reported state.
+func placedTask(
+	node string,
+	slot int,
+	createdAt time.Time,
+	desired, state swarm.TaskState,
+) swarm.Task {
+	return swarm.Task{
+		Meta:         swarm.Meta{CreatedAt: createdAt, Version: swarm.Version{Index: 1}},
+		ServiceID:    "svc1",
+		NodeID:       node,
+		Slot:         slot,
+		DesiredState: desired,
+		Status:       swarm.TaskStatus{State: state},
+	}
+}
+
+// castorTasks is the case seen on a real two-node cluster with one node asleep: n1 runs the
+// global service's task, and the down node n2 still reports its retired task as running, next
+// to an older retired task that did stop.
+func castorTasks(base time.Time) []swarm.Task {
+	return []swarm.Task{
+		placedTask("n1", 0, base, swarm.TaskStateRunning, swarm.TaskStateRunning),
+		placedTask("n2", 0, base.Add(time.Hour), swarm.TaskStateShutdown, swarm.TaskStateRunning),
+		placedTask("n2", 0, base, swarm.TaskStateShutdown, swarm.TaskStateShutdown),
+	}
+}
+
+// TestPollReplicasState_RetiredNotStoppedSkipped: a task Swarm has retired that has not reported
+// stopping is counted under no state, and cannot stand for its slot or node.
+func TestPollReplicasState_RetiredNotStoppedSkipped(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name  string
+		mode  string
+		tasks []swarm.Task
+		want  map[swarm.TaskState]float64 // every other state must be 0
+	}{
+		{
+			name:  "down node: the older task that stopped stands for it",
+			mode:  serviceModeGlobal,
+			tasks: castorTasks(base),
+			want: map[swarm.TaskState]float64{
+				swarm.TaskStateRunning:  1,
+				swarm.TaskStateShutdown: 1,
+			},
+		},
+		{
+			name: "down node with only a retired running task: node counted nowhere",
+			mode: serviceModeGlobal,
+			tasks: []swarm.Task{
+				placedTask("n1", 0, base, swarm.TaskStateRunning, swarm.TaskStateRunning),
+				placedTask("n2", 0, base, swarm.TaskStateShutdown, swarm.TaskStateRunning),
+			},
+			want: map[swarm.TaskState]float64{swarm.TaskStateRunning: 1},
+		},
+		{
+			name: "slot whose only task is retired while starting",
+			mode: serviceModeReplicated,
+			tasks: []swarm.Task{
+				placedTask("n1", 1, base, swarm.TaskStateShutdown, swarm.TaskStateStarting),
+			},
+			want: map[swarm.TaskState]float64{},
+		},
+		{
+			name: "stop-first update in progress",
+			mode: serviceModeReplicated,
+			tasks: []swarm.Task{
+				placedTask("n1", 1, base, swarm.TaskStateShutdown, swarm.TaskStateRunning),
+				placedTask(
+					"n1",
+					1,
+					base.Add(time.Second),
+					swarm.TaskStateReady,
+					swarm.TaskStatePending,
+				),
+			},
+			want: map[swarm.TaskState]float64{swarm.TaskStatePending: 1},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resetCollectorState(t)
+
+			md := makeTestMetadata("stack", "svc", tc.mode)
+			setServiceMetadata("svc1", &md)
+
+			// Both list orders: Docker does not guarantee one.
+			for _, tasks := range [][]swarm.Task{tc.tasks, reversedTasks(tc.tasks)} {
+				sc, err := pollReplicasState(
+					context.Background(),
+					&fakeDocker{tasks: tasks},
+					cacheSnapshot(),
+				)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+
+				c, ok := sc["svc1"]
+				if !ok {
+					t.Fatal("expected entry for svc1")
+				}
+
+				for _, state := range knownTaskStates {
+					if got, want := c.states[state], tc.want[swarm.TaskState(state)]; got != want {
+						t.Errorf("%s = %v, want %v", state, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// reversedTasks returns a reversed copy of tasks.
+func reversedTasks(tasks []swarm.Task) []swarm.Task {
+	reversed := slices.Clone(tasks)
+	slices.Reverse(reversed)
+
+	return reversed
+}
+
+// TestUpdateReplicasStateGauge_RetiredNotStoppedOnDownNode publishes the castor case: the down
+// node's stale task must not make the global service look over-provisioned, nor stand in for a
+// missing replica.
+func TestUpdateReplicasStateGauge_RetiredNotStoppedOnDownNode(t *testing.T) {
+	resetCollectorState(t)
+	families := installReplicasStateGauges(t)
+
+	md := makeTestMetadata("s", "sv", serviceModeGlobal)
+	setServiceMetadata("svc1", &md)
+	setServiceDesiredReplicas("svc1", 1)
+
+	sc, err := pollReplicasState(
+		context.Background(),
+		&fakeDocker{tasks: castorTasks(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))},
+		cacheSnapshot(),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	publishReplicasState(t, sc)
+
+	labels := serviceLabels("s", "sv", serviceModeGlobal)
+
+	running, found := snapshotValue(t, families, runningReplicasFQName, labels)
+	if !found {
+		t.Fatal("running_replicas series missing")
+	}
+
+	if running != 1 {
+		t.Errorf("running_replicas = %v, want 1", running)
+	}
+
+	atDesired, found := snapshotValue(t, families, atDesiredFQName, labels)
+	if !found {
+		t.Fatal("at_desired series missing")
+	}
+
+	if atDesired != 1 {
+		t.Errorf("at_desired = %v, want 1", atDesired)
 	}
 }
 
@@ -1210,12 +1436,13 @@ func TestUpdateReplicasStateGauge_JobAtDesired(t *testing.T) {
 			tasks: []swarm.Task{
 				makeJobTask("job1", 0, "n1", 1, complete, complete),
 				makeJobTask("job1", 0, "n2", 1, complete, complete),
-				// Swarm shut the task down when n3 was drained; its node still reports it running.
+				// Swarm shut the task down when n3 was drained; its node still reports it running,
+				// so it is not counted at all.
 				makeJobTask("job1", 0, "n3", 1, shutdown, running),
 			},
 			want:       1,
 			countState: running,
-			wantCount:  1,
+			wantCount:  0,
 		},
 		{
 			name:    "global-job finished whose last eligible node was drained",

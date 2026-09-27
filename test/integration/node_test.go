@@ -50,6 +50,7 @@ type nodeScenario struct {
 	stack        string
 	baseURL      string
 	global       serviceKey
+	globalID     string
 	replicated   serviceKey
 	replicatedID string
 	victim       testenv.Node
@@ -70,10 +71,10 @@ func setUpNodeScenario(t *testing.T, stack string) *nodeScenario {
 		replicated: serviceKey{stack: stack, service: "web"},
 	}
 
-	globalID := deployService(t, stack, scenario.global.service, &serviceOpts{global: true})
+	scenario.globalID = deployService(t, stack, scenario.global.service, &serviceOpts{global: true})
 
 	eventually(t, 60*time.Second, func(ctx context.Context) error {
-		tasks, err := listTasks(ctx, globalID)
+		tasks, err := listTasks(ctx, scenario.globalID)
 		if err != nil {
 			return err
 		}
@@ -209,6 +210,30 @@ func (s *nodeScenario) slotOneMoved(ctx context.Context) error {
 	)
 }
 
+// victimGlobalTaskRetiredRunning succeeds once the global service's task on the victim is retired
+// (desired shutdown) while the victim, being down, still reports it running.
+func (s *nodeScenario) victimGlobalTaskRetiredRunning(ctx context.Context) error {
+	tasks, err := listTasks(ctx, s.globalID)
+	if err != nil {
+		return err
+	}
+
+	for _, task := range tasks {
+		if task.nodeID == s.victim.SwarmNodeID &&
+			task.desiredState == swarm.TaskStateShutdown &&
+			task.state == swarm.TaskStateRunning {
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"no retired task still reported running on victim %s:\n%s: %w",
+		s.victim.Hostname,
+		describeTasks(tasks),
+		errNotYet,
+	)
+}
+
 // TestNode_Drain drains the victim: the global service loses a node, and the replicated service
 // keeps its desired count but can now be scheduled on one worker only, while its slot-1 replica
 // moves to the survivor. Setting the victim active again restores both.
@@ -294,6 +319,10 @@ func TestNode_Down(t *testing.T) {
 		return nil
 	})
 
+	// The global service's task on the victim must be retired while still reported running, or
+	// skipping retired tasks that have not stopped is not exercised.
+	eventually(t, nodeChangeTimeout, scenario.victimGlobalTaskRetiredRunning)
+
 	// A scrape from before the replacement was running would show running 2 even without the
 	// dedupe; only a poll of the state above tells counting one task per slot from counting both.
 	waitForFreshPoll(t, scenario.baseURL)
@@ -301,6 +330,8 @@ func TestNode_Down(t *testing.T) {
 	eventually(t, nodeChangeTimeout, metricsMatch(scenario.baseURL, scenario.stack,
 		want(metricNodesByState, map[string]string{"status": "down"}, 1),
 		wantService(metricDesired, scenario.global, nodeCount-1),
+		wantService(metricRunning, scenario.global, nodeCount-1),
+		wantService(metricAtDesired, scenario.global, 1),
 		wantService(metricDesired, scenario.replicated, 2),
 		wantService(metricSchedulable, scenario.replicated, 1),
 		wantService(metricRunning, scenario.replicated, 2),

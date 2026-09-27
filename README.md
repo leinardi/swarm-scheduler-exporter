@@ -62,8 +62,10 @@ Every service-level metric, including the update/rollback metrics below, carries
   series, so an alert on `at_desired == 0` also covers a service whose tasks were never created.
 
 > ℹ️ **Current task:** the task Swarm still wants (desired state not `shutdown`, `remove`, …), preferring a running one, then the newest.
-> A retired task still reported as running, for example on a down node, is not counted. This is why `running_replicas` can differ from
-> the `REPLICAS` column of `docker service ls` during node outages and updates.
+> A task Swarm has retired that has not reported stopping is not counted in any family: a down node keeps showing its tasks' last state
+> (for example `running`) for up to 24h, and a live node takes a moment to report a task it is stopping. A retired task that did stop (for
+> example `failed` after its restarts ran out) still counts under its state. This is why `running_replicas` can differ from the
+> `REPLICAS` column of `docker service ls` during node outages and updates.
 >
 > ℹ️ **Consistency:** each poll counts tasks against one snapshot of the exporter's service and node caches, and a service's counts are
 > published only if nothing about it changed while its tasks were listed: not its spec (replica count, mode, placement, job
@@ -99,7 +101,8 @@ Every service-level metric, including the update/rollback metrics below, carries
 > ℹ️ **Global services:** `desired_replicas` is the number of eligible nodes, not `0`. It is `0` only when no node is eligible: none is
 > `ready` + `active` (a node that is down, disconnected, paused, or drained does not count), or none meets the placement constraints or
 > platforms. `running_replicas` is then usually `0` too, and `at_desired=1` only when it is. A paused or disconnected node can still run an
-> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`.
+> existing task, which gives `running_replicas > desired_replicas` ⇒ `at_desired=0`. Tasks Swarm has retired on a down node are not
+> counted, even while the node still reports them running; until Swarm retires them (shortly after the node goes down) they still count.
 
 ### Service update/rollback (info-style)
 
