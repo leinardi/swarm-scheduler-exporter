@@ -134,30 +134,17 @@ func InitDesiredReplicasGauge(
 	// during seeding will still be caught by the event stream started with this "since".
 	initialSinceAnchor := time.Now()
 
-	// Seed service gauges
-	serviceListResult, serviceListErr := dockerClient.ServiceList(
-		parentContext,
-		client.ServiceListOptions{
-			Filters: nil,
-			Status:  false,
-		},
-	)
+	// Both lists are fetched before anything is written, so a failed attempt leaves no partial
+	// state behind for the next one.
+	services, serviceListErr := listServices(parentContext, dockerClient)
 	if serviceListErr != nil {
-		return time.Time{}, fmt.Errorf("service list: %w", serviceListErr)
+		return time.Time{}, serviceListErr
 	}
 
-	services := serviceListResult.Items
-
-	// Also seed nodes snapshot and nodes-by-state metric
-	nodeListResult, nodeListErr := dockerClient.NodeList(
-		parentContext,
-		client.NodeListOptions{Filters: nil},
-	)
+	nodes, nodeListErr := listNodes(parentContext, dockerClient)
 	if nodeListErr != nil {
-		return time.Time{}, fmt.Errorf("node list: %w", nodeListErr)
+		return time.Time{}, nodeListErr
 	}
-
-	nodes := nodeListResult.Items
 
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes)
@@ -180,6 +167,103 @@ func InitDesiredReplicasGauge(
 	}
 
 	return initialSinceAnchor, nil
+}
+
+// SeedWithRetry runs InitDesiredReplicasGauge until it succeeds, waiting between attempts with
+// the capped exponential backoff used for event-stream reconnects. A failed seed must not end the
+// event listener: without the seed nothing would ever fill the metadata cache, so desired,
+// schedulable and update metrics would never be emitted. It returns the anchor of the successful
+// attempt, or an error wrapping parentContext.Err() once parentContext is done.
+func SeedWithRetry(parentContext context.Context, dockerClient DockerAPI) (time.Time, error) {
+	backoffDelay := backoffInitialDelay
+
+	for {
+		anchor, seedErr := InitDesiredReplicasGauge(parentContext, dockerClient)
+		if seedErr == nil {
+			return anchor, nil
+		}
+
+		if parentContext.Err() != nil {
+			return time.Time{}, fmt.Errorf("seed stopping: %w", parentContext.Err())
+		}
+
+		logger.L().Warn("seed failed; will retry", "err", seedErr, "backoff", backoffDelay)
+
+		waitErr := waitBackoff(parentContext, backoffDelay)
+		if waitErr != nil {
+			return time.Time{}, fmt.Errorf("seed canceled during backoff: %w", waitErr)
+		}
+
+		backoffDelay = nextBackoff(backoffDelay)
+	}
+}
+
+// waitBackoff waits for delay, or returns parentContext.Err() as soon as parentContext is done.
+func waitBackoff(parentContext context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-parentContext.Done():
+		return fmt.Errorf("backoff of %s interrupted: %w", delay, parentContext.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+// nextBackoff returns the delay that follows delay: doubled, capped at backoffMaxDelay.
+func nextBackoff(delay time.Duration) time.Duration {
+	return min(time.Duration(int64(delay)*int64(backoffMultiplier)), backoffMaxDelay)
+}
+
+// listServices lists every service, bounded by dockerRequestTimeout.
+func listServices(parentContext context.Context, dockerClient DockerAPI) ([]swarm.Service, error) {
+	callContext, cancel := withDockerTimeout(parentContext)
+	defer cancel()
+
+	listResult, listErr := dockerClient.ServiceList(callContext, client.ServiceListOptions{
+		Filters: nil,
+		Status:  false,
+	})
+	if listErr != nil {
+		return nil, fmt.Errorf("service list: %w", listErr)
+	}
+
+	return listResult.Items, nil
+}
+
+// listNodes lists every node, bounded by dockerRequestTimeout.
+func listNodes(parentContext context.Context, dockerClient DockerAPI) ([]swarm.Node, error) {
+	callContext, cancel := withDockerTimeout(parentContext)
+	defer cancel()
+
+	listResult, listErr := dockerClient.NodeList(callContext, client.NodeListOptions{Filters: nil})
+	if listErr != nil {
+		return nil, fmt.Errorf("node list: %w", listErr)
+	}
+
+	return listResult.Items, nil
+}
+
+// inspectService inspects one service, bounded by dockerRequestTimeout.
+func inspectService(
+	parentContext context.Context,
+	dockerClient DockerAPI,
+	serviceID string,
+) (swarm.Service, error) {
+	callContext, cancel := withDockerTimeout(parentContext)
+	defer cancel()
+
+	inspectResult, inspectErr := dockerClient.ServiceInspect(
+		callContext,
+		serviceID,
+		client.ServiceInspectOptions{InsertDefaults: false},
+	)
+	if inspectErr != nil {
+		return swarm.Service{}, fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
+	}
+
+	return inspectResult.Service, nil
 }
 
 // ListenSwarmEvents listens to Docker events for service and node changes.
@@ -269,22 +353,12 @@ func ListenSwarmEvents(
 		)
 
 		// Wait for backoff or context cancellation.
-		timer := time.NewTimer(backoffDelay)
-		select {
-		case <-parentContext.Done():
-			timer.Stop()
-
-			return fmt.Errorf("event listener canceled during backoff: %w", parentContext.Err())
-		case <-timer.C:
+		waitErr := waitBackoff(parentContext, backoffDelay)
+		if waitErr != nil {
+			return fmt.Errorf("event listener canceled during backoff: %w", waitErr)
 		}
 
-		// Exponential backoff with cap.
-		nextBackoff := min(
-			time.Duration(int64(backoffDelay)*int64(backoffMultiplier)),
-			backoffMaxDelay,
-		)
-
-		backoffDelay = nextBackoff
+		backoffDelay = nextBackoff(backoffDelay)
 	}
 }
 
@@ -507,18 +581,10 @@ func processEvent(
 		// treat other service actions as update
 	}
 
-	inspectResult, inspectErr := dockerClient.ServiceInspect(
-		parentContext,
-		serviceID,
-		client.ServiceInspectOptions{
-			InsertDefaults: false,
-		},
-	)
+	service, inspectErr := inspectService(parentContext, dockerClient, serviceID)
 	if inspectErr != nil {
-		return fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
+		return inspectErr
 	}
-
-	service := inspectResult.Service
 
 	builtMetadata := buildMetadata(&service)
 	setServiceMetadata(serviceID, &builtMetadata)
@@ -676,15 +742,11 @@ func setSchedulableReplicasGauge(metadata *serviceMetadata, value float64) {
 
 // countActiveNodes returns the number of nodes that are READY and Availability=active.
 func countActiveNodes(parentContext context.Context, dockerClient DockerAPI) (int, error) {
-	listResult, listErr := dockerClient.NodeList(
-		parentContext,
-		client.NodeListOptions{Filters: nil},
-	)
+	nodes, listErr := listNodes(parentContext, dockerClient)
 	if listErr != nil {
-		return 0, fmt.Errorf("node list: %w", listErr)
+		return 0, listErr
 	}
 
-	nodes := listResult.Items
 	activeCount := 0
 
 	for index := range nodes {
@@ -704,15 +766,12 @@ func countEligibleNodesForService(
 	dockerClient DockerAPI,
 	service *swarm.Service,
 ) (int, error) {
-	listResult, listErr := dockerClient.NodeList(
-		parentContext,
-		client.NodeListOptions{Filters: nil},
-	)
+	nodes, listErr := listNodes(parentContext, dockerClient)
 	if listErr != nil {
-		return 0, fmt.Errorf("node list: %w", listErr)
+		return 0, listErr
 	}
 
-	return countEligibleNodesForServiceFromNodes(listResult.Items, service), nil
+	return countEligibleNodesForServiceFromNodes(nodes, service), nil
 }
 
 // countEligibleNodesForServiceFromNodes returns eligible nodes count using a provided snapshot,
@@ -966,15 +1025,10 @@ func refreshNodesAndRecomputeNodeDependent(
 	parentContext context.Context,
 	dockerClient DockerAPI,
 ) error {
-	listResult, listErr := dockerClient.NodeList(
-		parentContext,
-		client.NodeListOptions{Filters: nil},
-	)
+	nodes, listErr := listNodes(parentContext, dockerClient)
 	if listErr != nil {
-		return fmt.Errorf("node list: %w", listErr)
+		return listErr
 	}
-
-	nodes := listResult.Items
 
 	setCachedNodes(nodes)
 	UpdateNodesByStateFromSlice(nodes) // <— update the cluster metric here
@@ -984,20 +1038,14 @@ func refreshNodesAndRecomputeNodeDependent(
 		serviceID := nodeDependentIDs[index]
 
 		// We need the current service spec to properly evaluate constraints/platforms.
-		inspectResult, inspectErr := dockerClient.ServiceInspect(
-			parentContext,
-			serviceID,
-			client.ServiceInspectOptions{
-				InsertDefaults: false,
-			},
-		)
+		service, inspectErr := inspectService(parentContext, dockerClient, serviceID)
 		if inspectErr != nil {
 			// If service disappeared during the window, skip.
 			if errdefs.IsNotFound(inspectErr) {
 				continue
 			}
 
-			return fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
+			return inspectErr
 		}
 
 		metadata, ok := getServiceMetadata(serviceID)
@@ -1009,8 +1057,7 @@ func refreshNodesAndRecomputeNodeDependent(
 			continue
 		}
 
-		service := &inspectResult.Service
-		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, service))
+		eligible := float64(countEligibleNodesForServiceFromNodes(nodes, &service))
 		setServiceDesiredReplicas(service.ID, eligible)
 		setDesiredReplicasGauge(&metadata, eligible)
 		setSchedulableReplicasGauge(

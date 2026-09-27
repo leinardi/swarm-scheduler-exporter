@@ -231,7 +231,10 @@ func PollReplicasState(
 		taskFilters = make(client.Filters).Add("service", queriedServiceIDs...)
 	}
 
-	taskListResult, listErr := dockerClient.TaskList(parentContext, client.TaskListOptions{
+	listContext, cancelList := withDockerTimeout(parentContext)
+	defer cancelList()
+
+	taskListResult, listErr := dockerClient.TaskList(listContext, client.TaskListOptions{
 		Filters: taskFilters,
 	})
 	if listErr != nil {
@@ -733,18 +736,10 @@ func getServiceLabels(
 	}
 
 	// Slow path: inspect and cache
-	inspectResult, inspectErr := dockerClient.ServiceInspect(
-		parentContext,
-		serviceID,
-		client.ServiceInspectOptions{
-			InsertDefaults: false,
-		},
-	)
+	service, inspectErr := inspectService(parentContext, dockerClient, serviceID)
 	if inspectErr != nil {
-		return map[string]string{}, fmt.Errorf("service inspect %s: %w", serviceID, inspectErr)
+		return map[string]string{}, inspectErr
 	}
-
-	service := inspectResult.Service
 
 	metadata := buildMetadata(&service)
 	setServiceMetadata(serviceID, &metadata)

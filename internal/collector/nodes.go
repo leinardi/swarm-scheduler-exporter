@@ -26,10 +26,8 @@ package collector
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moby/moby/api/types/swarm"
-	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/leinardi/swarm-scheduler-exporter/internal/logger"
@@ -60,12 +58,10 @@ func newNodesByStateFamily() *snapshotFamily {
 
 // UpdateNodesByState refreshes the nodes list from Docker and updates the gauge.
 func UpdateNodesByState(ctx context.Context, cli DockerAPI) error {
-	listResult, listErr := cli.NodeList(ctx, client.NodeListOptions{Filters: nil})
+	nodes, listErr := listNodes(ctx, cli)
 	if listErr != nil {
-		return fmt.Errorf("node list: %w", listErr)
+		return listErr
 	}
-
-	nodes := listResult.Items
 
 	setCachedNodes(nodes) // keep the cache fresh for other computations
 	UpdateNodesByStateFromSlice(nodes)

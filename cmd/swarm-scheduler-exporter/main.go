@@ -210,10 +210,12 @@ func run() int {
 		return 1
 	}
 
-	// WaitGroup to wait for goroutines (event listener + poller + health updater).
+	// WaitGroup to wait for goroutines (event listener + poller).
 	var workerGroup sync.WaitGroup
-	startEventListener(rootContext, &workerGroup, dockerClient)
-	startPoller(rootContext, &workerGroup, dockerClient, *pollDelay)
+
+	seeded := make(chan struct{})
+	startEventListener(rootContext, &workerGroup, dockerClient, seeded)
+	startPoller(rootContext, &workerGroup, dockerClient, *pollDelay, seeded)
 
 	// HTTP server with sane timeouts + graceful shutdown.
 	isHealthy := func() (bool, string) {
@@ -302,40 +304,60 @@ func validateAndSetCustomLabels(rawKeys []string) error {
 	return nil
 }
 
+// startEventListener starts the one goroutine that seeds the caches, retrying until the seed
+// succeeds, closes seeded, and then follows the event stream until parentContext is done.
 func startEventListener(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
-	dockerClient *client.Client,
+	dockerAPI collector.DockerAPI,
+	seeded chan<- struct{},
 ) {
 	waitGroup.Go(func() {
 		loggerInstance := logger.L()
 
-		// Init now returns an anchor to use as the initial "since" for events.
-		initialSinceAnchor, initErr := collector.InitDesiredReplicasGauge(
-			parentContext,
-			dockerClient,
-		)
-		if initErr != nil {
-			loggerInstance.Error("InitDesiredReplicasGauge failed", "err", initErr)
-			// If this fails, there is no point continuing.
+		// The seed returns an anchor to use as the initial "since" for events.
+		initialSinceAnchor, seedErr := collector.SeedWithRetry(parentContext, dockerAPI)
+		if seedErr != nil {
+			// SeedWithRetry only gives up when parentContext is done.
+			loggerInstance.Debug(
+				"event listener stopped before the first successful seed",
+				"err",
+				seedErr,
+			)
+
 			return
 		}
 
-		listenErr := collector.ListenSwarmEvents(parentContext, dockerClient, initialSinceAnchor)
+		close(seeded)
+
+		listenErr := collector.ListenSwarmEvents(parentContext, dockerAPI, initialSinceAnchor)
 		if !errors.Is(listenErr, context.Canceled) {
 			loggerInstance.Error("event listener exited with error", "err", listenErr)
 		}
 	})
 }
 
+// startPoller starts the goroutine that polls tasks (and containers, when enabled) every delay.
+// It waits for seeded first: before the seed the metadata cache is empty, and a poll would
+// publish services without their desired counts.
 func startPoller(
 	parentContext context.Context,
 	waitGroup *sync.WaitGroup,
-	dockerClient *client.Client,
+	dockerAPI collector.DockerAPI,
 	delay time.Duration,
+	seeded <-chan struct{},
 ) {
 	waitGroup.Go(func() {
 		loggerInstance := logger.L()
+
+		select {
+		case <-parentContext.Done():
+			loggerInstance.Debug("polling loop: context canceled before the first successful seed")
+
+			return
+		case <-seeded:
+		}
+
 		loggerInstance.Debug("start polling replicas state", "every", delay)
 
 		ticker := time.NewTicker(delay)
@@ -344,7 +366,7 @@ func startPoller(
 		// Local helper to run one full poll cycle with metrics + health.
 		pollOnce := func(now time.Time) {
 			startTime := now
-			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerClient)
+			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerAPI)
 
 			collector.ObservePollDuration(time.Since(startTime))
 			collector.IncPolls()
@@ -359,7 +381,7 @@ func startPoller(
 
 			// --- Containers (opt-in) ---
 			if *enableContainers {
-				containerRows, contErr := collector.PollContainersState(parentContext, dockerClient)
+				containerRows, contErr := collector.PollContainersState(parentContext, dockerAPI)
 				if contErr != nil {
 					loggerInstance.Warn("poll containers state failed", "err", contErr)
 				} else {
