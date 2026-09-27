@@ -417,13 +417,15 @@ func (r *Reconciler) scheduleResyncRetryLocked(now time.Time) {
 	r.resyncBackoff = min(r.resyncBackoff*backoffMultiplier, r.backoffMax)
 }
 
-// requestResync asks for a full resync; reason is logged.
+// requestResync asks for a full resync and wakes Run, since the caller may be another goroutine
+// (the event listener) and Run may have nothing scheduled; reason is logged.
 func (r *Reconciler) requestResync(now time.Time, reason string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	logger.L().Debug("resync requested", "reason", reason)
 	r.requestResyncLocked(now)
+	r.mu.Unlock()
+
+	r.signal()
 }
 
 // requestResyncLocked bumps the epoch, so a poll computed before the request is not published,

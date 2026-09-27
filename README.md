@@ -12,7 +12,9 @@ accurate eligibility for `global` services), **live task state** per service (cu
 ## 📦 What This Exporter Does
 
 - Watches Swarm **service** and **node** events to keep metrics fresh: events only mark what changed, and a single reconciler
-  inspects it, backed by a full resync (service and node list) at startup, every 5 minutes, and whenever it had to drop changes.
+  inspects it, backed by a full resync (service and node list) at startup, every 5 minutes, whenever it had to drop changes, and
+  every time the event stream reconnects. A reconnect resumes the stream from just before the last event seen; the resync covers
+  what the daemon no longer replays, such as the events of a restart.
 - Periodically polls **tasks** and aggregates **current** states per service (current task per slot for replicated services or per node for
   global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only: status/availability/constraints/platforms).
@@ -419,7 +421,7 @@ scrape_configs:
 ## 🛠 Addressed vs Original Project
 
 - **Data races**: one reconciler goroutine owns every cache and per-service metric write; removed global `nodeCount`; no per-event goroutines.
-- **Event resiliency**: reconnect with capped backoff; a bounded dirty set that falls back to a full resync; periodic resync.
+- **Event resiliency**: reconnect with capped backoff and a resync on every reconnect; a bounded dirty set that falls back to a full resync; periodic resync.
 - **Series lifecycle**: `replicas_state` is rebuilt and published as one snapshot per poll, so a scrape never sees it empty or partial; exhaustive zero emission per current service; delete series on service remove.
 - **Global desired replicas accuracy**: evaluate **eligible nodes** (status/availability/constraints/platforms), not total nodes.
 - **Label sanitation & validation**: full Prometheus regex, collision checks, max label keys, high-cardinality warning, raw→sanitized mapping.

@@ -1283,7 +1283,7 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 
 	// Phase 5: events, reconnect. The first connection streams one event and ends; the listener
 	// counts a reconnect and resumes 500 ms before that event on a second connection, which stays
-	// open.
+	// open, and requests a resync, which lists services and nodes.
 	recorder.reset()
 	engine.scriptEvents(
 		eventsConnection{fixture: "events-reconnect.jsonl", hold: false},
@@ -1295,13 +1295,20 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		"GET /events?filters={type:[node,service]}&since=<time>",
 		serviceInspectRequest(expectations.serviceInspectQuery, "svc-db"),
 		"GET /events?filters={type:[node,service]}&since=<time>",
+		"GET /services",
+		"GET /nodes",
 	}
 
 	stopListener = runListener(t, ctx, dockerClient, reconciler, anchor)
 
-	waitForEngineWire(t, ctx, "the event's inspect and a second /events connection", func() bool {
-		return len(recorder.phaseRequests()) >= len(wantReconnectRequests)
-	})
+	waitForEngineWire(
+		t,
+		ctx,
+		"the event's inspect, a second /events connection and the resync",
+		func() bool {
+			return len(recorder.phaseRequests()) >= len(wantReconnectRequests)
+		},
+	)
 
 	stopListener()
 

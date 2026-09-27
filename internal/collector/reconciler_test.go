@@ -964,31 +964,40 @@ func TestHealthSnapshot_InitialResyncNotCompleted(t *testing.T) {
 
 // ---- Event stream ----
 
-// streamDocker records the context of every Events call and serves streams the test controls.
+// streamDocker wraps a DockerAPI, records the context and Since option of every Events call, and
+// serves streams the test controls.
 type streamDocker struct {
-	*fakeDocker
+	DockerAPI
 
-	mu       sync.Mutex
-	contexts []context.Context
-	errChans []chan error
-	opened   chan struct{}
+	mu           sync.Mutex
+	contexts     []context.Context
+	sinces       []string
+	messageChans []chan events.Message
+	errChans     []chan error
+	opened       chan struct{}
 }
 
-func newStreamDocker() *streamDocker {
-	return &streamDocker{fakeDocker: &fakeDocker{}, opened: make(chan struct{}, 8)}
+func newStreamDocker(inner DockerAPI) *streamDocker {
+	return &streamDocker{DockerAPI: inner, opened: make(chan struct{}, 8)}
 }
 
-func (d *streamDocker) Events(ctx context.Context, _ client.EventsListOptions) client.EventsResult {
+func (d *streamDocker) Events(
+	ctx context.Context,
+	options client.EventsListOptions,
+) client.EventsResult {
+	messageChan := make(chan events.Message)
 	errChan := make(chan error, 1)
 
 	d.mu.Lock()
 	d.contexts = append(d.contexts, ctx)
+	d.sinces = append(d.sinces, options.Since)
+	d.messageChans = append(d.messageChans, messageChan)
 	d.errChans = append(d.errChans, errChan)
 	d.mu.Unlock()
 
 	d.opened <- struct{}{}
 
-	return client.EventsResult{Messages: make(chan events.Message), Err: errChan}
+	return client.EventsResult{Messages: messageChan, Err: errChan}
 }
 
 func (d *streamDocker) stream(index int) (streamContext context.Context, errChan chan error) {
@@ -996,6 +1005,20 @@ func (d *streamDocker) stream(index int) (streamContext context.Context, errChan
 	defer d.mu.Unlock()
 
 	return d.contexts[index], d.errChans[index]
+}
+
+func (d *streamDocker) messages(index int) chan events.Message {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.messageChans[index]
+}
+
+func (d *streamDocker) since(index int) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.sinces[index]
 }
 
 func waitOpened(t *testing.T, dockerClient *streamDocker) {
@@ -1009,7 +1032,7 @@ func waitOpened(t *testing.T, dockerClient *streamDocker) {
 }
 
 func TestListenSwarmEvents_StreamHasNoDeadlineAndIsCanceledOnShutdown(t *testing.T) {
-	dockerClient := newStreamDocker()
+	dockerClient := newStreamDocker(&fakeDocker{})
 	reconciler := newTestReconciler(t, dockerClient)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1041,7 +1064,7 @@ func TestListenSwarmEvents_StreamHasNoDeadlineAndIsCanceledOnShutdown(t *testing
 }
 
 func TestListenSwarmEvents_StreamCanceledOnReconnect(t *testing.T) {
-	dockerClient := newStreamDocker()
+	dockerClient := newStreamDocker(&fakeDocker{})
 	reconciler := newTestReconciler(t, dockerClient)
 
 	ctx, cancel := context.WithCancel(context.Background())

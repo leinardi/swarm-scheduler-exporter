@@ -189,8 +189,10 @@ func inspectService(
 // reconnects with capped exponential backoff. The first connection starts eventsSinceMargin
 // before anchor, which the caller captures before the reconciler's first resync lists anything,
 // so no change made while that resync runs is missed; a reconnect resumes eventsSinceMargin
-// before the last event seen. It only returns once parentContext is done, and the error it
-// returns always wraps parentContext.Err(); it never returns nil.
+// before the last event seen, and requests a resync once the new stream is open, since the daemon
+// may no longer hold every event the listener missed (a restart, a trimmed history). It only
+// returns once parentContext is done, and the error it returns always wraps parentContext.Err();
+// it never returns nil.
 func ListenSwarmEvents(
 	parentContext context.Context,
 	dockerClient DockerAPI,
@@ -205,7 +207,7 @@ func ListenSwarmEvents(
 	// Track where to resume from on reconnects.
 	reconnectSince := anchor.Add(-eventsSinceMargin)
 
-	for {
+	for reconnect := false; ; reconnect = true {
 		select {
 		case <-parentContext.Done():
 			return fmt.Errorf("event listener stopping: %w", parentContext.Err())
@@ -218,6 +220,7 @@ func ListenSwarmEvents(
 			reconciler,
 			filterArgs,
 			reconnectSince,
+			reconnect,
 		)
 
 		// Reset backoff after a healthy stream that saw at least one event, and resume from it.
@@ -255,13 +258,16 @@ func ListenSwarmEvents(
 // followEventStream opens one event-stream connection and dispatches its events until it ends.
 // The connection gets its own context, with no deadline: the stream is long-lived, so the
 // request deadline of the other calls would cut it. It is canceled when the connection ends,
-// which releases the connection before a reconnect, and with parentContext on shutdown.
+// which releases the connection before a reconnect, and with parentContext on shutdown. On a
+// reconnect it requests a resync after opening the stream, so the resync and the replay from
+// since overlap and together cover whatever happened while the listener was disconnected.
 func followEventStream(
 	parentContext context.Context,
 	dockerClient DockerAPI,
 	reconciler *Reconciler,
 	filterArgs client.Filters,
 	since time.Time,
+	reconnect bool,
 ) (time.Time, error) {
 	streamContext, cancelStream := context.WithCancel(parentContext)
 	defer cancelStream()
@@ -278,6 +284,10 @@ func followEventStream(
 	MarkEventsConnected(time.Now())
 
 	logger.L().Info("event stream connected", "since", since.Format(time.RFC3339Nano))
+
+	if reconnect {
+		reconciler.requestResync(time.Now(), "event stream reconnected")
+	}
 
 	return dispatchEvents(parentContext, reconciler, eventsResult.Messages, eventsResult.Err)
 }
