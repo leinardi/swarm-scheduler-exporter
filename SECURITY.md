@@ -41,7 +41,7 @@ caught it.
   release is scanned again every week, together with the Go dependencies. The release process is described in
   [docs/release.md](docs/release.md).
 
-## Verifying a release image
+## Verifying a release
 
 Release images carry a build provenance attestation and a keyless cosign signature from the release workflow. Verify an image by
 digest before you trust it:
@@ -60,3 +60,10 @@ cosign verify "$IMAGE@$DIGEST" \
 
 The signature is stored as a Sigstore bundle in an OCI 1.1 referring artifact, so `cosign verify` needs cosign v3, or v2.6 or later
 with `--new-bundle-format`.
+
+The release binaries carry a build provenance attestation from the same workflow. Verify a downloaded binary before you run it:
+
+```bash
+gh attestation verify swarm-scheduler-exporter-linux-amd64 --repo leinardi/swarm-scheduler-exporter \
+  --signer-workflow leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml --source-ref refs/heads/master
+```

@@ -160,6 +160,20 @@ jobs:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
 
+  # The release workflow's scripts, tested with a stub gh: no network, no token.
+  release-scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Test binary-attestation-status.sh
+        run: bash .github/scripts/binary-attestation-status.test.sh
+
   # Modelled on runhold's go-test.yaml, without its reusable-workflow and cache-warmup split:
   # setup-go's built-in cache (keyed on go.sum) is enough at this size.
   go-test:
