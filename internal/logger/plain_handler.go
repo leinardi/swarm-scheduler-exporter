@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -49,6 +50,10 @@ const (
 //	level=INFO hello world k=v foo=bar
 //
 // If includeTime is true, it prefixes: time=... level=INFO ...
+//
+// One record is always one line, and nothing in a message, key or value can forge a field: the
+// message is escaped (escapeUnquoted), and a key or string value that is not plainly safe is
+// written quoted (strconv.Quote).
 type PlainTextHandler struct {
 	outputWriter io.Writer
 	leveler      slog.Leveler
@@ -102,10 +107,10 @@ func (handler *PlainTextHandler) Handle(_ context.Context, record slog.Record) e
 	buffer.WriteString("level=")
 	buffer.WriteString(levelToUpper(record.Level))
 
-	// Message as raw text, WITHOUT msg= wrapper
+	// Message as unquoted text, WITHOUT msg= wrapper, escaped so it stays on this line.
 	if record.Message != "" {
 		buffer.WriteByte(' ')
-		buffer.WriteString(record.Message)
+		escapeUnquoted(&buffer, record.Message)
 	}
 
 	// Pre-resolved prefix attrs (from With)
@@ -196,8 +201,8 @@ func qualify(groups []string, attribute slog.Attr) slog.Attr {
 
 // writeAttrKV writes: " key=value" (note the leading space).
 func writeAttrKV(buffer *bytes.Buffer, attribute slog.Attr) {
-	// Skip empty attrs
-	if attribute.Equal(slog.Attr{}) || attribute.Key == "" {
+	// Skip empty attrs, and groups without a key. Any other empty key is written, quoted.
+	if skipAttr(attribute) {
 		return
 	}
 
@@ -206,8 +211,8 @@ func writeAttrKV(buffer *bytes.Buffer, attribute slog.Attr) {
 
 // emitKVInsideBraces writes: "key=value" (NO leading space).
 func emitKVInsideBraces(buffer *bytes.Buffer, attribute slog.Attr) {
-	// Skip empty attrs
-	if attribute.Equal(slog.Attr{}) || attribute.Key == "" {
+	// Skip empty attrs, and groups without a key.
+	if skipAttr(attribute) {
 		return
 	}
 
@@ -247,28 +252,138 @@ func writeKV(buffer *bytes.Buffer, key string, value slog.Value, includeLeadingS
 
 	default:
 		// Future-proof fallback
-		fmt.Fprint(buffer, value.Any())
+		writeTextValue(buffer, fmt.Sprint(value.Any()))
 	}
 }
 
-// writeKeyEq writes "key=" without any whitespace decisions.
+// skipAttr reports whether attribute is not written at all: the empty Attr, and a group with no
+// key.
+func skipAttr(attribute slog.Attr) bool {
+	return attribute.Equal(slog.Attr{}) ||
+		(attribute.Key == "" && attribute.Value.Kind() == slog.KindGroup)
+}
+
+// writeKeyEq writes "key=". A key is written raw only when it is non-empty and made of
+// [A-Za-z0-9_.-] (the dot separates groups); any other key is quoted, so a key can never bring
+// in a space, an equals sign, a quote or a brace.
 func writeKeyEq(buffer *bytes.Buffer, key string) {
-	buffer.WriteString(key)
+	if isRawKey(key) {
+		buffer.WriteString(key)
+	} else {
+		buffer.WriteString(strconv.Quote(key))
+	}
+
 	buffer.WriteByte('=')
+}
+
+// isRawKey reports whether key can be written without quotes: non-empty and made of
+// [A-Za-z0-9_.-].
+func isRawKey(key string) bool {
+	if key == "" {
+		return false
+	}
+
+	for index := range len(key) {
+		char := key[index]
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') &&
+			char != '_' && char != '.' && char != '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// writeTextValue writes a string value raw when that is unambiguous, and quoted otherwise.
+func writeTextValue(buffer *bytes.Buffer, text string) {
+	if isRawValue(text) {
+		buffer.WriteString(text)
+	} else {
+		buffer.WriteString(strconv.Quote(text))
+	}
+}
+
+// isRawValue reports whether text can be written without quotes: non-empty valid UTF-8, every
+// rune printable, and none of the bytes that delimit a field (space, quote, equals, backslash,
+// braces). strconv.Quote handles everything else, invalid bytes included.
+func isRawValue(text string) bool {
+	if text == "" || !utf8.ValidString(text) {
+		return false
+	}
+
+	for _, runeValue := range text {
+		if !strconv.IsPrint(runeValue) || strings.ContainsRune(` "=\{}`, runeValue) {
+			return false
+		}
+	}
+
+	return true
+}
+
+const (
+	// lowerHexDigits spells the escapes escapeUnquoted writes, lowercase like strconv.Quote.
+	lowerHexDigits = "0123456789abcdef"
+
+	// Hex digits of each escape: \xNN, \uNNNN (up to maxBMPRune), \UNNNNNNNN.
+	byteEscapeDigits = 2
+	bmpEscapeDigits  = 4
+	runeEscapeDigits = 8
+	maxBMPRune       = 0xFFFF
+	hexDigitBits     = 4
+	hexDigitMask     = 0xF
+)
+
+// escapeUnquoted writes text for an unquoted position (the message), so it can never end the line
+// or be read back as something else. It decodes text rune by rune from its bytes:
+//   - an invalid byte is written as \xNN from the byte itself;
+//   - a rune strconv.IsPrint rejects (C0, DEL, C1, U+2028, U+2029, bidi controls, ...) is written
+//     as \n, \r or \t, else \xNN below 0x80, else \uNNNN or \UNNNNNNNN;
+//   - a backslash is doubled, so an escape cannot be forged;
+//   - anything else is written as is.
+func escapeUnquoted(buffer *bytes.Buffer, text string) {
+	for index := 0; index < len(text); {
+		runeValue, size := utf8.DecodeRuneInString(text[index:])
+
+		switch {
+		case runeValue == utf8.RuneError && size == 1:
+			writeHexEscape(buffer, 'x', rune(text[index]), byteEscapeDigits)
+		case runeValue == '\\':
+			buffer.WriteString(`\\`)
+		case strconv.IsPrint(runeValue):
+			buffer.WriteString(text[index : index+size])
+		case runeValue == '\n':
+			buffer.WriteString(`\n`)
+		case runeValue == '\r':
+			buffer.WriteString(`\r`)
+		case runeValue == '\t':
+			buffer.WriteString(`\t`)
+		case runeValue < utf8.RuneSelf:
+			writeHexEscape(buffer, 'x', runeValue, byteEscapeDigits)
+		case runeValue <= maxBMPRune:
+			writeHexEscape(buffer, 'u', runeValue, bmpEscapeDigits)
+		default:
+			writeHexEscape(buffer, 'U', runeValue, runeEscapeDigits)
+		}
+
+		index += size
+	}
+}
+
+// writeHexEscape writes a backslash, then kind, then value in digits lowercase hex digits.
+func writeHexEscape(buffer *bytes.Buffer, kind byte, value rune, digits int) {
+	buffer.WriteByte('\\')
+	buffer.WriteByte(kind)
+
+	for shift := (digits - 1) * hexDigitBits; shift >= 0; shift -= hexDigitBits {
+		buffer.WriteByte(lowerHexDigits[(value>>shift)&hexDigitMask])
+	}
 }
 
 // writeScalarValue writes non-group kinds.
 func writeScalarValue(buffer *bytes.Buffer, value slog.Value) {
 	switch value.Kind() {
 	case slog.KindString:
-		text := value.String()
-		if strings.ContainsAny(text, " \t") {
-			buffer.WriteByte('"')
-			buffer.WriteString(strings.ReplaceAll(text, `"`, `\"`))
-			buffer.WriteByte('"')
-		} else {
-			buffer.WriteString(text)
-		}
+		writeTextValue(buffer, value.String())
 	case slog.KindInt64:
 		buffer.WriteString(strconv.FormatInt(value.Int64(), 10))
 	case slog.KindUint64:
@@ -291,7 +406,8 @@ func writeScalarValue(buffer *bytes.Buffer, value slog.Value) {
 	case slog.KindDuration:
 		buffer.WriteString(value.Duration().String())
 	case slog.KindAny:
-		fmt.Fprint(buffer, value.Any())
+		// Errors included: their text is written like any other string.
+		writeTextValue(buffer, fmt.Sprint(value.Any()))
 	case slog.KindLogValuer:
 		// Resolve and re-emit via scalar path.
 		writeScalarValue(buffer, value.Resolve())
@@ -300,7 +416,7 @@ func writeScalarValue(buffer *bytes.Buffer, value slog.Value) {
 		buffer.WriteString("{}")
 	default:
 		// Should not happen (callers route other kinds), keep safe:
-		fmt.Fprint(buffer, value.Any())
+		writeTextValue(buffer, fmt.Sprint(value.Any()))
 	}
 }
 
