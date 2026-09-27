@@ -94,6 +94,7 @@ jobs:
   test:
     needs: guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -114,6 +115,7 @@ jobs:
   audit:
     needs: guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
