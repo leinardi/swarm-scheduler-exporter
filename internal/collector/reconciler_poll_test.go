@@ -27,6 +27,9 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -536,6 +539,122 @@ func TestPoll_ThirdConsecutiveRejectionOmitsAndFails(t *testing.T) {
 
 	if got := lastPollSuccessUnixNano.Load(); got != timestampBefore {
 		t.Errorf("poll timestamp moved on a partial failure: %d, want %d", got, timestampBefore)
+	}
+}
+
+// ---- Completeness ----
+
+// TestPoll_MoreServicesThanOneTaskFilter runs a whole poll over one service more than a single
+// TaskList filter holds: every service must be counted and published, and the poll must count
+// as a success only then.
+func TestPoll_MoreServicesThanOneTaskFilter(t *testing.T) {
+	resetHealthState(t)
+
+	serviceCount := maxServicesInTaskFilter + 1
+	services := make([]swarm.Service, 0, serviceCount)
+	tasks := make([]swarm.Task, 0, serviceCount)
+
+	for index := range serviceCount {
+		serviceID := fmt.Sprintf("svc-%05d", index)
+		services = append(services, makeReplicatedService(serviceID, "stack", serviceID, 1))
+		tasks = append(tasks, runningTask(serviceID, 1, "n1"))
+	}
+
+	setup := newPollTestSetup(t, services, []swarm.Node{makeSchedulableNode("n1", "h1")}, tasks)
+	setup.reconciler.nextPeriodicResync = time.Now().Add(time.Hour)
+
+	runReconciler(t, setup.reconciler)
+
+	before := time.Now()
+
+	pollErr := PollAndPublishReplicasState(context.Background(), setup.docker, setup.reconciler)
+	if pollErr != nil {
+		t.Fatalf("poll: %v", pollErr)
+	}
+
+	setup.docker.mu.Lock()
+	filterSizes := slices.Clone(setup.docker.taskFilterSizes)
+	setup.docker.mu.Unlock()
+
+	if want := []int{maxServicesInTaskFilter, 1}; !slices.Equal(filterSizes, want) {
+		t.Errorf("task filter sizes = %v, want %v", filterSizes, want)
+	}
+
+	running := 0
+
+	for id := range gatherSeries(t, setup.families) {
+		if strings.HasPrefix(id, runningReplicasFQName+"{") {
+			running++
+		}
+	}
+
+	if running != serviceCount {
+		t.Errorf("running_replicas series = %d, want %d", running, serviceCount)
+	}
+
+	last := fmt.Sprintf("svc-%05d", serviceCount-1)
+	setup.assertValue(t, "the last service's running replicas", runningReplicasFQName,
+		serviceLabels("stack", last, serviceModeReplicated), 1)
+
+	if got := lastPollSuccessUnixNano.Load(); got < before.UnixNano() {
+		t.Errorf("poll timestamp = %d, want at least %d", got, before.UnixNano())
+	}
+
+	if got := testutil.ToFloat64(setup.rejections); got != 0 {
+		t.Errorf("poll_rejections_total = %v, want 0", got)
+	}
+}
+
+// TestPoll_UncountedServiceIsNeverSilentlyDropped submits counts that miss a snapshot service:
+// it is carried over like a rejected one, and omitted with a failed poll after that, never
+// dropped while the poll succeeds.
+func TestPoll_UncountedServiceIsNeverSilentlyDropped(t *testing.T) {
+	web := makeReplicatedService("svc1", "stack", "web", 1)
+	db := makeReplicatedService("svc2", "stack", "db", 1)
+	setup := newPollTestSetup(
+		t,
+		[]swarm.Service{web, db},
+		[]swarm.Node{makeSchedulableNode("n1", "h1")},
+		[]swarm.Task{runningTask("svc1", 1, "n1"), runningTask("svc2", 1, "n1")},
+	)
+
+	setup.poll(t)
+
+	webLabels := serviceLabels("stack", "web", serviceModeReplicated)
+
+	for poll := 1; poll <= maxCarriedPolls+1; poll++ {
+		snapshot := setup.reconciler.buildPollSnapshot()
+
+		counters, pollErr := pollReplicasState(context.Background(), setup.docker, snapshot)
+		if pollErr != nil {
+			t.Fatalf("pollReplicasState: %v", pollErr)
+		}
+
+		delete(counters, "svc1")
+
+		applyErr := setup.reconciler.applyPollCounts(snapshot, counters)
+
+		if poll <= maxCarriedPolls {
+			if applyErr != nil {
+				t.Fatalf("poll %d: %v, want svc1 carried over", poll, applyErr)
+			}
+
+			setup.assertValue(t, "svc1 running carried over", runningReplicasFQName, webLabels, 1)
+
+			continue
+		}
+
+		if !errors.Is(applyErr, ErrPollPartiallyRejected) {
+			t.Fatalf("poll %d: err = %v, want ErrPollPartiallyRejected", poll, applyErr)
+		}
+
+		if _, found := setup.value(t, runningReplicasFQName, webLabels); found {
+			t.Error("svc1 still published after its counts were missing too many polls in a row")
+		}
+	}
+
+	if got := testutil.ToFloat64(setup.rejections); got != maxCarriedPolls+1 {
+		t.Errorf("poll_rejections_total = %v, want %d", got, maxCarriedPolls+1)
 	}
 }
 

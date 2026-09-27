@@ -269,8 +269,8 @@ func (verdict *pollVerdict) accepts(
 
 // applyPollCounts judges each service of a poll and publishes the result. A service no longer
 // cached is dropped and marked dirty. An accepted service is published with the snapshot's labels
-// and desired count, which are current since its generation did not move. A rejected one keeps
-// its previously published series for up to maxCarriedPolls polls in a row, if its label identity
+// and desired count, which are current since its generation did not move. A rejected one, or one
+// the poll has no counts for, keeps its previously published series for up to maxCarriedPolls polls in a row, if its label identity
 // did not change; past that it is omitted and the poll fails as a partial failure.
 func (r *Reconciler) applyPollCounts(snapshot *pollSnapshot, counters serviceCounter) error {
 	cached := getAllServiceMetadata()
@@ -288,10 +288,11 @@ func (r *Reconciler) applyPollCounts(snapshot *pollSnapshot, counters serviceCou
 			continue
 		}
 
-		if verdict.accepts(snapshot, serviceID, service) {
-			if counter, counted := counters[serviceID]; counted {
-				published[serviceID] = counter
-			}
+		// A service the poll has no counts for is handled like a rejected one, never skipped:
+		// skipping it would drop its series while the poll still counted as a success.
+		counter, counted := counters[serviceID]
+		if counted && verdict.accepts(snapshot, serviceID, service) {
+			published[serviceID] = counter
 
 			continue
 		}

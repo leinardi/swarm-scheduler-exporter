@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -53,8 +54,8 @@ const (
 	// Capacity hint for the per-service state map.
 	defaultStatesCapacity = 16
 
-	// Limit for the number of service filters to attach to TaskList calls.
-	// Prevents extremely large filter payloads; adjust as needed.
+	// maxServicesInTaskFilter bounds the service IDs of one TaskList filter, so a large cluster
+	// never sends one huge query. A poll with more services lists their tasks in several calls.
 	maxServicesInTaskFilter = 10000
 )
 
@@ -224,7 +225,7 @@ func newReplicasStateSnapshot(customLabelNames []string) *replicasStateSnapshot 
 // preferredTask. Job tasks from an older job iteration are skipped. Everything but the task list
 // comes from snapshot, never from the live caches, so the counts and the metadata they are judged
 // against describe the same moment; tasks of a service not in snapshot are skipped, the
-// reconciler will add it to a later one.
+// reconciler will add it to a later one. Every service of snapshot gets a counter.
 func pollReplicasState(
 	parentContext context.Context,
 	dockerClient DockerAPI,
@@ -238,19 +239,10 @@ func pollReplicasState(
 		return replicasByService, nil
 	}
 
-	queriedServiceIDs := serviceIDs[:min(len(serviceIDs), maxServicesInTaskFilter)]
-
-	listContext, cancelList := withDockerTimeout(parentContext)
-	defer cancelList()
-
-	taskListResult, listErr := dockerClient.TaskList(listContext, client.TaskListOptions{
-		Filters: make(client.Filters).Add("service", queriedServiceIDs...),
-	})
+	tasks, listErr := listServiceTasks(parentContext, dockerClient, serviceIDs)
 	if listErr != nil {
-		return serviceCounter{}, fmt.Errorf("task list: %w", listErr)
+		return serviceCounter{}, listErr
 	}
-
-	tasks := taskListResult.Items
 
 	// Step 1: choose the current task per dedupe key.
 	latestByKey := make(map[latestKey]*swarm.Task)
@@ -288,9 +280,38 @@ func pollReplicasState(
 	}
 
 	markEligibleNodesCovered(replicasByService, completedNodesByService, snapshot)
-	addServicesWithoutTasks(replicasByService, queriedServiceIDs, snapshot)
+	addServicesWithoutTasks(replicasByService, serviceIDs, snapshot)
 
 	return replicasByService, nil
+}
+
+// listServiceTasks lists the tasks of serviceIDs, in calls of at most maxServicesInTaskFilter
+// services each, every call under its own request deadline. Any failed call fails the whole
+// list: a poll that saw only some services' tasks would count the others as having none.
+func listServiceTasks(
+	parentContext context.Context,
+	dockerClient DockerAPI,
+	serviceIDs []string,
+) ([]swarm.Task, error) {
+	var tasks []swarm.Task
+
+	for chunk := range slices.Chunk(serviceIDs, maxServicesInTaskFilter) {
+		listContext, cancelList := withDockerTimeout(parentContext)
+
+		taskListResult, listErr := dockerClient.TaskList(listContext, client.TaskListOptions{
+			Filters: make(client.Filters).Add("service", chunk...),
+		})
+
+		cancelList()
+
+		if listErr != nil {
+			return nil, fmt.Errorf("task list: %w", listErr)
+		}
+
+		tasks = append(tasks, taskListResult.Items...)
+	}
+
+	return tasks, nil
 }
 
 // dedupeKeyForTask returns the dedupe key task is counted under, and false when task is not
@@ -415,8 +436,7 @@ func eligibleNodesCovered(
 // it still emits running_replicas=0, zeroed task states and an at_desired series. Without it a
 // service that was never scheduled (a global service no node is eligible for, a replicated
 // service whose tasks cannot be created) has no series at all, and an "at_desired == 0" alert
-// never fires for it. Only services that were in the TaskList filter are added: one beyond
-// maxServicesInTaskFilter was not queried, so its task count is unknown, not zero.
+// never fires for it.
 func addServicesWithoutTasks(
 	replicasByService serviceCounter,
 	queriedServiceIDs []string,

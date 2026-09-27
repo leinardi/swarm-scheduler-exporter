@@ -1370,18 +1370,36 @@ func TestEngineWire_TaskFilterCap(t *testing.T) {
 		t.Fatalf("PollReplicasState: %v", pollErr)
 	}
 
+	// One service past the cap: two calls, the first at the cap, together covering every
+	// service exactly once.
 	requests := engine.recorder.phaseRequests()
-	if len(requests) != 1 || requests[0].path != "/tasks" {
-		t.Fatalf("requests = %v, want a single GET /tasks", normalizedRequests(requests))
+	if len(requests) != 2 || requests[0].path != "/tasks" || requests[1].path != "/tasks" {
+		t.Fatalf("requests = %v, want two GET /tasks", normalizedRequests(requests))
 	}
 
-	services := decodeFilters(t, requests[0].query.Get("filters"))["service"]
-	if len(services) != maxServicesInTaskFilter {
-		t.Errorf(
-			"task filter carries %d services, want the cap of %d",
-			len(services),
-			maxServicesInTaskFilter,
-		)
+	queried := make(map[string]int)
+
+	for index := range requests {
+		services := decodeFilters(t, requests[index].query.Get("filters"))["service"]
+		if len(services) > maxServicesInTaskFilter {
+			t.Errorf(
+				"task filter %d carries %d services, over the cap of %d",
+				index,
+				len(services),
+				maxServicesInTaskFilter,
+			)
+		}
+
+		for _, serviceID := range services {
+			queried[serviceID]++
+		}
+	}
+
+	for index := range maxServicesInTaskFilter + 1 {
+		serviceID := fmt.Sprintf("svc-%05d", index)
+		if queried[serviceID] != 1 {
+			t.Errorf("%s queried %d times, want once", serviceID, queried[serviceID])
+		}
 	}
 
 	assertWireProperties(t, engine.recorder.allRequests())

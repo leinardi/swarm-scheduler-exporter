@@ -65,6 +65,8 @@ type reconcilerDocker struct {
 	serviceListCalls int
 	nodeListCalls    int
 	inspectCalls     map[string]int
+	// taskFilterSizes records how many service IDs each TaskList call filtered on.
+	taskFilterSizes []int
 }
 
 var _ DockerAPI = (*reconcilerDocker)(nil)
@@ -142,14 +144,27 @@ func (d *reconcilerDocker) ServiceInspect(
 	)
 }
 
+// TaskList returns the tasks of the services in the call's service filter, or every task when
+// there is no such filter.
 func (d *reconcilerDocker) TaskList(
-	context.Context,
-	client.TaskListOptions,
+	_ context.Context,
+	options client.TaskListOptions,
 ) (client.TaskListResult, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	return client.TaskListResult{Items: append([]swarm.Task(nil), d.tasks...)}, nil
+	filtered, hasFilter := options.Filters["service"]
+	d.taskFilterSizes = append(d.taskFilterSizes, len(filtered))
+
+	var tasks []swarm.Task
+
+	for index := range d.tasks {
+		if !hasFilter || filtered[d.tasks[index].ServiceID] {
+			tasks = append(tasks, d.tasks[index])
+		}
+	}
+
+	return client.TaskListResult{Items: tasks}, nil
 }
 
 func (*reconcilerDocker) ContainerList(
