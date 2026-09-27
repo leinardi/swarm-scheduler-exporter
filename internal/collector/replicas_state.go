@@ -35,9 +35,11 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
@@ -110,6 +112,10 @@ type replicasStateSnapshot struct {
 	stateLabelNames   []string
 	serviceLabelNames []string
 }
+
+// ErrReplicasStateNotConfigured is returned by UpdateReplicasStateGauge before
+// ConfigureReplicasStateGauge has run: there is nowhere to publish to.
+var ErrReplicasStateNotConfigured = errors.New("replicas state gauge not configured")
 
 var atDesiredLogState sync.Map // map[string]string (serviceID -> "running|desired")
 
@@ -472,20 +478,41 @@ func addServicesWithoutTasks(replicasByService serviceCounter, queriedServiceIDs
 // UpdateReplicasStateGauge publishes the aggregated state counters as the replicas_state,
 // running_replicas and at_desired families. The whole set is built first and replaces the
 // previous one in a single swap, so services that disappeared are dropped without a scrape ever
-// seeing the families empty or half rebuilt. If the build fails, the previous set stays.
-func UpdateReplicasStateGauge(counterByService serviceCounter) {
+// seeing the families empty or half rebuilt. If the build fails, the previous set stays and the
+// error is returned: nothing was published, so the caller must not count the poll as a success.
+func UpdateReplicasStateGauge(counterByService serviceCounter) error {
 	if replicasStateCollector == nil {
-		return
+		return ErrReplicasStateNotConfigured
 	}
 
 	metrics, buildErr := buildReplicasState(replicasStateCollector, counterByService).build()
 	if buildErr != nil {
-		logger.L().Error("build replicas state snapshot; keeping previous", "err", buildErr)
-
-		return
+		return fmt.Errorf("build replicas state snapshot; keeping previous: %w", buildErr)
 	}
 
 	replicasStateCollector.publish(metrics)
+
+	return nil
+}
+
+// PollAndPublishReplicasState polls the replicas state, publishes it, and only then records the
+// poll as successful for health, with the time the publish completed. A failed poll or a failed
+// snapshot build leaves the health timestamp where it was, so health turns red once polls keep
+// failing instead of reporting the last attempt.
+func PollAndPublishReplicasState(parentContext context.Context, dockerClient DockerAPI) error {
+	polledStates, pollErr := PollReplicasState(parentContext, dockerClient)
+	if pollErr != nil {
+		return pollErr
+	}
+
+	publishErr := UpdateReplicasStateGauge(polledStates)
+	if publishErr != nil {
+		return publishErr
+	}
+
+	MarkPollOK(time.Now())
+
+	return nil
 }
 
 // buildReplicasState records the series of every service in counterByService, for all three

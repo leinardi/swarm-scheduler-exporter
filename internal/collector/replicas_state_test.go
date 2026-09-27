@@ -480,7 +480,7 @@ func TestPollReplicasState_ServicesWithoutTasks_EmitZeroSeries(t *testing.T) {
 		t.Fatalf("got %d services, want 3 (services without tasks included)", len(sc))
 	}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	gathered := gatherSeries(t, families)
 
@@ -581,7 +581,7 @@ func TestUpdateReplicasStateGauge_AtDesired(t *testing.T) {
 	tc.inc(string(swarm.TaskStateRunning))
 	sc := serviceCounter{"svc1": tc}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	running, found := snapshotValue(
 		t,
@@ -625,7 +625,7 @@ func TestUpdateReplicasStateGauge_NotAtDesired(t *testing.T) {
 	tc.inc(string(swarm.TaskStateRunning)) // only 1, desired=3
 	sc := serviceCounter{"svc1": tc}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	atDesired, found := snapshotValue(
 		t,
@@ -653,7 +653,7 @@ func TestUpdateReplicasStateGauge_MissingDesiredCache_NoPanic(t *testing.T) {
 	sc := serviceCounter{"svc_nodesired": tc}
 
 	// Must not panic.
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	atDesired, found := snapshotValue(
 		t,
@@ -690,6 +690,27 @@ func TestServiceCounter_GetCreatesLazily(t *testing.T) {
 }
 
 // ---- Snapshot publication ----
+
+// publishReplicasState publishes counters, failing the test if the build fails.
+func publishReplicasState(t *testing.T, counters serviceCounter) {
+	t.Helper()
+
+	publishErr := UpdateReplicasStateGauge(counters)
+	if publishErr != nil {
+		t.Fatalf("UpdateReplicasStateGauge: %v", publishErr)
+	}
+}
+
+// publishReplicasStateAsync is publishReplicasState for goroutines other than the test's own,
+// where t.Fatalf must not be called.
+func publishReplicasStateAsync(t *testing.T, counters serviceCounter) {
+	t.Helper()
+
+	publishErr := UpdateReplicasStateGauge(counters)
+	if publishErr != nil {
+		t.Errorf("UpdateReplicasStateGauge: %v", publishErr)
+	}
+}
 
 // replicasStateCounters returns a serviceCounter with one service per name in stack "s", each
 // with running tasks, after caching metadata and desired replicas for it.
@@ -743,7 +764,7 @@ func TestUpdateReplicasStateGauge_BuildDoesNotPublish(t *testing.T) {
 	expectedA := expectedReplicasStateSeries(t, countersA)
 	expectedB := expectedReplicasStateSeries(t, countersB)
 
-	UpdateReplicasStateGauge(countersA)
+	publishReplicasState(t, countersA)
 
 	if gathered := gatherSeries(t, families); !maps.Equal(gathered, expectedA) {
 		t.Fatalf("after publishing A gathered %v, want %v", gathered, expectedA)
@@ -777,8 +798,8 @@ func TestUpdateReplicasStateGauge_OnePublishUpdatesAllFamilies(t *testing.T) {
 	resetCollectorState(t)
 	families := installReplicasStateGauges(t)
 
-	UpdateReplicasStateGauge(replicasStateCounters(t, 1, 2, "svc"))
-	UpdateReplicasStateGauge(replicasStateCounters(t, 2, 2, "svc"))
+	publishReplicasState(t, replicasStateCounters(t, 1, 2, "svc"))
+	publishReplicasState(t, replicasStateCounters(t, 2, 2, "svc"))
 
 	gathered := gatherSeries(t, families)
 	labels := serviceLabels("s", "svc", serviceModeReplicated)
@@ -827,7 +848,7 @@ func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
 		nodeSeriesID("worker", "active", "ready"):  1,
 	}
 
-	UpdateReplicasStateGauge(countersA)
+	publishReplicasState(t, countersA)
 	UpdateNodesByStateFromSlice(nodesA)
 
 	stop := make(chan struct{})
@@ -852,8 +873,8 @@ func TestSnapshotFamilies_ConcurrentScrapes_SeeWholeSnapshots(t *testing.T) {
 
 	updaters.Go(func() {
 		alternate(
-			func() { UpdateReplicasStateGauge(countersA) },
-			func() { UpdateReplicasStateGauge(countersB) },
+			func() { publishReplicasStateAsync(t, countersA) },
+			func() { publishReplicasStateAsync(t, countersB) },
 		)
 	})
 
@@ -1028,7 +1049,7 @@ func pollJobAtDesired(
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	UpdateReplicasStateGauge(sc)
+	publishReplicasState(t, sc)
 
 	labels := serviceLabels("s", "job", mode)
 

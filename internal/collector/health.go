@@ -42,19 +42,15 @@ var (
 	lastEventsConnectUnixNano atomic.Int64
 
 	// Prometheus health metrics.
-	exporterHealthGauge prometheus.Gauge
+	exporterHealthGauge prometheus.GaugeFunc
 	buildInfoGauge      *prometheus.GaugeVec
 )
 
-// ConfigureHealthGauges registers the health and build info metrics.
-func ConfigureHealthGauges(version, commit, date string) {
-	exporterHealthGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace:   prometheusNamespace,
-		Subsystem:   prometheusExporterSubsystem,
-		Name:        "health",
-		Help:        "Exporter health status: 1=healthy, 0=unhealthy.",
-		ConstLabels: nil,
-	})
+// ConfigureHealthGauges registers the health and build info metrics. The health gauge is
+// evaluated on every scrape with the same check as /healthz, so it turns 0 when polls stop
+// succeeding, even if the poller is stuck or never started.
+func ConfigureHealthGauges(version, commit, date string, pollDelay time.Duration) {
+	exporterHealthGauge = newHealthGauge(pollDelay)
 	prometheus.MustRegister(exporterHealthGauge)
 
 	buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -70,7 +66,29 @@ func ConfigureHealthGauges(version, commit, date string) {
 	buildInfoGauge.WithLabelValues(version, commit, date).Set(1)
 }
 
-// MarkPollOK records the time of the latest successful replicas-state publish.
+// newHealthGauge returns swarm_exporter_health, reporting HealthSnapshot at scrape time.
+//
+//nolint:ireturn // prometheus.NewGaugeFunc returns this interface; its implementation is unexported
+func newHealthGauge(pollDelay time.Duration) prometheus.GaugeFunc {
+	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace:   prometheusNamespace,
+		Subsystem:   prometheusExporterSubsystem,
+		Name:        "health",
+		Help:        "Exporter health status: 1=healthy, 0=unhealthy.",
+		ConstLabels: nil,
+	}, func() float64 {
+		healthy, _ := HealthSnapshot(pollDelay, time.Now())
+		if healthy {
+			return 1
+		}
+
+		return 0
+	})
+}
+
+// MarkPollOK records the time of the latest successful replicas-state publish. Callers pass the
+// time the publish completed, not the time the poll started, so a slow poll does not look fresher
+// than it is.
 func MarkPollOK(now time.Time) {
 	lastPollSuccessUnixNano.Store(now.UnixNano())
 }
@@ -102,17 +120,4 @@ func HealthSnapshot(pollDelay time.Duration, now time.Time) (healthy bool, reaso
 	}
 
 	return true, ""
-}
-
-// SetExporterHealth sets the health gauge to 1 or 0.
-func SetExporterHealth(healthy bool) {
-	if exporterHealthGauge == nil {
-		return
-	}
-
-	if healthy {
-		exporterHealthGauge.Set(1)
-	} else {
-		exporterHealthGauge.Set(0)
-	}
 }

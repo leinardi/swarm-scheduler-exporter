@@ -135,12 +135,12 @@ the exporter can expose **container state** metrics when started with `-containe
 
 ## ✅ Health
 
-The exporter is healthy once a task poll has succeeded and the latest successful poll is no older than
+The exporter is healthy once a task poll has been published and the latest published poll is no older than
 `max(3 × -poll-delay, 30s)` (30s with the default 10s poll delay).
 
 - HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason (for example
   `no successful poll yet` or `last poll too old`) when not.
-- Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy.
+- Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy, evaluated at every scrape.
 
 ## 📋 Requirements
 

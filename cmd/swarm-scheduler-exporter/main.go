@@ -172,7 +172,7 @@ func run() int {
 	// Register metrics (including health/build info)
 	collector.ConfigureDesiredReplicasGauge()
 	collector.ConfigureReplicasStateGauge()
-	collector.ConfigureHealthGauges(version, commit, date)
+	collector.ConfigureHealthGauges(version, commit, date, *pollDelay)
 	collector.ConfigureNodesByStateGauge()
 	collector.ConfigureExporterOpsMetrics()
 	collector.ConfigureServiceUpdateMetrics()
@@ -363,38 +363,8 @@ func startPoller(
 		ticker := time.NewTicker(delay)
 		defer ticker.Stop()
 
-		// Local helper to run one full poll cycle with metrics + health.
-		pollOnce := func(now time.Time) {
-			startTime := now
-			polledStates, pollErr := collector.PollReplicasState(parentContext, dockerAPI)
-
-			collector.ObservePollDuration(time.Since(startTime))
-			collector.IncPolls()
-
-			if pollErr == nil {
-				collector.UpdateReplicasStateGauge(polledStates)
-				collector.MarkPollOK(now)
-			} else {
-				collector.IncPollErrors()
-				loggerInstance.Error("poll replicas state failed", "err", pollErr)
-			}
-
-			// --- Containers (opt-in) ---
-			if *enableContainers {
-				containerRows, contErr := collector.PollContainersState(parentContext, dockerAPI)
-				if contErr != nil {
-					loggerInstance.Warn("poll containers state failed", "err", contErr)
-				} else {
-					collector.UpdateContainersStateGauge(containerRows)
-				}
-			}
-
-			healthy, _ := collector.HealthSnapshot(delay, now)
-			collector.SetExporterHealth(healthy)
-		}
-
 		// --- Immediate first poll (no waiting for the first tick) ---
-		pollOnce(time.Now())
+		pollOnce(parentContext, dockerAPI)
 
 		for {
 			select {
@@ -403,10 +373,36 @@ func startPoller(
 
 				return
 			case <-ticker.C:
-				pollOnce(time.Now())
+				pollOnce(parentContext, dockerAPI)
 			}
 		}
 	})
+}
+
+// pollOnce runs one poll cycle: the replicas state, then the containers when enabled.
+func pollOnce(parentContext context.Context, dockerAPI collector.DockerAPI) {
+	loggerInstance := logger.L()
+	startTime := time.Now()
+
+	pollErr := collector.PollAndPublishReplicasState(parentContext, dockerAPI)
+
+	collector.ObservePollDuration(time.Since(startTime))
+	collector.IncPolls()
+
+	if pollErr != nil {
+		collector.IncPollErrors()
+		loggerInstance.Error("poll replicas state failed", "err", pollErr)
+	}
+
+	// --- Containers (opt-in) ---
+	if *enableContainers {
+		containerRows, contErr := collector.PollContainersState(parentContext, dockerAPI)
+		if contErr != nil {
+			loggerInstance.Warn("poll containers state failed", "err", contErr)
+		} else {
+			collector.UpdateContainersStateGauge(containerRows)
+		}
+	}
 }
 
 // runHTTPServer binds address and serves handler on it with serveHTTP.

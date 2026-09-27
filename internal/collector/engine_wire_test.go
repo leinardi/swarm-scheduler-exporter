@@ -713,7 +713,7 @@ func configureCollectorsLikeMain(t *testing.T) *recordingRegisterer {
 	// Same calls, same order as main.run with -containers -containers-include-swarm.
 	ConfigureDesiredReplicasGauge()
 	ConfigureReplicasStateGauge()
-	ConfigureHealthGauges("test", "none", "unknown")
+	ConfigureHealthGauges("test", "none", "unknown", 10*time.Second)
 	ConfigureNodesByStateGauge()
 	ConfigureExporterOpsMetrics()
 	ConfigureServiceUpdateMetrics()
@@ -1146,7 +1146,10 @@ func testEngineWire(t *testing.T, fixtureSet engineWireFixtureSet) {
 		t.Fatalf("PollReplicasState: %v", pollErr)
 	}
 
-	UpdateReplicasStateGauge(polled)
+	publishErr := UpdateReplicasStateGauge(polled)
+	if publishErr != nil {
+		t.Fatalf("UpdateReplicasStateGauge: %v", publishErr)
+	}
 
 	assertRequestSequence(
 		t,

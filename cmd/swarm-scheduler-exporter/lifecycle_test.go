@@ -27,14 +27,18 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/client"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/leinardi/swarm-scheduler-exporter/internal/collector"
+	"github.com/leinardi/swarm-scheduler-exporter/internal/server"
 )
 
 var errSeedUnavailable = errors.New("service list unavailable")
@@ -244,4 +248,126 @@ func TestWorkers_CancelBeforeSeedStopsBoth(t *testing.T) {
 	if eventsCalls != 0 {
 		t.Errorf("event streams opened = %d, want 0: the seed never succeeded", eventsCalls)
 	}
+}
+
+// configureHealthMetrics registers the health gauge and the replicas-state families on a private
+// registry, so a poll that runs publishes and marks health the way it does in run, and clears
+// the process-wide poll timestamp before and after the test.
+func configureHealthMetrics(t *testing.T, pollDelay time.Duration) *prometheus.Registry {
+	t.Helper()
+
+	registry := prometheus.NewRegistry()
+	previousRegisterer := prometheus.DefaultRegisterer
+	prometheus.DefaultRegisterer = registry
+
+	// time.Unix(0, 0).UnixNano() is 0, which HealthSnapshot reads as "never polled".
+	collector.MarkPollOK(time.Unix(0, 0))
+
+	t.Cleanup(func() {
+		prometheus.DefaultRegisterer = previousRegisterer
+
+		collector.MarkPollOK(time.Unix(0, 0))
+	})
+
+	collector.ConfigureHealthGauges("test", "none", "unknown", pollDelay)
+	collector.ConfigureReplicasStateGauge()
+
+	return registry
+}
+
+// getHealthz serves one GET /healthz with the handler run wires, and returns the recorded response.
+func getHealthz(t *testing.T, pollDelay time.Duration) *httptest.ResponseRecorder {
+	t.Helper()
+
+	httpMux := server.NewMuxWithHealth(func() (bool, string) {
+		return collector.HealthSnapshot(pollDelay, time.Now())
+	})
+
+	recorder := httptest.NewRecorder()
+	httpMux.ServeHTTP(
+		recorder,
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil),
+	)
+
+	return recorder
+}
+
+func TestWorkers_PermanentSeedFailureIsUnhealthy(t *testing.T) {
+	pollDelay := time.Second
+	registry := configureHealthMetrics(t, pollDelay)
+
+	dockerAPI := &lifecycleDocker{seedFailures: 1 << 30}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	workerGroup := startWorkers(ctx, dockerAPI)
+
+	// A second attempt comes after the first backoff. A poller that did not wait for the seed
+	// polls as soon as it starts, so by then it would have published and turned health green.
+	waitUntil(t, "a second failed seed attempt", func() bool {
+		serviceListCalls, _, _, _ := dockerAPI.snapshot()
+
+		return serviceListCalls > 1
+	})
+
+	recorder := getHealthz(t, pollDelay)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Errorf("/healthz status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+
+	if body := recorder.Body.String(); body != "no successful poll yet\n" {
+		t.Errorf("/healthz body = %q, want the never-polled reason", body)
+	}
+
+	if got := gatheredValue(t, registry, "swarm_exporter_health"); got != 0 {
+		t.Errorf("swarm_exporter_health = %v, want 0", got)
+	}
+
+	cancel()
+	waitWorkers(t, workerGroup)
+}
+
+func TestWorkers_SeedThenPublishIsHealthy(t *testing.T) {
+	pollDelay := time.Second
+	registry := configureHealthMetrics(t, pollDelay)
+
+	dockerAPI := &lifecycleDocker{seedFailures: 1}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	workerGroup := startWorkers(ctx, dockerAPI)
+
+	waitUntil(t, "/healthz to report healthy after the retried seed", func() bool {
+		return getHealthz(t, pollDelay).Code == http.StatusOK
+	})
+
+	if got := gatheredValue(t, registry, "swarm_exporter_health"); got != 1 {
+		t.Errorf("swarm_exporter_health = %v, want 1", got)
+	}
+
+	cancel()
+	waitWorkers(t, workerGroup)
+}
+
+// gatheredValue gathers registry and returns the value of the single series of the gauge name.
+func gatheredValue(t *testing.T, registry *prometheus.Registry, name string) float64 {
+	t.Helper()
+
+	families, gatherErr := registry.Gather()
+	if gatherErr != nil {
+		t.Fatalf("gather: %v", gatherErr)
+	}
+
+	for _, family := range families {
+		if family.GetName() == name && len(family.GetMetric()) == 1 {
+			return family.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+
+	t.Fatalf("no single-series gauge %s gathered", name)
+
+	return 0
 }
