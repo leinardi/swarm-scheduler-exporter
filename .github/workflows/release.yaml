@@ -73,6 +73,7 @@ env:
   # released on GitHub but has no image on quay.io, so this is v1.22.3.
   SKOPEO_IMAGE: quay.io/skopeo/stable:v1.22.3-immutable@sha256:c0ee1f4edca5c01cb8d5611124f92f3cc47196ecab68aee5d0f90834e00574d5
   # Pinned by hand, like SVU_VERSION: setup-trivy installs whatever it is given.
+  # scheduled-scan.yaml scans with the same version; bump both together.
   TRIVY_VERSION: v0.74.0
 
 jobs:

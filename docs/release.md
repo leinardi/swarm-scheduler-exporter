@@ -227,6 +227,15 @@ gh attestation verify "oci://$IMAGE@$DIGEST" --repo leinardi/swarm-scheduler-exp
 docker buildx imagetools create -t "$IMAGE:latest" -t "$IMAGE:<major>" "$IMAGE@$DIGEST"
 ```
 
+## Scheduled scan
+
+A release is scanned once, when it is built, but vulnerabilities keep being published.
+[`.github/workflows/scheduled-scan.yaml`](../.github/workflows/scheduled-scan.yaml) runs every Monday, and on demand from the
+Actions tab. It resolves `:latest` to its index digest once, scans the `linux/amd64` and `linux/arm64` images by their own digests
+with the release's Trivy version, command and [`.trivyignore`](../.trivyignore), and runs `make audit-deps` over `master`'s
+dependencies. Any finding fails the run. The published image is immutable, so the fix is a new release: an explicit version when
+only the base image or a Docker update changed (see [Versioning](#versioning)).
+
 ## What the workflows trust
 
 **Every action is pinned to a full commit SHA**, with the version in a trailing comment, in every workflow, the reusable warm-up
@@ -240,7 +249,7 @@ the workflow's `env`, and the base images in the Dockerfile. The Dockerfile fron
 digest too, so BuildKit never pulls a frontend that moved under its tag. Dependabot's `docker` ecosystem does not update that
 syntax line, nor the images in the workflow's `env`, so they are bumped by hand: resolve the new index digest with
 `docker buildx imagetools inspect <image>:<tag>` and replace the tag and the digest together. `svu` (`SVU_VERSION`) and Trivy
-(`TRIVY_VERSION`) are pinned as versions and bumped by hand for the same reason. Pinning Trivy does not pin what it knows: its
+(`TRIVY_VERSION`, in both `release.yaml` and `scheduled-scan.yaml`) are pinned as versions and bumped by hand for the same reason. Pinning Trivy does not pin what it knows: its
 vulnerability database is fetched at run time, which is the point of scanning at release time.
 
 **Workflow tokens are read-only by default.** Each workflow sets `permissions: contents: read` at the top, and only the jobs that
