@@ -45,7 +45,9 @@ Semantic versioning, derived from [Conventional Commits](https://www.conventiona
 - `!` before the colon, or a `BREAKING CHANGE:` footer, is a major. The project is already at `1.x`, so the `0.x` caveat of
   `svu` (a breaking change before `1.0.0` jumping straight to `1.0.0`) does not apply here.
 
-Everything else (`build`, `chore`, `ci`, `docs`, `refactor`, `test` and so on) bumps nothing. When no commit since the last
+Everything else (`build`, `chore`, `ci`, `docs`, `perf`, `refactor`, `revert`, `style`, `test`) bumps nothing, so a
+performance improvement, refactor or revert that users should receive is committed as a `fix` (or `feat`); `perf`, `refactor`,
+`style` and `revert` are for changes deliberately not meant to trigger a release. When no commit since the last
 release is a `feat`, a `fix` or a breaking change, a run with no version **fails** with *"No feat/fix or breaking-change commit
 since `<tag>`, so there is nothing to bump. Re-run with an explicit version to force one."* Dependabot's Go module updates are
 committed as `fix(deps)`, so a dependency bump alone is enough for a patch release; its GitHub Actions, pre-commit and Docker
@@ -54,7 +56,9 @@ to ship.
 
 Whether derived or typed, the version must be **higher than every version already released**. Tags here are immutable, so
 publishing a `v1.9.9` after `v1.10.0` would create a permanent lower tag. The only version a run may reuse is the one it is
-recovering, which is exactly this version already sitting on `HEAD`.
+recovering, which is exactly this version already sitting on `HEAD`. A branch whose history does not contain the highest release — for example one tagged on a merge commit that was later
+rewritten — derives from an older base and so fails that check; the failure names the out-of-history tag, and an explicit version
+higher than it is the way out.
 
 Only strict `vMAJOR.MINOR.PATCH` tags are releases: `v`, then three dot-separated numbers, each either `0` or a number with no
 leading zero, and nothing after them. That is `RELEASE_TAG_REGEX` in the workflow,
@@ -101,13 +105,13 @@ a tag happens before the tag exists, and everything after it can be finished by 
    the image `ghcr.io/leinardi/swarm-scheduler-exporter:<version>`. Only "not found" counts as absent: an authentication or network
    error stops the run, because reading it as "absent" could push a tag or an image over something the run could not see.
 
-   | Git tag        | Image `:<version>`                                  | Mode                                                        |
-   |----------------|-----------------------------------------------------|-------------------------------------------------------------|
-   | absent         | absent                                              | **Fresh**                                                   |
-   | absent         | present                                             | **Stop before tagging.** The version is held by an image    |
-   | on this commit | present, attested by this workflow for this commit  | **Recovery, reuse**                                         |
-   | on this commit | present, not attested                               | **Stop: needs a human**                                     |
-   | on this commit | absent                                              | **Recovery, publish**                                       |
+   | Git tag | Image `:<version>` | Mode |
+   | --- | --- | --- |
+   | absent | absent | **Fresh** |
+   | absent | present | **Stop before tagging.** The version is held by an image |
+   | on this commit | present, attested by this workflow for this commit | **Recovery, reuse** |
+   | on this commit | present, not attested | **Stop: needs a human** |
+   | on this commit | absent | **Recovery, publish** |
 
 A **fresh** release then runs these steps. They are numbered because the other modes are defined by them:
 

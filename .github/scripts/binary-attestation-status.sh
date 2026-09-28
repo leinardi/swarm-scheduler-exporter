@@ -23,7 +23,7 @@
 # SOFTWARE.
 #
 
-# Usage: binary-attestation-status.sh <repo> <signer-workflow> <source-digest> <file>...
+# Usage: binary-attestation-status.sh <repo> <signer-workflow> <source-ref> <source-digest> <file>...
 #
 # Prints, one per line, the files that still need a build-provenance attestation, and exits 0.
 # A release recovery rebuilds the binaries byte-identically, so a binary an earlier run of the
@@ -33,7 +33,8 @@
 # `gh api repos/<repo>/attestations/sha256:<digest>`:
 #   - absent: exactly the "no attestations" answer below. The file is printed.
 #   - present: a success whose body has a non-empty .attestations list. The file must then pass
-#     `gh attestation verify` for <signer-workflow>, refs/heads/master and <source-digest>;
+#     `gh attestation verify` for <signer-workflow>, <source-ref> (the branch the release runs
+#     from, e.g. refs/heads/master) and <source-digest>;
 #     if it does not, it is attested by something this workflow did not produce, which needs a
 #     human, and the script exits non-zero.
 #   - anything else (another HTTP status such as 401, 403, 429 or 5xx, a network error, a body
@@ -50,18 +51,19 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: $0 <repo> <signer-workflow> <source-digest> <file>..." >&2
+	echo "usage: $0 <repo> <signer-workflow> <source-ref> <source-digest> <file>..." >&2
 	exit 2
 }
 
-if [ "$#" -lt 4 ]; then
+if [ "$#" -lt 5 ]; then
 	usage
 fi
 
 repo=$1
 signer_workflow=$2
-source_digest=$3
-shift 3
+source_ref=$3
+source_digest=$4
+shift 4
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
@@ -116,8 +118,8 @@ for file in "$@"; do
 	if ! gh attestation verify "$file" \
 		--repo "$repo" \
 		--signer-workflow "$signer_workflow" \
-		--source-ref refs/heads/master \
+		--source-ref "$source_ref" \
 		--source-digest "$source_digest" >"$stdout" 2>"$stderr"; then
-		fail "$file" "sha256:$digest is attested, but not by $signer_workflow for $source_digest on refs/heads/master: it needs a human - docs/release.md. $(cat "$stderr")"
+		fail "$file" "sha256:$digest is attested, but not by $signer_workflow for $source_digest on $source_ref: it needs a human - docs/release.md. $(cat "$stderr")"
 	fi
 done
