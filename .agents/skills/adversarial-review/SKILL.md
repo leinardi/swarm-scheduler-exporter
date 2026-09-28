@@ -31,10 +31,11 @@ diff. Pick the scope from what the user said, defaulting to the most useful:
 
 | User intent | Command |
 | --- | --- |
-| "my work" / "before I commit" / uncommitted | `git status` then `git diff HEAD` (add `git diff --staged` if staged) |
+| "my work" / "before I commit" / uncommitted | `git status --short`, then `git diff HEAD`; read untracked files too, which no diff shows |
+| staged changes only | `git diff --staged` |
 | a branch / "this PR" / "ready to merge" | `git diff master...HEAD` (merge-base diff; `master` is this repo's default branch) |
 | a specific commit range | `git diff <base>..<head>` |
-| a GitHub PR number | `gh pr diff <n>` (and `gh pr view <n>` for intent) |
+| a GitHub PR number | `gh pr view <n>` for intent, then `gh pr diff <n>` |
 
 Also read `git log --oneline` for the range and any linked issue/PR body — the stated
 **intent** is what you check the code against. A change that works but does something other
@@ -42,8 +43,9 @@ than what it claims is a finding.
 
 Read every changed file in full, not just the hunks. A hunk looks correct in isolation and
 wrong against the 40 lines above it that git didn't show you. For non-trivial changes, also
-read the callers of what changed — a signature or behavior change is only safe if every
-call site agrees.
+read the callers, implementations, tests and docs of what changed — found with a reference
+search, not assumed from the diff: a signature or behavior change is only safe if every call
+site agrees.
 
 ## 2. Route to the domain skills (path → authority)
 
@@ -80,7 +82,7 @@ through it. So the read-only property rests entirely on the code:
   `cmd/swarm-scheduler-exporter`. An SDK import anywhere else is a finding, and so is a diff
   that widens the rule's allowed trees, removes a deny entry or drops a trailing slash.
 
-Blockers:
+Critical:
 
 - a new `DockerAPI` method that creates, updates, removes, kills, scales, restarts, prunes or
   otherwise changes anything;
@@ -213,7 +215,7 @@ are immutable, so the order of the release job is the safety property:
 
 - The mode is decided from two fail-closed lookups before anything is pushed: the Git tag on
   the remote and `ghcr.io/…:<version>`. Only "not found" may read as absent; a lookup whose
-  error is treated as absence is a blocker.
+  error is treated as absence is critical.
 - The image is built once, into the job-local registry, and only the digest that was scanned
   is copied to GHCR (`skopeo copy --all --preserve-digests`), checked by hashing what GHCR
   serves, attested and signed, and only then tagged `:<version>`. A second image build, a
@@ -236,31 +238,35 @@ Do not skim for style. Run these passes, each with a "how would I make this fail
   precedence, negated guards, early returns that skip cleanup, copy-paste that kept the old
   variable. Trace one concrete failing input end to end rather than asserting "looks fine".
 - **Boundaries & nil/empty**: empty slice/map/string, zero, negative, missing key, `nil`
-  receiver/pointer, unset optional, first/last element, single-element collection.
-- **Errors**: swallowed errors, `err` checked then ignored, wrapped-but-not-returned,
-  wrong sentinel, panics on attacker- or user-controlled input, partial writes left on the
-  error path.
+  receiver/pointer, unset optional, first/last element, single-element collection, nil and
+  empty treated as the same thing where they mean different things.
+- **Aliasing**: a returned slice or map that shares its backing store with internal state, so
+  a caller's write changes it; an `append` onto a slice another owner still holds.
+- **Errors**: swallowed errors, `err` checked then ignored, wrapped-but-not-returned, `%v`
+  where `%w` was needed so `errors.Is`/`errors.As` stop matching, wrong sentinel, panics on
+  attacker- or user-controlled input, partial writes left on the error path.
 - **Concurrency**: shared state without a lock, lock held across I/O or a channel op, goroutine
   leak, context not honored, map written from two goroutines, TOCTOU between check and use.
-- **Resources**: unclosed file/conn/rows/response body, missing `defer`, context/timer leak,
-  unbounded growth, N+1 query, work inside a loop that belongs outside it.
-- **Security**: input reaching a query/command/path/HTML without validation, authz check
-  missing or after the effect, secret in a log or response, unsafe deserialization, SSRF via
-  user-supplied URL, missing rate/size limits.
-- **Contract drift**: does the code do what the commit message / PR / issue claims? Public
-  signature, JSON field, DB column, error code, or config key changed without updating every
-  consumer and the docs/spec.
+- **Resources**: unclosed file/conn/response body, an ignored `Close` error on a write, missing
+  `defer`, context/timer leak, unbounded growth, work inside a loop that belongs outside it.
+- **Security**: input reaching a command/path/query/HTML without validation, authz check
+  missing or after the effect, secret in a log or response, unsafe deserialization, missing
+  rate/size limits.
+- **Contract drift**: does the code do what the commit message / PR / issue claims? A public
+  signature, flag, environment variable, output format, exit code or error text changed without
+  updating every consumer and the docs (§5 (e)).
 - **Tests**: does the diff add or change a test for the behavior it introduces? A test that
-  passes against the *old* code (asserts nothing new), that tests mocks instead of behavior,
-  or that was weakened/deleted to make the change pass — all findings. A bug fix with no
-  regression test is a gap worth flagging.
+  passes against the *old* code (asserts nothing new), that asserts on a fake's recorded calls
+  instead of the behavior they produced, or that was weakened/deleted to make the change pass —
+  all findings. A bug fix with no regression test is a gap worth flagging.
 
 Prefer one confirmed, reproducible defect over ten vague "consider"s. If you cannot name the
 input and the resulting wrong behavior, it is not yet a finding — keep digging or drop it.
 
 ## 5. Always-on passes
 
-The passes above are shaped by the diff. These run on **every** review, whatever changed.
+The passes above are shaped by the diff. These run on **every** review, whatever changed,
+because each names a way a repository like this one loses something without anyone noticing.
 
 ### (a) Endpoint and image
 
@@ -274,14 +280,15 @@ image hardening" and "Bounded work" items against it.
 
 A diff that removes a user-visible surface — a metric, a label, a flag, an environment
 variable, a health behavior — and in the same breath rewrites that surface's test to assert it
-is *absent* must cite why it was retired. The specification here is the README: its Metrics,
-Configuration (Flags, Environment) and Health sections. A commit message alone is not enough,
-and a README that still documents the surface means the removal is unspecified. A test flipped
-from "X appears" to "X does not appear" is not evidence that X should go.
+is *absent* must cite the specification line that retired it. The specification here is the
+README: its Metrics, Configuration (Flags, Environment) and Health sections. A commit message is
+not a specification, and a README that still documents the surface means the removal is
+unspecified.
 
-Ask, in order: where is this surface retired, and does the README change with it? If nowhere,
-this is a blocker-level finding whatever the diff's stated intent was. If it is, is the diff
-removing exactly that and no more?
+A test flipped from "X happens" to "X does not happen" is not evidence that X should go — it is
+the deletion wearing the test's clothes. Ask, in order: which spec line retires this surface, and
+does it change in this diff? If none, this is a **critical** finding whatever the diff's stated
+intent was. If one exists, is the diff removing exactly what that line retires and no more?
 
 ### (c) A new suppression has to show its work
 
@@ -296,53 +303,61 @@ in this repo (copied from another project) is a finding too.
 
 ### (d) Cross-file duplication
 
-Before accepting a new helper, search for the one that already exists — `internal/**`, by
-*behavior*, not by the name the author chose. `go-style-guide` §16 lists the helpers that
-already exist (label building and sanitization, metric constants, test fakes and gauge
-installers). Two implementations of the same rule drift apart, and the one the reviewer did
-not read is the one that keeps the bug.
+Before accepting a new helper, search for the one that already exists — in `internal/**` and
+`cmd/**`, by *behavior*, not by the name the author chose. `go-style-guide` §16 lists the helpers
+that already exist (label building and sanitization, metric constants, test fakes, gauge
+installers and wait helpers). Two implementations of the same rule drift apart, and the one the
+reviewer did not read is the one that keeps the bug.
 
 ### (e) Docs drift
 
+The configuration and metrics contracts are written down more than once and can disagree
+silently.
+
 - A flag added or changed in `cmd/swarm-scheduler-exporter/main.go` needs its row in the
-  README's Flags table, with the same name, default and meaning; a documented flag that the
-  code no longer defines is a finding too.
+  README's Flags table, with the same name, default and meaning.
 - The same holds for the Docker client environment variables in the README's Environment
   section and for the metric list in its Metrics section.
 
+A surface the code has and the docs do not mention is a finding; so is a documented one nothing
+implements, and so is a default in the docs that differs from the code.
+
 ## 6. Verify before you trust (don't hand-wave the gates)
 
-Static reading misses things. Run the gates the change already owes and treat a failure as a
-confirmed finding with the output attached:
+Static reading misses things. Use focused tests while investigating (`go test
+./internal/collector -run <Name>`), then run the gates the change owes and treat a failure it
+caused as a confirmed finding with the output attached:
 
 | Diff touched | Run |
 | --- | --- |
-| any `**/*.go` | `make go-build`, `go test -race ./...` (`make go-test` runs without `-race`), then `pre-commit run --all-files` |
-| `internal/collector/**`, `cmd/**`, `test/integration/**` | also `make go-test-integration` (a DinD Swarm; needs Docker with privileged containers) |
-| `go.mod` / `go.sum` | `make audit-deps` (govulncheck) |
-| `deployments/docker/Dockerfile` | hadolint via `pre-commit run --all-files`, plus `make docker-build` |
-| `.github/workflows/release.yaml` | actionlint via pre-commit; a release dry run is the only end-to-end check, so say which steps you could not exercise |
-| anything else | `pre-commit run --all-files` (markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
+| any `**/*.go` | `make go-build`, `make go-test` (race detector on), then `make check` |
+| `internal/collector/**`, `internal/testenv/**`, `cmd/**`, `test/integration/**` | also `make go-vet-integration` and `make go-test-integration` (a DinD Swarm; needs Docker with privileged containers) |
+| `go.mod` / `go.sum` | `make go-tidy` and `make audit-deps` (govulncheck; network required) |
+| `deployments/docker/Dockerfile` | hadolint via `make check`, plus `make docker-build` |
+| `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
+| anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 
 golangci-lint may not be on `PATH`; run it through pre-commit. Several hooks rewrite files
-(prettier, markdownlint, the golangci formatters), so run pre-commit on a clean tree and report
-any file it changed as a finding instead of reviewing the rewritten tree. If a gate is impractical here
-(no Docker daemon, no network for govulncheck), say so explicitly and mark that risk unverified
-rather than implying it passed.
+(prettier, markdownlint, the golangci formatters): check `git status` afterwards and report a
+rewrite as a finding instead of reviewing the rewritten tree. A skipped test is not a pass —
+check the `-v` output for `SKIP`. If a gate is impractical here (no Docker daemon, no network
+for govulncheck), say so explicitly and mark that risk unverified rather than implying it
+passed.
 
 ## 7. Report
 
 Rank by severity, worst first. Nothing is more important than a genuine correctness or
-read-only-invariant break; skip pure formatting the linters already catch unless it changes
-meaning. For each finding:
+read-only-invariant break: those are normally **critical**. Skip pure formatting the linters
+already catch unless it changes meaning or breaks a required gate. For each finding:
 
-```
-<path>:<line> — <severity: blocker | high | medium | low>: <one-line defect>
+```text
+<path>:<line> — <severity: critical | high | medium | low>: <one-line defect>
   Failure: <the concrete input/state → the wrong result or broken invariant>
   Fix: <the specific change>
 ```
 
-End with a one-line verdict: **block**, **approve with nits**, or **approve** — plus which
-verification gates you actually ran and which you couldn't. If you found nothing, state what
-you tried to break so the "no findings" is credible. Be blunt; do not soften a real defect to
-be polite, and do not invent findings to look thorough.
+Findings first, then open questions or assumptions, then a one-line verdict: **block**,
+**approve with nits**, or **approve** — plus which verification gates you actually ran and which
+you couldn't. If you found nothing, state what you tried to break so the "no findings" is
+credible. Be blunt; do not soften a real defect to be polite, and do not invent findings to look
+thorough.

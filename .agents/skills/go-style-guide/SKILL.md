@@ -106,27 +106,34 @@ if listErr != nil {
 }
 ```
 
-The prefix is a short, lowercase noun phrase describing the operation, not a full
+The prefix is a short, lowercase phrase naming the operation, not a full
 sentence: no capital letters, no trailing period.
 
-Use `errors.Is`/`errors.As` for comparisons, never `==` on error values. Docker API
-errors are classified with `github.com/containerd/errdefs` (`errdefs.IsNotFound`),
-which works because the Docker client maps HTTP status codes to those errors.
+Use `errors.Is`/`errors.As` (or Go 1.26's `errors.AsType[T]`) for comparisons, never
+`==` on error values — `err113` flags that too. Docker API errors are classified with
+`github.com/containerd/errdefs` (`errdefs.IsNotFound`), which works because the Docker
+client maps HTTP status codes to those errors.
 
-Prefer flat code with early returns; no `else` after a `return`.
+Prefer flat code with early returns; no `else` after a `return` (`revive`'s
+`indent-error-flow`).
 
-### 2c. No dynamic `errors.New` content (`err113`)
+### 2c. Errors are sentinels, detail is wrapped (`err113`)
 
-`errors.New("static message")` is fine. `fmt.Errorf` with a dynamic value is
-fine when the sentinel pattern is not needed. But wrapping a runtime value
-inside what looks like a sentinel triggers `err113`. Add a nolint if unavoidable:
+`err113` flags every `errors.New` inside a function body and every `fmt.Errorf`
+without a `%w` verb — a static message included. Declare the error once as a
+package-level sentinel and attach the runtime detail by wrapping it:
 
 ```go
-return fmt.Errorf( //nolint:err113 // dynamic content includes the flag value
-    "label %q: must be a valid Prometheus label name",
-    name,
+return fmt.Errorf(
+    "%w %s (DOCKER_API_VERSION): supported range is %s to %s",
+    ErrUnsupportedAPIVersion,
+    apiVersion,
+    client.MinAPIVersion,
+    client.MaxAPIVersion,
 )
 ```
+
+Suppress with `//nolint:err113` only when no sentinel can fit, and say why (§3).
 
 Sentinels are package-level `var`s built with `errors.New`. Export them (`Err…`)
 when callers need `errors.Is`; unexported is fine for package-internal use:
@@ -177,10 +184,12 @@ _, _ = io.WriteString(responseWriter, okBody)
 - **Explanation required**: every directive needs `// reason`
 - **No unused**: remove directives when the code no longer triggers that linter
 
+The explanation says why the fix does not apply here, not which rule fired (§17).
+
 ### Inline (same-line) — for a single statement or return
 
 ```go
-switch evt.Action { //nolint:exhaustive // for services we only handle remove vs others
+switch evt.Type { //nolint:exhaustive // the stream is filtered to service and node events
 ```
 
 ### Preceding-line — for a function or type declaration
@@ -267,7 +276,7 @@ The same applies to `rangeValCopy`: iterate large slices by index
 
 Max 140 characters. `golines` wraps automatically, but try to stay within
 bounds when writing new code — especially long function signatures and struct
-tags.
+tags. Test files are exempt.
 
 ---
 
@@ -328,27 +337,29 @@ their source (`listErr`, `pollErr`, `shutdownErr`) rather than reusing `err`.
 ## 13. Variable naming (`varnamelen`)
 
 Short variable names are fine in tight scopes (loop indices `i`, `k`, map
-values `v`, single-letter receivers). In broader scopes, use names long enough
-to be readable. Test files are exempt.
+values `v`). `varnamelen` flags a name shorter than 3 characters whose last use
+is more than 5 lines from its declaration (its defaults: `min-name-length: 3`,
+`max-distance: 5`). Test files are exempt.
 
 **Specific rules that bite most often:**
 
 - **Receivers are exempt**: `(f *fakeDocker)`, `(e *labelError)`, `(values *stringSlice)` — all fine.
-- **Non-receiver function parameters are NOT exempt**, even in short functions.
-  Use ≥ 3-char descriptive names:
+- **Parameters are checked like locals.** A one-letter parameter passes in a
+  three-line function and is flagged as soon as the body grows, so give
+  parameters ≥ 3-char descriptive names from the start:
 
   ```go
-  // Wrong — 's', 'n' are too short for params
-  func shortServiceName(s, n string) string
+  // Wrong — 'r', 'o', 's', 'n' are too short for params
+  func newLabelError(r, o, s string) error
   func isNodeSchedulable(n *swarm.Node) bool
 
   // Right
-  func shortServiceName(stackNS, fullName string) string
+  func newLabelError(reason, original, sanitized string) error
   func isNodeSchedulable(node *swarm.Node) bool
   ```
 
-- **Local variables that span multiple statements** are also checked. A variable
-  named `c` that lives across 5+ lines will be flagged; rename to reflect its type
+- **Local variables** follow the same distance rule: a variable named `c` that
+  is still used more than 5 lines later is flagged; rename it to reflect its type
   or role.
 
 Rule of thumb: if the name alone doesn't tell you what the variable holds,
@@ -359,36 +370,22 @@ make it longer. The codebase leans long: `parentContext`, `dockerClient`,
 
 ## 14. `modernize` — no pointer-boxing helpers
 
-The `modernize` linter (`newexpr` check) flags helper functions whose sole
-purpose is to return a pointer to a typed value:
+The `modernize` linter (`newexpr` check) flags any function whose sole purpose
+is to return a pointer to its argument — the generic `func ptr[T any](v T) *T`
+included — at the declaration and at every call site. Go 1.26's `new` takes an
+expression, so no helper is needed:
 
 ```go
-// Wrong — the linter flags both the declaration AND every call site
-func boolPtr(b bool) *bool { return &b }
-use: boolPtr(true), boolPtr(false)
-
-// Also wrong (same pattern with other types)
+// Wrong — flagged twice
 func uint64Ptr(v uint64) *uint64 { return &v }
+service.Spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: uint64Ptr(3)}
+
+// Right
+service.Spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: new(uint64(3))}
 ```
 
-Fix: declare a local variable and take its address:
-
-```go
-// Right — in test fixtures
-replicas := uint64(3)
-service.Spec.Mode.Replicated = &swarm.ReplicatedService{Replicas: &replicas}
-```
-
-For production code needing `*T` from a literal, assign then address:
-
-```go
-val := computeSomething()
-cfg.Field = &val
-```
-
-A generic `func ptr[T any](v T) *T { return &v }` avoids the per-type helpers
-but still fires `newexpr` in some linter versions — prefer the local-variable
-pattern.
+Taking the address of a local (`val := computeSomething()`, then `&val`) is fine
+too, and reads better when the value is computed or used more than once.
 
 ---
 
@@ -405,9 +402,9 @@ family (`labelNodeRole`, `labelNodeAvailability`, `labelNodeStatus` in `nodes.go
 
 ## 16. Reuse before writing
 
-Before adding a helper, a fake, a label constant or a Docker call, check whether one
-of these already answers the question — and if it nearly does, extend it rather than
-forking it.
+Every helper below exists so the hand-written version of it is written once. Before adding a
+helper, a fake, a label constant or a Docker call, check whether one of these already answers
+the question — and if it nearly does, extend it rather than forking it.
 
 | Need | Use | Not |
 | --- | --- | --- |
@@ -423,6 +420,7 @@ forking it.
 | Reading a snapshot collector in a test | `gatherSeries`, `snapshotValue`, `seriesID`, `familySeries` (`gauge_helpers_test.go`) — gather through a throwaway pedantic registry | `testutil.ToFloat64` on a `With(...)`, which snapshot collectors do not have |
 | Resetting the package caches between tests | `resetCollectorState(t)` (`types_test.go`) | clearing `metadataCache` / `cachedNodes` by hand |
 | Test fixtures for service metadata and labels | `makeTestMetadata`, `serviceLabels`, `baseServiceLabels` (`gauge_helpers_test.go`) | a per-file copy |
+| Waiting for a condition in a test | `eventually(t, what, cond)` (`internal/collector/reconciler_test.go`); `eventually(t, timeout, check)` in the integration suite (`test/integration/helpers_wait_test.go`) | `time.Sleep`, or another hand-rolled deadline loop (see §18) |
 
 ---
 
@@ -435,11 +433,11 @@ does not rot as the code moves.
 
 ```go
 // Bad — history in the code.
-// Changed in v0.5 after the review; used to use the request context.
+// Changed after the socket-proxy bug report; used to filter the task list by service ID.
 
 // Good — rationale in the code.
-// Detached from the request context on purpose: a browser disconnect must not cancel the wait,
-// unregister the result waiter and drop the audit write while the agent carries on mutating.
+// No service filter on purpose: the IDs would travel URL-encoded in the query, and a socket
+// proxy in front of the daemon rejects that URL long before the cluster is large.
 ```
 
 The same rule is what makes `//nolint` explanations useful: say why the fix does not apply here,
@@ -447,29 +445,46 @@ not that the linter complained.
 
 ---
 
-## 18. Waiting in tests: never a guessed sleep
+## 18. Waiting in tests: classify before you write a sleep
 
-Today there are no `time.Sleep` calls in this repo's tests. Keep it that way for new code.
+There are no `time.Sleep` calls in this repo's tests today; keep it that way unless a site
+really is one of the sleep classes below. Tests reach for a sleep for five different reasons,
+and only some of them justify one: decide which of these a site is *before* writing it — the
+class dictates the shape.
 
-**Positive eventual — poll with a deadline, never a sleep.** "Something another goroutine will do
-has happened": the event worker updated a gauge, the listener returned after cancellation, the
-stream reconnected. There is no shared `WaitFor` helper in this repo, so:
+**Positive eventual — never a sleep.** "Something another goroutine will do has happened": the
+reconciler updated a gauge, the listener returned after cancellation, the stream reconnected.
+Wait on the signal, or poll with a deadline: a slow machine then costs milliseconds instead of
+flaking, and the failure names the contract that was broken rather than "unexpected nil".
 
-- when the goroutine signals completion on a channel, `select` on that channel against
-  `time.After(timeout)` and `t.Fatal` naming what never happened
-  (`TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted` does this);
-- when the only observable is state (a gauge value, a call counter behind `fakeDocker.mu`), poll
-  it until a deadline with a short tick and fail naming the condition. If a second test needs the
-  same loop, extract it into a shared test helper rather than copying it.
+- When the goroutine signals completion on a channel, `select` on it against a timeout and
+  `t.Fatal` naming what never happened (`TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted`).
+- When the only observable is state (a gauge value, a call counter behind `fakeDocker.mu`), use
+  `eventually(t, what, cond)` in `internal/collector` or `eventually(t, timeout, check)` in the
+  integration suite (§16). A hand-rolled deadline loop in a test body is this class too: use the
+  helper.
 
-A slow machine then costs milliseconds instead of flaking, and the failure says which contract was
-broken.
+This class needs something *observable* to poll. Where the only honest observable is unexported,
+prefer a small read-only seam on the production type over poking at internals — or record the
+call in the fake and poll that.
 
-If a sleep ever becomes the right tool — a negative assertion ("nothing happens", bounded and
-commented), or a real elapsed window where the duration itself is under test (named as a constant
-or a multiple of the interval under test) — the comment must say which of those it is. A sleep
-whose comment says "give X time to Y" where Y is observable, and a sleep added to make a flaky test
-pass, are always wrong.
+**Negative assertion — bounded and commented.** "Nothing happens": no second event connection
+after a clean stream. There is no condition to poll for; give the wrong behavior a
+bounded window to appear, then assert it did not, and say so in a comment so the next reader does
+not "fix" it into a wait that cannot exist. Watching the window on a ticker and failing as soon as
+the wrong thing appears (`assertNoSecondEventsConnection` in `engine_wire_test.go`) beats a sleep.
+
+**Real elapsed window — a sleep, and the duration is the point.** A backoff step, a staleness
+window. Shortening it changes what is asserted. Name it as a constant or a multiple of the
+interval under test, never a bare literal chosen by feel.
+
+**Ordering barrier with no quiescence signal — a sleep, and say why no seam exists.** These are
+the ones worth revisiting when a seam appears; the comment is what makes that possible.
+
+**Poll tick inside an eventual-wait helper — already correct.** The ticker inside `eventually`.
+
+Two shapes are always wrong: a sleep whose comment says "give X time to Y" where Y is observable,
+and a sleep added to make a flaky test pass without deciding which class it belongs to.
 
 ---
 
@@ -707,15 +722,17 @@ too. Rules (examples in [`references/patterns.md`](references/patterns.md#promet
 - [ ] Imports in 3 groups: stdlib / third-party / local, alphabetical within each
 - [ ] No `if err := f(); err != nil` — split to two lines
 - [ ] All errors wrapped with `%w`; `errdefs.IsNotFound` / `errors.Is` for classification
-- [ ] `any` not `interface{}`
+- [ ] No `errors.New` or `%w`-less `fmt.Errorf` in a function body: wrap a package-level sentinel
+- [ ] `any` not `interface{}`; `new(expr)`, not a pointer-boxing helper
 - [ ] Numbers other than 0–3 extracted to named constants (non-test code)
-- [ ] Each `//nolint` names specific linters and has `// explanation`
+- [ ] Each `//nolint` names specific linters and explains why the fix does not apply
 - [ ] No `FIXME` comments
-- [ ] Function statement count ≤ 50
+- [ ] Function statement count ≤ 50 (non-test code)
 - [ ] No shadowed variables
 - [ ] Checked §16 for an existing helper before writing a new one; Docker only through `DockerAPI`
-- [ ] Comments say why, not what changed — history is in the commit body
-- [ ] No `time.Sleep` in tests: wait with a deadline on a channel or a polled condition (§18)
+- [ ] Comments say why, not what changed — history is in the commit body (§17)
+- [ ] No guessed `time.Sleep` in tests: a positive eventual waits on a channel or `eventually`,
+      and any sleep says in a comment which class it is (§18)
 - [ ] Metric names and labels built from `metrics_ids.go` constants; any rename or label change
       is reflected in the README metrics section
 - [ ] Removed resources `Delete` their series; categorical gauges emit every known state;
