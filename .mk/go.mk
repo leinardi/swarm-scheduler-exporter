@@ -1,13 +1,25 @@
-GO        ?= go
-GO_PKG    ?= ./...
-GO_CMD    ?= ./cmd/app
-BIN_NAME  ?= app
-DIST_DIR  ?= dist
+ifndef MK_COMMON_GO_INCLUDED
+MK_COMMON_GO_INCLUDED := 1
+
+GO       ?= go
+GO_PKG   ?= ./...
+GO_CMD   ?= ./cmd/app
+BIN_NAME ?= app
+DIST_DIR ?= dist
+
+# GO_BINARIES: space-separated list of binary names to build.
+# Default is a single binary named $(BIN_NAME) built from $(GO_CMD).
+# Multi-binary projects set GO_BINARIES and per-binary GO_CMD_<name>:
+#   GO_BINARIES := controller agent
+#   GO_CMD_controller := ./cmd/controller
+#   GO_CMD_agent      := ./cmd/agent
+GO_BINARIES        ?= $(BIN_NAME)
+GO_CMD_$(BIN_NAME) ?= $(GO_CMD)
 
 # Version metadata (generic, derived from git when available)
-GIT_COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo "none")
+GIT_COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo "none")
 GIT_VERSION ?= $(shell git describe --tags --dirty --always 2>/dev/null || echo "v0.0.0")
-BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+BUILD_DATE  ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Reproducible-ish builds by default
 export CGO_ENABLED ?= 0
@@ -18,10 +30,19 @@ GO_LDFLAGS ?= -s -w \
   -X main.commit=$(GIT_COMMIT) \
   -X main.date=$(BUILD_DATE)
 
+define _GO_BUILD_TEMPLATE
+.PHONY: go-build-$(1)
+go-build-$(1): ## Build $(1) into $$(DIST_DIR)/
+	@mkdir -p "$$(DIST_DIR)"
+	CGO_ENABLED=$$(CGO_ENABLED) $$(GO) build \
+	  -ldflags "$$(GO_LDFLAGS)" \
+	  -o "$$(DIST_DIR)/$(1)" "$$(GO_CMD_$(1))"
+endef
+
+$(foreach b,$(GO_BINARIES),$(eval $(call _GO_BUILD_TEMPLATE,$(b))))
+
 .PHONY: go-build
-go-build: ## Build binary into $(DIST_DIR)/
-	@mkdir -p "$(DIST_DIR)"
-	$(GO) build -ldflags "$(GO_LDFLAGS)" -o "$(DIST_DIR)/$(BIN_NAME)" "$(GO_CMD)"
+go-build: $(addprefix go-build-,$(GO_BINARIES)) ## Build all configured binaries into $(DIST_DIR)/
 
 .PHONY: go-run
 go-run: ## Run the app (ARGS="...")
@@ -66,9 +87,11 @@ go-vet: ## Static checks (go vet)
 	$(GO) vet $(GO_PKG)
 
 .PHONY: go-test
-go-test: ## Run tests
-	$(GO) test $(GO_PKG)
+go-test: ## Run tests with race detector
+	CGO_ENABLED=1 $(GO) test -race $(GO_PKG)
 
 .PHONY: go-test-cover
 go-test-cover: ## Run tests with coverage (coverage.out)
 	$(GO) test -coverprofile=coverage.out $(GO_PKG)
+
+endif  # MK_COMMON_GO_INCLUDED

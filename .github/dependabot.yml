@@ -1,5 +1,4 @@
 version: 2
-enable-beta-ecosystems: true # Required for the pre-commit ecosystem
 
 registries:
   dhi:

@@ -35,6 +35,7 @@ script="$here/binary-attestation-status.sh"
 
 repo=leinardi/swarm-scheduler-exporter
 signer_workflow=leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml
+source_ref=refs/heads/master
 source_digest=0123456789abcdef0123456789abcdef01234567
 
 work=$(mktemp -d)
@@ -131,7 +132,7 @@ check() {
 
 	local status=0 stdout
 	: >"$STUB_LOG"
-	stdout=$("$script" "$repo" "$signer_workflow" "$source_digest" "$@" 2>"$work/stderr") || status=$?
+	stdout=$("$script" "$repo" "$signer_workflow" "$source_ref" "$source_digest" "$@" 2>"$work/stderr") || status=$?
 
 	local ok=true
 	case "$want_exit" in
@@ -179,14 +180,21 @@ check "absent is printed" 0 "$absent" "$absent"
 check "an empty attestations list is printed" 0 "$empty" "$empty"
 check "present and verified is not printed" 0 "" "$present"
 
-# The verification must pin the workflow, the branch and the commit.
-want_verify="attestation verify $present --repo $repo --signer-workflow $signer_workflow --source-ref refs/heads/master --source-digest $source_digest"
-if grep -qxF "$want_verify" "$STUB_LOG"; then
-	echo "ok   present is verified against the signer workflow, master and the commit"
-else
-	echo "FAIL present is verified against the signer workflow, master and the commit: calls [$(cat "$STUB_LOG")]"
-	failures=$((failures + 1))
-fi
+# The verification must pin the workflow, the branch it was given and the commit. The same
+# script serves repositories whose default branch is master and repositories whose default
+# branch is main, so both are checked.
+for source_ref in refs/heads/master refs/heads/main; do
+	: >"$STUB_LOG"
+	check "present and verified on ${source_ref#refs/heads/} is not printed" 0 "" "$present"
+	want_verify="attestation verify $present --repo $repo --signer-workflow $signer_workflow --source-ref $source_ref --source-digest $source_digest"
+	if grep -qxF "$want_verify" "$STUB_LOG"; then
+		echo "ok   present is verified against the signer workflow, ${source_ref#refs/heads/} and the commit"
+	else
+		echo "FAIL present is verified against the signer workflow, ${source_ref#refs/heads/} and the commit: calls [$(cat "$STUB_LOG")]"
+		failures=$((failures + 1))
+	fi
+done
+source_ref=refs/heads/master
 
 check "present but not verified fails" fail "" "$unverified"
 

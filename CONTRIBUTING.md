@@ -40,7 +40,8 @@ sweep-test-leaks` removes every labelled environment, whatever its age — do no
 
 All commits must follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) with a scope:
 `<type>(<scope>)[!]: <description>`. The `conventional-pre-commit` hook enforces this on `commit-msg`, and the
-`conventional-commits` CI job checks it again on every pull request. Release notes are generated from these messages.
+`conventional-commits` CI job checks it again on every pull request. Release notes are not built from these messages:
+`gh release create --generate-notes` lists the merged pull requests by title.
 
 Common types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`, `style`, `revert`. Use a lower-case,
 imperative description:
@@ -56,8 +57,12 @@ Mark breaking changes with `!` before the colon or a `BREAKING CHANGE: <descript
 ## Versioning
 
 The release version is derived from these types: since the last release, any `feat` makes the next release a minor, any `fix` a
-patch, and `!` or a `BREAKING CHANGE:` footer a major; `build`, `chore`, `ci`, `docs`, `refactor`, `test` and the rest bump nothing.
-See [`docs/release.md`](docs/release.md).
+patch, and `!` or a `BREAKING CHANGE:` footer a major; `build`, `chore`, `ci`, `docs`, `perf`, `refactor`, `revert`, `style` and
+`test` bump nothing. See [`docs/release.md`](docs/release.md).
+
+Pick the type by whether the change should ship, not by what kind of change it is. A performance improvement, a refactor or a revert
+that changes the shipped binary or image and that users should receive is a `fix` (or a `feat`). Use `perf`, `refactor`, `style` and
+`revert` only when the commit is deliberately not meant to trigger a release on its own.
 
 Pull requests are merged with merge commits; squash and rebase merging are disabled. Every commit in a pull request therefore lands
 on `master` as it is and counts toward the version, so each commit needs a correct type, not just the pull request as a whole. The
