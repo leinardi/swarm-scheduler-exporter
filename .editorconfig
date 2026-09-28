@@ -28,3 +28,4 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false # Allow trailing spaces for line breaks
+ij_markdown_format_tables = false # Disable: IntelliJ only knows aligned style; compact formatting handled by markdownlint-cli2

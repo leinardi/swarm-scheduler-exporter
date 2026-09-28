@@ -42,6 +42,8 @@ repos:
     rev: v0.23.3
     hooks:
       - id: markdownlint-cli2
+        additional_dependencies:
+          - markdownlint-rule-table-format@1.0.3
   - repo: local
     hooks:
       - id: shellcheck

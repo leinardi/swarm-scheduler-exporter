@@ -1,4 +1,7 @@
 ---
+customRules:
+  - markdownlint-rule-table-format
+
 # Disable some built-in rules
 config:
   fenced-code-language: false
@@ -6,6 +9,20 @@ config:
   no-inline-html: false
   ul-indent:
     indent: 4
+
+  no-duplicate-heading:
+    siblings_only: true
+
+  # Disable built-in MD060 because it reports table style issues,
+  # but does not auto-fix them.
+  table-column-style: false
+
+  # Custom rule that actually rewrites tables.
+  table-format:
+    style: compact
+    aligned_delimiter: false
+    fix: true
+    fixApplicator: true
 
 # Fix any fixable errors
 fix: true
