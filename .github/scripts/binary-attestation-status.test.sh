@@ -33,8 +33,8 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 script="$here/binary-attestation-status.sh"
 
-repo=leinardi/swarm-scheduler-exporter
-signer_workflow=leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml
+repo=leinardi/example
+signer_workflow=leinardi/example/.github/workflows/release.yaml
 source_ref=refs/heads/master
 source_digest=0123456789abcdef0123456789abcdef01234567
 
