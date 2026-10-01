@@ -41,8 +41,8 @@
 #     that does not parse) exits non-zero with the captured error, naming the file.
 #
 # The "no attestations" answer, observed with gh 2.74.0 on 2026-09-27 for the sha256 of empty
-# input (sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855) on
-# leinardi/swarm-scheduler-exporter:
+# input (sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855) on a public
+# repository:
 #   exit status 1
 #   stdout {"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/attestations#list-attestations","status":"404"}
 #   stderr gh: Not Found (HTTP 404)
