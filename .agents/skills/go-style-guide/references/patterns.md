@@ -1,12 +1,63 @@
-# Pattern examples — concurrency, HTTP server, Prometheus metrics
+# Patterns — concurrency, HTTP server, Prometheus metrics
 
-Worked examples for [SKILL.md](../SKILL.md) §25–§27. The rules live in `SKILL.md`; this file shows
-what they look like in this codebase. Snippets are abbreviated from the real code — read the named
-function before copying one.
+Rules and worked examples for the *Concurrency, HTTP server and Prometheus metrics* section of
+[SKILL.md](../SKILL.md). Each area starts with its rules, followed by what they look like in this
+codebase. Snippets are abbreviated from the real code — read the named function before copying
+one.
+
+## Contents
+
+- Concurrency
+    - Rules
+    - Goroutine lifecycle with `sync.WaitGroup`
+    - Bounded dirty set instead of a goroutine per event
+    - Panic recovery in the reconciler
+    - `sync.RWMutex` for read-heavy caches
+    - Defensive copies
+    - Atomics for single values
+    - One-time init and "seen once"
+    - Index loops over large structs
+- HTTP server
+    - Rules
+    - Server with explicit timeouts, graceful shutdown
+    - Handler and mux construction
+- Prometheus metrics
+    - Rules
+    - Naming constants
+    - Registration
+    - Nil guard before `Configure…` has run
+    - Publish rebuilt sets as a snapshot
+    - Exhaustive zero emission
+    - Delete, never zero, on removal
+    - Custom labels
 
 ---
 
 ## Concurrency
+
+### Rules
+
+- Every long-running goroutine is owned by a `sync.WaitGroup` whose owner calls `Wait()` before
+  returning. Use `waitGroup.Go(...)` (as `main`'s `startWorkers` does for the reconciler, the
+  listener and the poller). `serveHTTP`'s bare `go` for `Serve` is not waited for: it ends when
+  `Shutdown` makes `Serve` return into the buffered error channel.
+- **Never spawn unbounded goroutines.** Work triggered by external input (Swarm events) is only
+  recorded: the dispatcher marks a key dirty in the reconciler's bounded set (`pendingKeyCap`,
+  falling back to a full resync on overflow) without blocking, and the one reconciler goroutine
+  does the work. A `go processEvent(...)` inside an event loop is forbidden.
+- **One writer.** The reconciler (`reconciler.go`) is the only writer of the service and node
+  caches and of the event-driven families. New event-driven state goes through it, not through a
+  second goroutine writing the caches.
+- Long-lived workers that handle external input recover panics and log `debug.Stack()`
+  (`Reconciler.recoverStep`).
+- Read-heavy shared state uses `sync.RWMutex`; `defer` the unlock right after locking.
+- Return copies of slices from locked regions, and copy slices received from the Docker client
+  before caching them.
+- Single-value, high-frequency state uses the `sync/atomic` types (`atomic.Int64`).
+- `sync.Once` for one-time init (`logger.L()`); `sync.Map` `LoadOrStore` for "seen once"
+  tracking (`labels.warnOnce`).
+- A map keyed by an external ID (service, node, container) needs an eviction path — the entry
+  is deleted when the resource goes away.
 
 ### Goroutine lifecycle with `sync.WaitGroup`
 
@@ -148,6 +199,17 @@ for index := range services { // avoid copying large struct
 
 ## HTTP server
 
+### Rules
+
+- Never `http.ListenAndServe`: build an `http.Server` with explicit `ReadHeaderTimeout`,
+  `ReadTimeout`, `WriteTimeout` and `IdleTimeout`.
+- Start it in a goroutine, stop it on context cancellation with `Shutdown` under a
+  `httpShutdownTimeout` context.
+- Handlers are closures over their dependencies returning `http.HandlerFunc`; routes are
+  registered in one constructor (`server.NewMuxWithHealth`); path constants (`metricsPath`,
+  `healthzPath`) are package `const`s. An unused `*http.Request` is named `_`.
+- `/metrics` and `/healthz` take no input that becomes work.
+
 ### Server with explicit timeouts, graceful shutdown
 
 `runHTTPServer` in `main.go` binds the address, then `serveHTTP` serves on the listener:
@@ -237,6 +299,36 @@ Neither handler reads the request: nothing a client sends can become work.
 ---
 
 ## Prometheus metrics
+
+### Rules
+
+Metrics are the exporter's public contract: a renamed metric, or a label added, removed or
+renamed, breaks dashboards and alerts, and must come with the README's metrics section changing
+too.
+
+- **Naming**: `<namespace>_<subsystem>_<name>`, built from the constants in `metrics_ids.go`.
+  Never hardcode `"swarm"` or `"swarm_service_"` in `GaugeOpts`.
+- **Registration**: package-level vars, created and `prometheus.MustRegister`ed by one
+  `Configure…` function called once from `main`. Set `ConstLabels: nil` explicitly.
+- **Nil guards**: new exported functions that touch a metric return early when its
+  `Configure…` has not run.
+- **Publish rebuilt sets as a snapshot**: a family whose full set is recomputed on every update
+  (replicas state, container state, nodes by state) is published by a snapshot collector
+  (`snapshotCollector` in `snapshot_gauge.go`; `snapshotFamily` is its single-family form), not a
+  `GaugeVec`. Record every series on a `snapshotBuilder`, call `build()` once, and `publish` the
+  result in one swap; on a build error, log and keep the previous set. Never `Reset()` a vec and
+  re-`Set` it: a scrape in between sees the family empty or partial. Families computed from the
+  same poll share one snapshot collector, so a scrape never pairs values from different polls. A
+  `GaugeVec` is for series updated one at a time, from events (`desired_replicas`, service update
+  state), with `Delete` on removal.
+- **Exhaustive zero emission**: a categorical gauge emits every known state (`knownTaskStates`,
+  update states, container states) for each subject, zeros included.
+- **Delete, never zero**: when a resource is removed, `Delete` its series
+  (`ClearServiceUpdateMetrics`, `desiredReplicasGauge.Delete`) — a stale `0` series is a lie.
+- **Custom labels**: user `-label` names are appended after the base labels and always
+  sanitized (`internal/labels`) before the vec is created.
+- **Cardinality**: never use an unbounded value (container or task IDs, timestamps) as a label
+  value.
 
 ### Naming constants
 

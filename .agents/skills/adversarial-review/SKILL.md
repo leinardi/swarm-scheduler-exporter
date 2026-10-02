@@ -1,13 +1,14 @@
 ---
 name: adversarial-review
 description: >
-  Adversarial code review of a set of changes to this repo — working tree, staged
-  diff, a branch vs master, a commit range, or a PR. Language-agnostic (Go, bash,
-  Dockerfile, Makefile, YAML, docs). Loads go-style-guide for Go paths, hunts for real
-  defects and violations of this exporter's invariants (read-only against Docker,
-  metrics as a public contract, bounded work), then reports ranked findings. Use
-  whenever the user asks to review changes/a diff/a PR/a branch, "check my work before
-  committing", "is this ready to merge", or "poke holes in this" — even if they don't
+  Adversarial code review of changes to swarm-scheduler-exporter — working tree,
+  staged diff, a branch vs master, a commit range, or a PR — in any language (Go,
+  bash, Dockerfile, Makefile, YAML, docs). Loads go-style-guide for Go paths, checks
+  the exporter's invariants (read-only Docker access, metrics as a public contract,
+  series lifecycle, single reconciler owner, bounded work, release pipeline) and
+  reports ranked findings with a block/approve verdict. Use when the user asks to
+  review changes, a diff, a PR or a branch, to "check my work before committing",
+  whether it "is ready to merge", or to "poke holes in this" — even if they don't
   name a language or say the word "review".
 ---
 
@@ -18,16 +19,25 @@ bug, breaks an invariant, or drifts from a contract. Your job is to find the spe
 input, state, or path where it fails — not to praise it, not to restyle it. A review that
 finds nothing is only credible after you have actively tried to break the code and failed.
 
-This skill is the **entry point for reviewing any change in this repo, in any language**.
-It does not replace the domain skills — it routes to them. The domain skills own the rules;
-this skill owns the mindset, the routing, and the report.
+Copy this checklist and tick items as you go:
+
+```text
+Review progress:
+- [ ] 1. Scope chosen; diff, stated intent and every changed file read in full
+- [ ] 2. `go-style-guide` loaded for the Go paths
+- [ ] 3. Repo invariants checked
+- [ ] 4. Adversarial passes run; every candidate confirmed or dropped
+- [ ] 5. Always-on passes (a)–(e) run
+- [ ] 6. Gates run; `git status` checked for hook rewrites; skipped gates marked unverified
+- [ ] 7. Report written: findings, open questions, verdict, gates run and not run
+```
 
 ---
 
 ## 1. Establish the diff (what am I reviewing?)
 
 Never review from memory or from the user's description of the change — read the actual
-diff. Pick the scope from what the user said, defaulting to the most useful:
+diff. Pick the scope from what the user said:
 
 | User intent | Command |
 | --- | --- |
@@ -36,6 +46,9 @@ diff. Pick the scope from what the user said, defaulting to the most useful:
 | a branch / "this PR" / "ready to merge" | `git diff master...HEAD` (merge-base diff; `master` is this repo's default branch) |
 | a specific commit range | `git diff <base>..<head>` |
 | a GitHub PR number | `gh pr view <n>` for intent, then `gh pr diff <n>` |
+
+If the user names no scope, review the uncommitted work (first row); if the tree is
+clean, review the branch against `master` (third row).
 
 Also read `git log --oneline` for the range and any linked issue/PR body — the stated
 **intent** is what you check the code against. A change that works but does something other
@@ -47,20 +60,12 @@ read the callers, implementations, tests and docs of what changed — found with
 search, not assumed from the diff: a signature or behavior change is only safe if every call
 site agrees.
 
-## 2. Route to the domain skills (path → authority)
+## 2. Load the domain skill
 
-For each changed path, load the matching skill **before** judging that file — the skill is
-the source of truth for the rules, and violations there are findings even when lint is
-green. Load only what the diff touches.
-
-| Changed path | Load skill | It owns |
-| --- | --- | --- |
-| any `**/*.go` | `go-style-guide` | style/lint rules golangci-lint enforces, and this exporter's logging, context, concurrency, HTTP and metrics patterns |
-
-No skill matches (Dockerfile, compose files, `Makefile`, `.mk/*.mk`, GitHub workflows,
-other YAML, bash, Markdown)? Fall back to the language-agnostic checklist in §4 plus this
-repo's cross-cutting invariants in §3. **Same rigor** — an unmatched language is not a
-lighter review.
+For any `**/*.go` path, load `go-style-guide` before judging it; its rules are findings even
+when lint is green. Every other path (Dockerfile, compose files, `Makefile`, `.mk/*.mk`,
+GitHub workflows, other YAML, bash, Markdown) gets the passes in §4 plus the invariants in
+§3 with the **same rigor** — an unmatched language is not a lighter review.
 
 ## 3. Repo invariants — check these on every review, whatever changed
 
@@ -193,65 +198,19 @@ partial publish, or a README reason string that no longer matches the code is a 
 - `/metrics` and `/healthz` take no input that becomes work: no query parameter, header or
   body may trigger a Docker call, widen a scrape, or allocate per request beyond the
   exposition itself.
-- The image (`deployments/docker/Dockerfile`). What holds today:
-    - every base is pinned by tag and index digest: the build stage on
-      `dhi.io/golang:1.26.8-alpine3.23-dev@sha256:…`, matching `go 1.26.8` in `go.mod`, the
-      runtime on `dhi.io/static:20250419@sha256:…`, and the `# syntax=` frontend line too. A
-      base without a digest, or a Go image whose version differs from `go.mod`, is a finding.
-    - the runtime stage sets an explicit `USER 65532:65532`, never root, so the uid is pinned
-      in the Dockerfile rather than inherited from the base image's default
-      (`docker inspect --format '{{.Config.User}}'` on the built image prints `65532:65532`).
-
-  Review rule: a diff must not make this worse — adding root, removing or changing the
-  explicit `USER`, dropping the static base, adding a shell or package manager to the runtime
-  stage, or widening mounts and capabilities in the compose files is a finding. Socket access
-  is granted by adding the socket's group (`--group-add`, `user: "65532:<gid>"`), not by
-  running as root.
-
-### Release and CI
-
-`docs/release.md` is the contract; `.github/workflows/release.yaml` implements it. Tags here
-are immutable, so the order of the release job is the safety property:
-
-- The mode is decided from two fail-closed lookups before anything is pushed: the Git tag on
-  the remote and `ghcr.io/…:<version>`. Only "not found" may read as absent; a lookup whose
-  error is treated as absence is critical.
-- The image is built once, into the job-local registry, and only the digest that was scanned
-  is copied to GHCR (`skopeo copy --all --preserve-digests`), checked by hashing what GHCR
-  serves, attested and signed, and only then tagged `:<version>`. A second image build, a
-  scan of anything but the published digest, a copy that can change the digest (the build
-  forces gzip layers for this reason), or a version tag added before attest and sign is a
-  finding.
-- A reused image is verified by attestation and signature, never by comparing a rebuilt
-  index.
-- Trivy exceptions live only in `.trivyignore`, each with a reason and an `exp:` date; an
-  `--ignore-unfixed`, a lowered severity or an exception anywhere else is a finding.
-- Workflow tokens are `contents: read` at the top of every workflow, and a job asks for more
-  only with a comment saying why. Every action is pinned to a full commit SHA and every image
-  a workflow runs to an index digest; a new floating `@v…` or `:tag` is a finding.
+- The image runs the static runtime base as an explicit non-root `USER`, with every base
+  pinned by digest; the release job publishes only the digest it scanned. If the diff
+  touches the Dockerfile, the compose files, `.trivyignore`, a workflow or `docs/release.md`,
+  read [references/release-and-image.md](references/release-and-image.md) and walk its
+  items: they are part of this section.
 
 ## 4. Adversarial passes — language-agnostic
 
 Do not skim for style. Run these passes, each with a "how would I make this fail" framing:
 
-- **Correctness / logic**: off-by-one, inverted conditions (`<` vs `<=`), wrong operator
-  precedence, negated guards, early returns that skip cleanup, copy-paste that kept the old
-  variable. Trace one concrete failing input end to end rather than asserting "looks fine".
-- **Boundaries & nil/empty**: empty slice/map/string, zero, negative, missing key, `nil`
-  receiver/pointer, unset optional, first/last element, single-element collection, nil and
-  empty treated as the same thing where they mean different things.
-- **Aliasing**: a returned slice or map that shares its backing store with internal state, so
-  a caller's write changes it; an `append` onto a slice another owner still holds.
-- **Errors**: swallowed errors, `err` checked then ignored, wrapped-but-not-returned, `%v`
-  where `%w` was needed so `errors.Is`/`errors.As` stop matching, wrong sentinel, panics on
-  attacker- or user-controlled input, partial writes left on the error path.
-- **Concurrency**: shared state without a lock, lock held across I/O or a channel op, goroutine
-  leak, context not honored, map written from two goroutines, TOCTOU between check and use.
-- **Resources**: unclosed file/conn/response body, an ignored `Close` error on a write, missing
-  `defer`, context/timer leak, unbounded growth, work inside a loop that belongs outside it.
-- **Security**: input reaching a command/path/query/HTML without validation, authz check
-  missing or after the effect, secret in a log or response, unsafe deserialization, missing
-  rate/size limits.
+- **Generic passes**: correctness and logic, boundaries and nil/empty, aliasing, error
+  handling, concurrency, resources and security. For each, name one concrete failing input and
+  trace it end to end rather than asserting "looks fine".
 - **Contract drift**: does the code do what the commit message / PR / issue claims? A public
   signature, flag, environment variable, output format, exit code or error text changed without
   updating every consumer and the docs (§5 (e)).
@@ -260,13 +219,17 @@ Do not skim for style. Run these passes, each with a "how would I make this fail
   instead of the behavior they produced, or that was weakened/deleted to make the change pass —
   all findings. A bug fix with no regression test is a gap worth flagging.
 
-Prefer one confirmed, reproducible defect over ten vague "consider"s. If you cannot name the
-input and the resulting wrong behavior, it is not yet a finding — keep digging or drop it.
+For each candidate defect:
+
+1. Reproduce it with a focused test, or trace one concrete input through the code to the wrong
+   result.
+2. Confirmed: it is a finding. Record the input and the wrong behavior.
+3. Not confirmed: dig once more (callers, tests, config path). Still not confirmed: drop it.
+   A vague "consider" is not a finding.
 
 ## 5. Always-on passes
 
-The passes above are shaped by the diff. These run on **every** review, whatever changed,
-because each names a way a repository like this one loses something without anyone noticing.
+The passes above are shaped by the diff. These run on **every** review, whatever changed.
 
 ### (a) Endpoint and image
 
@@ -274,7 +237,7 @@ Ask the one question the endpoint and image rules in §3 are built on: does this
 a new place where something from outside becomes work — a request parameter that becomes a
 Docker call, a label value that becomes a series, an event that becomes a goroutine — or does
 it make the image or its deployment more privileged? If it does, walk the §3 "Endpoint and
-image hardening" and "Bounded work" items against it.
+image hardening" (including its reference) and "Bounded work" items against it.
 
 ### (b) Deletion smell
 
@@ -304,10 +267,10 @@ in this repo (copied from another project) is a finding too.
 ### (d) Cross-file duplication
 
 Before accepting a new helper, search for the one that already exists — in `internal/**` and
-`cmd/**`, by *behavior*, not by the name the author chose. `go-style-guide` §16 lists the helpers
-that already exist (label building and sanitization, metric constants, test fakes, gauge
-installers and wait helpers). Two implementations of the same rule drift apart, and the one the
-reviewer did not read is the one that keeps the bug.
+`cmd/**`, by *behavior*, not by the name the author chose. The *Reuse before writing* table in
+`go-style-guide` lists the helpers that already exist (label building and sanitization, metric
+constants, test fakes, gauge installers and wait helpers). Two implementations of the same rule
+drift apart, and the one the reviewer did not read is the one that keeps the bug.
 
 ### (e) Docs drift
 

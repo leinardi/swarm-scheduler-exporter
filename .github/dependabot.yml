@@ -42,6 +42,12 @@ updates:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
+    ignore:
+      # The build stage's Go must match the go directive in go.mod. Take patch
+      # releases of the current line only; move to a new minor by bumping go.mod
+      # and this image together, by hand.
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       docker-base-images:
         patterns:
