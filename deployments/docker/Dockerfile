@@ -11,7 +11,7 @@
 ########################
 # build: compile static binary
 ########################
-FROM --platform=$BUILDPLATFORM dhi.io/golang:1.27.1-alpine3.23-dev@sha256:ab0da7884e1e7960d971aa371a4fd7c3ffd9b9e2e90bf0fbcedd4cc954d7d4cd AS build
+FROM --platform=$BUILDPLATFORM dhi.io/golang:1.26.8-alpine3.23-dev@sha256:e248fe1cc163930de8df06e96241f29430998f088b981e479f00e1d6dc47f38c AS build
 ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
