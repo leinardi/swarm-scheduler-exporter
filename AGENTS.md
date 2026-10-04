@@ -52,7 +52,7 @@ Project targets live in the local `.mk/*.mk` files listed in `MK_LOCAL_FILES`, n
 - `internal/labels/` — sanitizing and validating custom Prometheus label keys.
 - `internal/logger/`, `internal/server/` — slog setup; `/metrics` and `/healthz`.
 - `internal/testenv/`, `test/integration/` — the DinD Swarm harness and the `integration`-tagged suite.
-- `deployments/docker/` — the Dockerfile (DHI bases, pinned by digest), compose examples and the socket-proxy allowlist.
+- `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
 
 ## Invariants

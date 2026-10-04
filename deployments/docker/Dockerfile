@@ -4,14 +4,14 @@
 # 1.7 tag cannot change how this file is built. Dependabot's docker ecosystem
 # does not update it: bump it by hand (docs/release.md).
 #
-# Base images are pinned as tag@sha256:<index digest>, so a rebuild of the same
-# commit (a release recovery, for one) uses the same bases. Dependabot's docker
-# ecosystem updates the tag and the digest together, through reviewed PRs.
+# Base images are pinned by tag, not by digest: dhi.io republishes its tags
+# often to ship security fixes, and a rebuild should pick those up. Every
+# release build is scanned, so a newer base never ships unscanned.
 
 ########################
 # build: compile static binary
 ########################
-FROM --platform=$BUILDPLATFORM dhi.io/golang:1.26.8-alpine3.23-dev@sha256:16da8d3c0c7a8276fee2196e3ba764d73c3db22f13cc2dc3a6799e8c0dcf9fe6 AS build
+FROM --platform=$BUILDPLATFORM dhi.io/golang:1.26.8-alpine3.23-dev AS build
 ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
@@ -40,7 +40,7 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 # runtime: dhi.io hardened static base (distroless-style, no shell).
 # The exporter binary is CGO_ENABLED=0 so no libc is required.
 ########################
-FROM dhi.io/static:20250419@sha256:98ef7a853608577e8d66dad1d25ada75d745d782f28d84e9ecfb85dfeb1f9c98
+FROM dhi.io/static:20250419
 
 # hadolint ignore=DL3050
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \

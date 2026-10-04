@@ -199,7 +199,7 @@ partial publish, or a README reason string that no longer matches the code is a 
   body may trigger a Docker call, widen a scrape, or allocate per request beyond the
   exposition itself.
 - The image runs the static runtime base as an explicit non-root `USER`, with every base
-  pinned by digest; the release job publishes only the digest it scanned. If the diff
+  pinned by tag; the release job publishes only the digest it scanned. If the diff
   touches the Dockerfile, the compose files, `.trivyignore`, a workflow or `docs/release.md`,
   read [references/release-and-image.md](references/release-and-image.md) and walk its
   items: they are part of this section.

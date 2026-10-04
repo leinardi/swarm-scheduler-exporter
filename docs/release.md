@@ -145,8 +145,9 @@ prefix, the commit date as the build date, and the commit time as BuildKit's `SO
 `-trimpath` and the exact Go version from `go.mod`, so a re-run of the same commit produces the same bytes, which is what lets a
 recovery check published assets by sha256. The image is not byte-reproducible: its provenance records the build itself, so two
 builds of the same commit have different index digests. That is why a recovery never compares a rebuilt index with a published
-one. The image's base images are pinned by digest in [`deployments/docker/Dockerfile`](../deployments/docker/Dockerfile), and
-Dependabot moves the pins forward through reviewed pull requests.
+one. The `dhi.io` base images in [`deployments/docker/Dockerfile`](../deployments/docker/Dockerfile) are pinned by tag, not by
+digest: dhi.io republishes its tags often to ship security fixes, so a recovery rebuild can use newer bases than the first attempt
+did, and it is scanned like any other build. Dependabot moves the version tags forward through reviewed pull requests.
 
 ## Dry runs
 
@@ -303,7 +304,7 @@ changes nothing. Configure it by hand:
 3. Run a **dry run** to check the environment works, then **remove the repository-level** `DHI_TOKEN` secret and `DHI_USERNAME`
    variable, which every workflow could otherwise read.
 
-Dependabot does not see Actions secrets. To update the digest-pinned `dhi.io` base images it needs its own copy of the token, which
+Dependabot does not see Actions secrets. To update the `dhi.io` base image tags it needs its own copy of the token, which
 the `dhi` registry in [`.github/dependabot.yml`](../.github/dependabot.yml) reads. It stays when the Actions copies move. Add it
 once, from a shell where you can paste the token:
 
