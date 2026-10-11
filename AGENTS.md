@@ -16,13 +16,23 @@ Build / test / vet use Make wrappers around `go`:
 make go-build             # CGO_ENABLED=0 build into ./dist/
 make go-test              # go test -race ./...
 make go-vet
+make go-lint              # golangci-lint (all linters) through the pre-commit hook, at its pinned version
+make verify-go            # go-build, go-test, go-vet, go-vet-integration and go-lint in one go
 make go-tidy              # go mod tidy + go mod verify
-make audit-deps           # govulncheck over every package (network required); also runs in CI and as a pre-commit hook on go.mod/go.sum changes
-make check                # pre-commit on all files
+make audit-deps           # govulncheck -test over every package, integration tag included (network required); also runs in CI and as a pre-commit hook on go.mod/go.sum changes
+make check                # pre-commit on all files: the authoritative local gate, the same as CI's pre-commit-all
 make check-stage          # pre-commit on the staging area only
 make docker-build
-make docker-run           # runs the image locally, binding the Docker socket and the metrics port
+make docker-run           # runs the image locally (read-only, no capabilities), binding the Docker socket and the metrics port
 ```
+
+The meta-tests under `test/` (outside `test/integration`) check the repository rather than the
+exporter, and need no Docker: the version pins, the always-run hooks, the integration tag and the
+absence of `|| true`-style flags (`test/toolchain`), the Dockerfile (`test/dockerfiles`), the Docker
+SDK boundary rule (`test/boundary`), the Markdown links (`test/docs`), and the two scripts below
+(`test/licenseheaders`, `test/suppressions`). `go test ./...` runs them;
+`SSE_REQUIRE_TOOLS=1 go test ./test/...` turns a missing golangci-lint into a failure instead of a
+skip, as CI's `repo-gates` job does.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -60,6 +70,18 @@ refresh: `make mk-common-update`. Project targets live in the local `.mk/*.mk` f
 - `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
+- `test/` — the meta-tests, with their helpers in `test/internal/` (`gitenv`, `toolgate`).
+- `scripts/` — the licence-header check, the suppression ratchet, the make-common bootstrap and the
+  Claude Code `gofmt` hook (`scripts/hooks/gofmt-on-edit.sh`, wired in `.claude/settings.json`).
+
+### Generated or vendored: never hand-edit
+
+- `.mk/{docker,help,go,password,pre-commit}.mk`, `.mk/.mk-common-version` and
+  `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
+  `make mk-common-update` and port a change upstream.
+- `internal/collector/testdata/**` and `test/integration/testdata/**`: byte-for-byte Engine API
+  captures and golden files. The golden files are rewritten with
+  `make go-test-integration UPDATE=1 RUN=...`; the whitespace hooks skip them.
 
 ## Invariants
 
@@ -91,6 +113,36 @@ The ones to keep in mind while writing code:
   the whitespace pre-commit hooks skip them, so do not tidy them by hand.
 - A new `//nolint`, `# shellcheck disable=` or `# hadolint ignore=` explains why the fix does not
   apply here, not which rule fired.
+
+## Licence headers and suppressions
+
+Every Go and shell source, Dockerfile, Makefile and repo-local `.mk` snippet carries the MIT header,
+with the year of the file's first commit (`scripts/check-license-headers.sh`, the
+`check-license-headers` hook). The make-common files are exempt: they carry make-common's own.
+
+Every in-file suppression is counted per rule against `.suppressions-baseline` by the
+`check-suppressions` hook (`scripts/check-suppressions.sh`): `//nolint:<linter>`,
+`# shellcheck disable=` and `# hadolint ignore=`. A commit that adds one, swaps one or moves one
+must change the baseline too, and so must one whose count fell below it: run
+`scripts/check-suppressions.sh --update` and commit the baseline with the change.
+
+## Validation matrix
+
+Run before considering an edit done. `make check` applies to every row.
+
+| You edited | Run |
+| --- | --- |
+| `**/*.go` | `make verify-go`; after integration-tagged code (`internal/testenv`, `test/integration`, or anything they exercise), `make go-test-integration` (Docker) |
+| `go.mod`, `go.sum` | `make go-tidy`, `make audit-deps` (network) |
+| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `go test ./test/dockerfiles/ ./test/toolchain/`, `make docker-build` |
+| `.golangci.yaml` | `go test ./test/boundary/`, `make go-lint` |
+| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `go test ./test/toolchain/` |
+| `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
+| `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `go test ./test/toolchain/`, `make help` |
+| `scripts/check-license-headers.sh` | `go test ./test/licenseheaders/` |
+| `scripts/check-suppressions.sh`, `.suppressions-baseline` | `go test ./test/suppressions/` |
+| `test/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...` |
+| `**/*.md` | `go test -count=1 ./test/docs/`; prose wraps at 100 columns |
 
 ## Project skills
 
