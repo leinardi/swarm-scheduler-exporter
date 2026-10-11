@@ -227,9 +227,11 @@ func parseGoFiles(t *testing.T, suffix string) []goFile {
 			return walkErr
 		}
 
+		// Hidden directories are skipped as the go tool skips them: .git, the tool caches, and a
+		// nested worktree under .claude/worktrees, whose files are not this tree's.
 		if entry.IsDir() {
-			switch entry.Name() {
-			case ".git", "dist", "vendor", "testdata", ".cache":
+			if path != root && strings.HasPrefix(entry.Name(), ".") ||
+				slices.Contains([]string{"dist", "vendor", "testdata"}, entry.Name()) {
 				return filepath.SkipDir
 			}
 

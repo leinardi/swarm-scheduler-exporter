@@ -393,9 +393,11 @@ func allDockerfiles(t *testing.T) []string {
 			return walkErr
 		}
 
+		// Hidden directories are skipped as the go tool skips them: .git, the tool caches, and a
+		// nested worktree under .claude/worktrees, whose Dockerfile is not this tree's.
 		if entry.IsDir() {
-			switch entry.Name() {
-			case ".git", "dist", ".cache", "vendor":
+			if path != "." && strings.HasPrefix(entry.Name(), ".") ||
+				entry.Name() == "dist" || entry.Name() == "vendor" {
 				return fs.SkipDir
 			}
 
