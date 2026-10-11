@@ -128,7 +128,9 @@ linters:
         - name: unused-receiver
 
   exclusions:
-    generated: lax # skip files containing "Code generated" magic comment
+    # strict: only a file with the standard "Code generated ... DO NOT EDIT." header is skipped;
+    # lax would also skip any file that merely mentions generated code.
+    generated: strict
     presets:
       - comments
       - std-error-handling
