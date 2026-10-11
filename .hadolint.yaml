@@ -1,5 +1,6 @@
 failure-threshold: style
-# A missing label is only info by default, which failure-threshold would let through.
+# DL3049 (a missing label) is only info by default; as an error it fails whatever
+# failure-threshold is set to.
 override:
   error:
     - DL3049

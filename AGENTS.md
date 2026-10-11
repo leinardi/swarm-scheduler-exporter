@@ -16,7 +16,7 @@ Build / test / vet use Make wrappers around `go`:
 make go-build             # CGO_ENABLED=0 build into ./dist/
 make go-test              # go test -race ./...
 make go-vet
-make go-lint              # golangci-lint (all linters) through the pre-commit hook, at its pinned version
+make go-lint              # golangci-lint (all linters) through the pre-commit hook, at its pinned version; the hook runs with --fix, so review what it rewrites
 make verify-go            # go-build, go-test, go-vet, go-vet-integration and go-lint in one go
 make go-tidy              # go mod tidy + go mod verify
 make audit-deps           # govulncheck -test over every package, integration tag included (network required); also runs in CI and as a pre-commit hook on go.mod/go.sum changes

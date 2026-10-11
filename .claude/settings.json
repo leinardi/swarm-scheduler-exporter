@@ -17,7 +17,6 @@
       "Bash(pre-commit run *)",
       "Bash(golangci-lint run *)",
       "Bash(scripts/check-*.sh)",
-      "Bash(scripts/check-*.sh *)",
       "Bash(bash .github/scripts/binary-attestation-status.test.sh)",
       "mcp__serena__initial_instructions",
       "mcp__serena__find_symbol",
