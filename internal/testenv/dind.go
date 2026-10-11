@@ -85,7 +85,7 @@ func Up(ctx context.Context, spec Spec) (_ *Cluster, retErr error) {
 		return nil, err
 	}
 
-	rules, err := defaultSweepRules(spec.EnvID, owner.Host)
+	rules, err := defaultSweepRules(spec.EnvID, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func Up(ctx context.Context, spec Spec) (_ *Cluster, retErr error) {
 		_ = hostClient.Close()
 	}()
 
-	sweep(ctx, hostClient, rules, log)
+	sweep(ctx, hostClient, &rules, log)
 
 	err = bringUp(ctx, cluster, log)
 	if err != nil {
@@ -153,6 +153,8 @@ func (c *Cluster) Labels() map[string]string {
 		LabelEnvID:   c.Spec.EnvID,
 		LabelOwner:   c.owner.String(),
 		LabelStarted: c.StartedAt.UTC().Format(time.RFC3339),
+		// Empty where /proc cannot be read: a label with no value, which no sweep matches.
+		LabelPIDNamespace: c.owner.PIDNamespace,
 	}
 }
 
@@ -730,18 +732,19 @@ func ensureHostImage(
 
 // defaultSweepRules returns the sweep rules for this process: now, this host, the configured
 // window and a PID check on this host.
-func defaultSweepRules(self, host string) (SweepRules, error) {
+func defaultSweepRules(self string, owner Owner) (SweepRules, error) {
 	staleAfter, err := StaleAfterFromEnv()
 	if err != nil {
 		return SweepRules{}, err
 	}
 
 	return SweepRules{
-		Now:        time.Now(),
-		StaleAfter: staleAfter,
-		Host:       host,
-		Self:       self,
-		Alive:      processAlive,
+		Now:          time.Now(),
+		StaleAfter:   staleAfter,
+		Host:         owner.Host,
+		PIDNamespace: owner.PIDNamespace,
+		Self:         self,
+		Alive:        processAlive,
 	}, nil
 }
 
@@ -759,7 +762,7 @@ func processAlive(pid int) bool {
 func sweep(
 	ctx context.Context,
 	hostClient *dockerclient.Client,
-	rules SweepRules,
+	rules *SweepRules,
 	log *slog.Logger,
 ) {
 	for _, env := range listEnvironments(ctx, hostClient, log) {
@@ -824,6 +827,10 @@ func listEnvironments(
 
 		if found.Started == "" {
 			found.Started = labels[LabelStarted]
+		}
+
+		if found.PIDNamespace == "" {
+			found.PIDNamespace = labels[LabelPIDNamespace]
 		}
 	}
 

@@ -59,14 +59,25 @@ func TestSweepRulesDecide(t *testing.T) {
 
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	rules := SweepRules{
-		Now:        now,
-		StaleAfter: time.Hour,
-		Host:       "here",
-		Self:       "self",
-		Alive:      func(pid int) bool { return pid == 100 },
+		Now:          now,
+		StaleAfter:   time.Hour,
+		Host:         "here",
+		PIDNamespace: "pid:[1]",
+		Self:         "self",
+		Alive:        func(pid int) bool { return pid == 100 },
 	}
 	old := now.Add(-2 * time.Hour).Format(time.RFC3339)
 	recent := now.Add(-10 * time.Minute).Format(time.RFC3339)
+
+	unknownNamespace := rules
+	unknownNamespace.PIDNamespace = ""
+
+	verdict := unknownNamespace.Decide(
+		Found{ID: "a", Owner: "here:200", Started: old, PIDNamespace: ""},
+	)
+	if verdict.Remove {
+		t.Error("a sweeper that cannot read its own PID namespace removed an environment")
+	}
 
 	for name, test := range map[string]struct {
 		env    Found
@@ -74,13 +85,13 @@ func TestSweepRulesDecide(t *testing.T) {
 		reason string
 	}{
 		"the current environment": {
-			Found{ID: "self", Owner: "here:200", Started: old}, false, "current",
+			Found{ID: "self", Owner: "here:200", Started: old, PIDNamespace: "pid:[1]"}, false, "current",
 		},
 		"recent, owner gone": {
-			Found{ID: "a", Owner: "here:200", Started: recent}, false, "under",
+			Found{ID: "a", Owner: "here:200", Started: recent, PIDNamespace: "pid:[1]"}, false, "under",
 		},
 		"stale, owner running": {
-			Found{ID: "a", Owner: "here:100", Started: old}, false, "still running",
+			Found{ID: "a", Owner: "here:100", Started: old, PIDNamespace: "pid:[1]"}, false, "still running",
 		},
 		"stale, another host": {
 			Found{ID: "a", Owner: "there:200", Started: old}, false, "another host",
@@ -88,7 +99,15 @@ func TestSweepRulesDecide(t *testing.T) {
 		"stale, no owner label": {Found{ID: "a", Started: old}, false, "owner label"},
 		"no started label":      {Found{ID: "a", Owner: "here:200"}, false, "started label"},
 		"stale, owner gone": {
-			Found{ID: "a", Owner: "here:200", Started: old}, true, "gone",
+			Found{ID: "a", Owner: "here:200", Started: old, PIDNamespace: "pid:[1]"}, true, "gone",
+		},
+		"stale, owner gone in another PID namespace": {
+			Found{ID: "a", Owner: "here:200", Started: old, PIDNamespace: "pid:[2]"},
+			false,
+			"PID namespace",
+		},
+		"stale, owner gone, no PID namespace label": {
+			Found{ID: "a", Owner: "here:200", Started: old}, false, "PID namespace",
 		},
 	} {
 		verdict := rules.Decide(test.env)

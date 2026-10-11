@@ -39,12 +39,13 @@ make go-vet-integration                             # go vet, including the inte
 Every container and network a run creates carries the `swarm-scheduler-exporter.it.envid` label. At
 start-up the run logs a cleanup command for its own resources
 (`docker ps -aq --filter label=swarm-scheduler-exporter.it.envid=<id> | xargs -r docker rm -fv; …`),
-so a run killed half-way can still be cleaned up by hand. Each run also removes the environments
-of earlier runs that are abandoned: older than an hour (`SSE_IT_STALE_AFTER`, a Go duration), and
-owned (the `swarm-scheduler-exporter.it.owner` label, `<hostname>:<pid>`) by a process on this host
-that no longer exists. An environment of another host, of a run still going, or without readable
-owner and start labels is kept, and the reason is logged. `make sweep-test-leaks` removes every
-labelled environment, whatever its age or owner — do not run it while another run is in progress.
+so a run killed half-way can still be cleaned up by hand. Each run also removes the environments of
+earlier runs that are abandoned: older than an hour (`SSE_IT_STALE_AFTER`, a Go duration), and owned
+(the `swarm-scheduler-exporter.it.owner` label, `<hostname>:<pid>`, and the `.pidns` label) by a
+process on this host, in this PID namespace, that no longer exists. An environment of another host,
+of a run still going, or without readable owner and start labels is kept, and the reason is logged.
+`make sweep-test-leaks` removes every labelled environment, whatever its age or owner — do not run
+it while another run is in progress.
 
 ## Commit messages
 

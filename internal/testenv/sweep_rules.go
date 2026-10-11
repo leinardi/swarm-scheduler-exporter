@@ -41,6 +41,10 @@ const (
 	LabelOwner = "swarm-scheduler-exporter.it.owner"
 	// LabelStarted is when the environment came up, in RFC 3339.
 	LabelStarted = "swarm-scheduler-exporter.it.started"
+	// LabelPIDNamespace is the PID namespace of the owner ("pid:[4026531836]"): a PID means
+	// something only inside its namespace, and a test in a container that shares the host's
+	// hostname (--network host) has its own.
+	LabelPIDNamespace = "swarm-scheduler-exporter.it.pidns"
 
 	// EnvStaleAfter overrides how old an abandoned environment must be before the sweep removes it.
 	EnvStaleAfter = "SSE_IT_STALE_AFTER"
@@ -57,9 +61,11 @@ var (
 type Owner struct {
 	Host string
 	PID  int
+	// PIDNamespace is the namespace PID lives in, empty where it cannot be read.
+	PIDNamespace string
 }
 
-// String formats the owner as the label value.
+// String formats the owner as the LabelOwner value; the namespace has a label of its own.
 func (o Owner) String() string {
 	return o.Host + ":" + strconv.Itoa(o.PID)
 }
@@ -71,7 +77,18 @@ func CurrentOwner() (Owner, error) {
 		return Owner{}, fmt.Errorf("hostname: %w", err)
 	}
 
-	return Owner{Host: host, PID: os.Getpid()}, nil
+	return Owner{Host: host, PID: os.Getpid(), PIDNamespace: CurrentPIDNamespace()}, nil
+}
+
+// CurrentPIDNamespace returns this process's PID namespace, or "" where /proc does not say. An
+// empty namespace never matches, so an environment from such a process is never swept by PID.
+func CurrentPIDNamespace() string {
+	namespace, err := os.Readlink("/proc/self/ns/pid")
+	if err != nil {
+		return ""
+	}
+
+	return namespace
 }
 
 // ParseOwner reads an owner label value. The PID is after the last colon, so a hostname may hold
@@ -93,9 +110,10 @@ func ParseOwner(value string) (Owner, error) {
 // Found is one environment as its labels describe it. The owner and started labels are taken from
 // whichever of its resources carries them.
 type Found struct {
-	ID      string
-	Owner   string
-	Started string
+	ID           string
+	Owner        string
+	Started      string
+	PIDNamespace string
 }
 
 // Verdict is the sweep's decision about one environment, with the reason a reader is shown.
@@ -106,13 +124,15 @@ type Verdict struct {
 }
 
 // SweepRules decides which environments are abandoned. Another envid is removed only when all of
-// these hold: it is older than StaleAfter, and its owner is provably dead -- on this host, and its
-// PID does not exist. A foreign host is never assumed dead, and a label that cannot be read proves
+// these hold: it is older than StaleAfter, and its owner is provably dead -- on this host, in this
+// PID namespace, and its PID does not exist. A foreign host is never assumed dead, and a label that cannot be read proves
 // nothing: such an environment is left for make sweep-test-leaks.
 type SweepRules struct {
 	Now        time.Time
 	StaleAfter time.Duration
 	Host       string
+	// PIDNamespace is this process's PID namespace; empty matches nothing.
+	PIDNamespace string
 	// Self is the current envid, which a sweep never touches; Down owns it.
 	Self string
 	// Alive reports whether a PID exists on this host.
@@ -120,7 +140,7 @@ type SweepRules struct {
 }
 
 // Decide applies the rules to one environment.
-func (r SweepRules) Decide(env Found) Verdict {
+func (r *SweepRules) Decide(env Found) Verdict {
 	keep := func(reason string) Verdict { return Verdict{Env: env, Remove: false, Reason: reason} }
 
 	if env.ID == r.Self {
@@ -143,6 +163,10 @@ func (r SweepRules) Decide(env Found) Verdict {
 
 	if owner.Host != r.Host {
 		return keep("owned by another host, " + owner.Host)
+	}
+
+	if r.PIDNamespace == "" || env.PIDNamespace != r.PIDNamespace {
+		return keep("owned by a process in another or unknown PID namespace")
 	}
 
 	if r.Alive(owner.PID) {
