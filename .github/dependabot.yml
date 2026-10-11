@@ -12,7 +12,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
@@ -24,7 +24,7 @@ updates:
   - package-ecosystem: "pre-commit"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
@@ -37,7 +37,7 @@ updates:
     directory: "/deployments/docker"
     registries: ["dhi"]
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5
@@ -56,7 +56,7 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     # fix, not chore: the release version is derived from commit types, so a
     # Go dependency bump (security fixes included) produces a patch release.
     # The other ecosystems stay chore(deps) and bump nothing. That includes the
