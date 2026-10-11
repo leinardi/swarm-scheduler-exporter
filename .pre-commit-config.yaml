@@ -69,6 +69,16 @@ repos:
         additional_dependencies: ["prettier@3.9.9"]
         files: \.(yml|yaml)$
         args: ["--write"]
+      # Every source file carries the MIT header (LICENSE). Reads the whole tree, so it always
+      # runs; pinned to one stage because always_run makes a hook eligible at every installed
+      # stage, and commit-msg is one of them.
+      - id: check-license-headers
+        name: licence headers
+        entry: scripts/check-license-headers.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       # Dependency-change check, and nothing more. It runs the same make target `make audit-deps`
       # runs -- the full source-aware govulncheck scan over every package -- but only when the
       # dependency files themselves change, which is what limits it: it catches a bad upgrade at
