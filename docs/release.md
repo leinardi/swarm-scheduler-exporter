@@ -327,8 +327,9 @@ scanning at release time.
 
 **Workflow tokens are read-only by default.** Each workflow sets `permissions: contents: read` at
 the top, and only the jobs that need more say so: the reviewdog jobs in `ci.yaml` add
-`pull-requests: write` to post their review, and the release job adds `contents: write`,
-`packages: write`, `id-token: write` and `attestations: write`.
+`pull-requests: write` to post their review, the warm-up's calling job adds `actions: write` so the
+reusable workflow's prune job can delete the older pre-commit caches of its ref, and the release job
+adds `contents: write`, `packages: write`, `id-token: write` and `attestations: write`.
 
 A SHA pin fixes only the top-level ref, so the actions and reusable workflows we own pin what they
 run too: `leinardi/gha-pre-commit-reviewdog-actions` from `v1.0.1` and
@@ -339,7 +340,9 @@ writes into the `master` cache scope. The release job restores that scope twice:
 with `cache: true` restores the Go module and build caches, and the image build reads the BuildKit
 layer cache with `cache-from: type=gha`. A moved tag inside the warm-up could therefore poison what
 the release builds, attests and signs. Keep the nested pins in both repositories current, and bump
-the pins here when they release.
+the pins here when they release. The other `ci.yaml` jobs also run on pushes to `master`, so they
+could write that scope too: their `actions/setup-go` steps save a cache only on a pull request
+(`cache` is false otherwise), and `pre-commit-all` only restores the warm-up's entry.
 
 ## One-time setup
 
@@ -374,38 +377,27 @@ gh secret set DHI_TOKEN -a dependabot
 
 ### Required checks
 
-A failing CI job does not block a merge on its own: the `master` ruleset ("Protect default branch",
-id `10729577`) needs a `required_status_checks` rule for that. GitHub can only require a check whose
-context it has already seen, so add the rule once every job below has run at least once on a pull
-request, keeping every existing rule:
+A failing CI job does not block a merge on its own: the `master` ruleset needs a required status
+check for that. The rulesets are managed as code in
+[`leinardi/gh-leinardi-iac`](https://github.com/leinardi/gh-leinardi-iac), in the
+`repo_swarm_scheduler_exporter` module of `stacks/github-repos/repos.tf`, never by hand or with
+`gh api`: a change to them is a pull request there.
 
-```json
-{
-  "type": "required_status_checks",
-  "parameters": {
-    "strict_required_status_checks_policy": true,
-    "required_status_checks": [
-      { "context": "go-test", "integration_id": 15368 },
-      { "context": "go-vulncheck", "integration_id": 15368 },
-      { "context": "integration", "integration_id": 15368 },
-      { "context": "conventional-commits", "integration_id": 15368 },
-      { "context": "pre-commit-hooks", "integration_id": 15368 },
-      { "context": "actionlint", "integration_id": 15368 },
-      { "context": "release-scripts", "integration_id": 15368 }
-    ]
-  }
-}
-```
+The checks to require are `ci-result` and `integration`, set there as
+`default_branch_required_checks = ["ci-result", "integration"]`. `ci-result` needs every other job
+of `ci.yaml` (`pre-commit-all`, `conventional-commits`, `repo-gates`, `release-scripts`, `go-test`
+and `go-vulncheck`) and fails unless each one succeeded; `conventional-commits` alone may be
+skipped, off pull requests. A new `ci.yaml` job therefore becomes required by joining
+`ci-result`'s `needs`, not the ruleset, and GitHub counting a skipped required job as passing is
+why the jobs themselves are not listed. `integration` runs in its own workflow, which `ci-result`
+cannot need, so it is required by name. The reviewdog annotation jobs (`actionlint`,
+`pre-commit-hooks`, `markdownlint`, `shellcheck`, `yamllint`) stay optional: they duplicate
+`pre-commit-all` as inline comments. None of these workflows uses path filters, so every required
+check reports on every pull request.
 
-`15368` is the GitHub Actions app, so only a check reported by Actions satisfies the rule.
-`markdownlint`, `shellcheck` and `yamllint` stay optional. None of these workflows uses path
-filters, so every required check reports on every pull request and none can leave a pull request
-waiting forever. Apply it with
-`gh api -X PUT repos/leinardi/swarm-scheduler-exporter/rulesets/10729577`, sending the ruleset's
-current `rules` array (the `deletion`, `non_fast_forward` and `pull_request` rules) with this entry
-appended, and its current `bypass_actors`; a `PUT` replaces the whole list, so leaving out the
-existing rules would delete them. Check the result with
-`gh api repos/leinardi/swarm-scheduler-exporter/rulesets/10729577`.
+Once the ruleset is applied, open one pull request and confirm the required checks report under
+exactly the names `ci-result` and `integration`. A required check that never reports blocks every
+merge.
 
 Repository admins keep the ruleset's pull-request bypass, so an admin can still merge a pull request
 whose check fails. That is a deliberate escape hatch, not a gap in the check.

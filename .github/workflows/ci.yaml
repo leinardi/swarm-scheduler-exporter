@@ -30,11 +30,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The system Go that the language: system hooks (licence headers, suppression ratchet, docs
-      # links) and the golangci-lint hooks build with.
+      # links) and the golangci-lint hooks build with. It saves and restores a Go cache only on a
+      # pull request: on a push it would write the master cache scope the release job restores
+      # (docs/release.md, "Workflow tokens").
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ github.event_name == 'pull_request' }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -244,10 +247,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Saves and restores a Go cache only on a pull request: on a push it would write the master
+      # cache scope the release job restores (docs/release.md, "Workflow tokens").
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ github.event_name == 'pull_request' }}
 
       # The version is the golangci-lint rev in .pre-commit-config.yaml; test/toolchain holds the
       # two together.
@@ -286,10 +292,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Saves and restores a Go cache only on a pull request: on a push it would write the master
+      # cache scope the release job restores (docs/release.md, "Workflow tokens").
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ github.event_name == 'pull_request' }}
 
       - name: Run unit tests with the race detector
         run: go test -race ./...
@@ -305,10 +314,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Saves and restores a Go cache only on a pull request: on a push it would write the master
+      # cache scope the release job restores (docs/release.md, "Workflow tokens").
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ github.event_name == 'pull_request' }}
 
       - name: Scan dependencies for known vulnerabilities
         run: make audit-deps-go
