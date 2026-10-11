@@ -32,7 +32,8 @@ import (
 )
 
 // NewLogger returns the harness logger: slog text lines on stderr, so bring-up and teardown
-// progress shows up interleaved with go test -v output.
+// progress shows up interleaved with go test -v output. It redacts secrets and container
+// environments (NewRedactingLogger), since CI logs are public.
 func NewLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return NewRedactingLogger(os.Stderr)
 }
