@@ -55,6 +55,9 @@ SOCK_GID := $(shell \
 DOCKER_RUN_ARGS ?= -listen-addr 0.0.0.0:8888
 DOCKER_RUN_PORT ?= 8888
 
+# The exporter writes nothing to its filesystem and needs no Linux capability (it only reads the
+# Docker API through the socket its group may open), so the local run gets a read-only root, every
+# capability dropped and no privilege gain through setuid binaries.
 .PHONY: docker-run
 docker-run: ## Run the image locally binding the Docker socket and metrics port
 	@if [ ! -S "$(DOCKER_SOCK)" ]; then \
@@ -70,6 +73,9 @@ docker-run: ## Run the image locally binding the Docker socket and metrics port
 	docker run --rm \
 		--name "$(IMAGE_NAME)" \
 		--network host \
+		--read-only \
+		--cap-drop ALL \
+		--security-opt no-new-privileges \
 		--group-add "$(SOCK_GID)" \
 		-v "$(DOCKER_SOCK):/var/run/docker.sock:ro" \
 		"$(IMAGE_REPO):$(IMAGE_TAG)" \
