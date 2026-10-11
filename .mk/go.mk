@@ -1,3 +1,27 @@
+#
+# MIT License
+#
+# Copyright (c) 2025 Roberto Leinardi
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+
 ifndef MK_COMMON_GO_INCLUDED
 MK_COMMON_GO_INCLUDED := 1
 
@@ -85,6 +109,22 @@ go-fmt-check: ## Fail if formatting is needed
 .PHONY: go-vet
 go-vet: ## Static checks (go vet)
 	$(GO) vet $(GO_PKG)
+
+# Lint through the same pinned golangci-lint the pre-commit hook runs, over the whole module, so
+# `make go-lint`, the commit hook and CI cannot disagree on the linter version or its
+# configuration. GO_LINT_HOOK is the hook id in the consumer's .pre-commit-config.yaml (the
+# golangci/golangci-lint repository's whole-module hook). Self-contained rather than depending on
+# pre-commit.mk's check-installed-pre-commit, so go.mk still works on its own.
+GO_LINT_HOOK ?= golangci-lint-full
+
+.PHONY: go-lint
+go-lint: ## Lint all Go code with golangci-lint (pre-commit pin)
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+	  echo "Error: pre-commit is not installed (go-lint runs golangci-lint through it)."; \
+	  echo "Install it with: pipx install pre-commit (or brew/apt install pre-commit)"; \
+	  exit 1; \
+	fi
+	@pre-commit run "$(GO_LINT_HOOK)" --all-files
 
 .PHONY: go-test
 go-test: ## Run tests with race detector
