@@ -1,7 +1,12 @@
 name: CI
 
+# The authoritative checks run on every pull request and every push to master; the reviewdog jobs
+# only annotate pull requests. ci-result is the one required check.
 on:
   pull_request:
+  push:
+    branches:
+      - master
   workflow_dispatch:
 
 concurrency:
@@ -13,6 +18,55 @@ permissions:
   contents: read
 
 jobs:
+  # The authoritative lint gate: every pre-commit hook over every file, with the versions pinned in
+  # .pre-commit-config.yaml. Skipped hooks, each run by a dedicated job below: go-test-repo-mod
+  # (go-test, with -race) and audit-deps-go (go-vulncheck, which needs the network).
+  pre-commit-all:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The system Go that the language: system hooks (licence headers, suppression ratchet, docs
+      # links) and the golangci-lint hooks build with.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+
+      - name: Install pre-commit
+        run: pip install --no-cache-dir pre-commit==4.6.2
+
+      - name: Set up hadolint
+        uses: ./.github/actions/setup-hadolint
+
+      # Restore only: pre-commit-warmup.yaml saves the entry on master under the same key.
+      - name: Restore the pre-commit cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit|${{ runner.os }}|${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run every pre-commit hook on every file
+        env:
+          SKIP: go-test-repo-mod,audit-deps-go
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      # pre-commit fails a hook that modifies a tracked file, which covers the auto-fixing hooks
+      # (markdownlint fix, prettier, dclint fix, golangci-lint fmt); this also fails on a file a hook
+      # creates, which its diff check does not see, so no fix can pass silently.
+      - name: Fail if a hook modified a file
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+
   actionlint:
     # Reports inline PR review comments over a diff range; a manual dispatch has
     # neither a pull request to comment on nor a base ref to diff against.
@@ -32,7 +86,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run actionlint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@68bf8e338b79df404181ceef655ae02f1c8edb8a # v1.0.2
+        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -56,8 +110,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The hadolint hook runs the system binary (language: system), which the runner lacks.
+      - name: Set up hadolint
+        uses: ./.github/actions/setup-hadolint
+
       - name: Run pre-commit hooks + reviewdog diff
-        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@68bf8e338b79df404181ceef655ae02f1c8edb8a # v1.0.2
+        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -95,7 +153,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run markdownlint-cli2 via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@68bf8e338b79df404181ceef655ae02f1c8edb8a # v1.0.2
+        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -120,7 +178,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run shellcheck via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@68bf8e338b79df404181ceef655ae02f1c8edb8a # v1.0.2
+        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -145,7 +203,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run yamllint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@68bf8e338b79df404181ceef655ae02f1c8edb8a # v1.0.2
+        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -159,7 +217,8 @@ jobs:
     # conventional-pre-commit hook, so --force-scope applies here too, and it
     # skips merge commits. No pull-request title check: squash merging is
     # disabled, so a title never becomes a commit on master. Enabling squash
-    # merging would need one added here first.
+    # merging would need one added here first. On a push the commits were already checked on their
+    # pull request.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
@@ -170,10 +229,38 @@ jobs:
           fetch-depth: 0
 
       - name: Validate the commit messages
-        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@68bf8e338b79df404181ceef655ae02f1c8edb8a # v1.0.2
+        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
+
+  # The meta-tests under test/, with the tool they drive: a missing golangci-lint fails here
+  # (SSE_REQUIRE_TOOLS=1) instead of skipping, as it may on a developer machine.
+  repo-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The version is the golangci-lint rev in .pre-commit-config.yaml; test/toolchain holds the
+      # two together.
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          install-only: true
+          version: v2.14.0
+
+      - name: Run the repository meta-tests
+        env:
+          SSE_REQUIRE_TOOLS: "1"
+        run: go test ./test/...
 
   # The release workflow's scripts, tested with a stub gh: no network, no token.
   release-scripts:
@@ -225,3 +312,45 @@ jobs:
 
       - name: Scan dependencies for known vulnerabilities
         run: make audit-deps-go
+
+  # The one required check that stands for the rest: GitHub counts a skipped required job as passing,
+  # so this job runs always and decides. On a pull request every needed job must succeed; on a push
+  # or a dispatch conventional-commits is skipped and the others must succeed. The reviewdog jobs
+  # only annotate, so they are not needed here.
+  ci-result:
+    if: always()
+    needs:
+      - pre-commit-all
+      - conventional-commits
+      - repo-gates
+      - release-scripts
+      - go-test
+      - go-vulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check the needed jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          failed="$(jq -r --arg event "${EVENT}" '
+            to_entries[]
+            | select(.value.result != "success")
+            | select(
+                (
+                  $event != "pull_request"
+                  and .key == "conventional-commits"
+                  and .value.result == "skipped"
+                ) | not
+              )
+            | "\(.key): \(.value.result)"
+          ' <<<"${NEEDS}")"
+          if [[ -n "${failed}" ]]; then
+            echo "::error::Needed jobs did not succeed:"
+            echo "${failed}"
+            exit 1
+          fi
+          echo "Every needed job succeeded."
