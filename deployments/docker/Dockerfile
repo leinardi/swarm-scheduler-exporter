@@ -65,10 +65,18 @@ RUN --mount=type=cache,target=/go/pkg/mod,id=gomodcache \
 ########################
 FROM dhi.io/static:20250419
 
-# hadolint ignore=DL3050
+# The same build arguments as the build stage: an ARG is scoped to the stage that declares it.
+ARG VERSION="dev"
+ARG COMMIT="none"
+ARG DATE="unknown"
+
+# The seven OCI labels .hadolint.yaml requires (label-schema, DL3049 as an error).
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.description="Prometheus exporter for Docker Swarm services/tasks" \
 	org.opencontainers.image.source="https://github.com/leinardi/swarm-scheduler-exporter" \
+	org.opencontainers.image.version="${VERSION}" \
+	org.opencontainers.image.revision="${COMMIT}" \
+	org.opencontainers.image.created="${DATE}" \
 	org.opencontainers.image.licenses="MIT"
 
 # Copy the binary

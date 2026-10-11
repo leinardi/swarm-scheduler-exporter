@@ -1,4 +1,18 @@
 failure-threshold: style
+# A missing label is only info by default, which failure-threshold would let through.
+override:
+  error:
+    - DL3049
 ignored:
   - DL3018 # Pin versions in apk add. Instead of `apk add <package>` use `apk add <package>=<version>`
+# The seven OCI labels every image carries, each required (DL3049 when missing) and validated;
+# strict-labels rejects any label not listed here.
+label-schema:
+  org.opencontainers.image.title: text
+  org.opencontainers.image.description: text
+  org.opencontainers.image.source: url
+  org.opencontainers.image.version: text
+  org.opencontainers.image.revision: text
+  org.opencontainers.image.created: text
+  org.opencontainers.image.licenses: spdx
 strict-labels: true
