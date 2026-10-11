@@ -79,6 +79,16 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      # Every relative link and fragment in the tracked Markdown resolves (test/docs). -count=1
+      # because the file list comes from git ls-files, which the test cache cannot see; always_run
+      # because deleting a linked page passes no file to the hook at all.
+      - id: docs-links
+        name: docs links
+        entry: go test -count=1 ./test/docs/
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       # Dependency-change check, and nothing more. It runs the same make target `make audit-deps`
       # runs -- the full source-aware govulncheck scan over every package -- but only when the
       # dependency files themselves change, which is what limits it: it catches a bad upgrade at
