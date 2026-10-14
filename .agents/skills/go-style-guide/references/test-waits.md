@@ -9,8 +9,8 @@ reconciler updated a gauge, the listener returned after cancellation, the stream
 Wait on the signal, or poll with a deadline: a slow machine then costs milliseconds instead of
 flaking, and the failure names the contract that was broken rather than "unexpected nil".
 
-- When the goroutine signals completion on a channel, `select` on it against a timeout and
-  `t.Fatal` naming what never happened (`TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted`).
+- When the goroutine signals completion on a channel, `select` on it against a timeout and `t.Fatal`
+  naming what never happened (`TestListenSwarmEvents_CancelDuringPump_NoReconnectCounted`).
 - When the only observable is state (a gauge value, a call counter behind `fakeDocker.mu`), use
   `eventually(t, what, cond)` in `internal/collector` or `eventually(t, timeout, check)` in the
   integration suite. A hand-rolled deadline loop in a test body is this class too: use the

@@ -207,6 +207,29 @@ check "malformed JSON fails" fail "" "$malformed"
 check "one absent and one present: only the absent one is printed" 0 "$absent" "$present" "$absent"
 check "no file arguments is a usage error" 2 ""
 
+# A release's own files: the two binaries, one attested by an earlier run and one not, and the
+# checksums.txt that covers both. The script looks up exactly the digests checksums.txt records.
+release="$work/dist"
+mkdir "$release"
+printf 'amd64 build\n' >"$release/example-linux-amd64"
+printf 'arm64 build\n' >"$release/example-linux-arm64"
+(cd "$release" && sha256sum example-linux-amd64 example-linux-arm64 >checksums.txt)
+amd64_digest=$(digest_of "$release/example-linux-amd64")
+arm64_digest=$(digest_of "$release/example-linux-arm64")
+STUB_MODES+=" $amd64_digest=present $arm64_digest=absent"
+
+check "release binaries: only the unattested one is printed" 0 "$release/example-linux-arm64" \
+	"$release/example-linux-amd64" "$release/example-linux-arm64"
+
+looked_up=$(sed -n 's|^api repos/'"$repo"'/attestations/sha256:||p' "$STUB_LOG" | sort)
+recorded=$(cut -d' ' -f1 "$release/checksums.txt" | sort)
+if [ "$looked_up" = "$recorded" ]; then
+	echo "ok   the digests looked up are the ones checksums.txt records"
+else
+	echo "FAIL the digests looked up [$looked_up] are not the ones checksums.txt records [$recorded]"
+	failures=$((failures + 1))
+fi
+
 if [ "$failures" -ne 0 ]; then
 	echo "$failures case(s) failed" >&2
 	exit 1

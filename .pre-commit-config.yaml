@@ -44,37 +44,62 @@ repos:
       - id: markdownlint-cli2
         additional_dependencies:
           - markdownlint-rule-table-format@1.0.3
-  - repo: local
+  # Pinned rather than taken from the system, so a developer machine and CI run the same release.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
-        language: system
-        types: [shell]
         args: ["-x"]
       - id: shellcheck
         alias: shellcheck-diff-output
         name: shellcheck (diff output)
-        entry: shellcheck
-        language: system
-        types: [shell]
         args: ["-f", "diff", "-x"]
         stages: [manual]
       - id: shellcheck
         alias: shellcheck-json-output
         name: shellcheck (json output)
-        entry: shellcheck
-        language: system
-        types: [shell]
         args: ["-f", "json", "-x"]
         stages: [manual]
+  - repo: local
+    hooks:
       - id: prettier-yaml
         name: prettier-yaml
         entry: prettier
         language: node
-        additional_dependencies: ["prettier@3.7.4"]
+        additional_dependencies: ["prettier@3.9.9"]
         files: \.(yml|yaml)$
         args: ["--write"]
+      # Every source file carries the MIT header (LICENSE). Reads the whole tree, so it always
+      # runs; pinned to one stage because always_run makes a hook eligible at every installed
+      # stage, and commit-msg is one of them.
+      - id: check-license-headers
+        name: licence headers
+        entry: scripts/check-license-headers.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      # Every relative link and fragment in the tracked Markdown resolves (test/docs). -count=1
+      # because the file list comes from git ls-files, which the test cache cannot see; always_run
+      # because deleting a linked page passes no file to the hook at all.
+      - id: docs-links
+        name: docs links
+        entry: go test -count=1 ./test/docs/
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      # Every //nolint, shellcheck disable and hadolint ignore is counted per rule against
+      # .suppressions-baseline, and a commit that adds one must change the baseline too
+      # (scripts/check-suppressions.sh). Always runs: the ratchet reads the whole tree and the
+      # staged diff, and a commit that touches no source can still delete the baseline.
+      - id: check-suppressions
+        name: suppression ratchet
+        entry: scripts/check-suppressions.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       # Dependency-change check, and nothing more. It runs the same make target `make audit-deps`
       # runs -- the full source-aware govulncheck scan over every package -- but only when the
       # dependency files themselves change, which is what limits it: it catches a bad upgrade at

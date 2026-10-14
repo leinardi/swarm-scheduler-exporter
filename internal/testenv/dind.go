@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"strconv"
+	"syscall"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -51,7 +52,6 @@ const (
 	swarmManagePort  = "2377"
 	daemonReadyWait  = 60 * time.Second
 	swarmReadyWait   = 90 * time.Second
-	sweepMaxAge      = time.Hour
 	pollInterval     = 500 * time.Millisecond
 
 	// opTimeout bounds one ordinary Docker call, so a hung daemon fails that call instead of
@@ -80,12 +80,22 @@ func Up(ctx context.Context, spec Spec) (_ *Cluster, retErr error) {
 		slog.String("cmd", CleanupCommand(spec.EnvID)),
 	)
 
+	owner, err := CurrentOwner()
+	if err != nil {
+		return nil, err
+	}
+
+	rules, err := defaultSweepRules(spec.EnvID, owner)
+	if err != nil {
+		return nil, err
+	}
+
 	hostClient, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("connect to host Docker daemon: %w", err)
 	}
 
-	cluster := &Cluster{Spec: spec, StartedAt: time.Now(), hostClient: hostClient}
+	cluster := &Cluster{Spec: spec, StartedAt: time.Now(), hostClient: hostClient, owner: owner}
 
 	defer func() {
 		if retErr == nil {
@@ -113,7 +123,7 @@ func Up(ctx context.Context, spec Spec) (_ *Cluster, retErr error) {
 		_ = hostClient.Close()
 	}()
 
-	sweep(ctx, hostClient, sweepMaxAge, log)
+	sweep(ctx, hostClient, &rules, log)
 
 	err = bringUp(ctx, cluster, log)
 	if err != nil {
@@ -136,9 +146,21 @@ func (c *Cluster) Down(ctx context.Context) error {
 	return errors.Join(cleanupErr, closeErr)
 }
 
+// Labels returns the labels every resource of the cluster carries: its envid, which Down and the
+// manual cleanup select by, and the owner and start time the sweep of a later run decides by.
+func (c *Cluster) Labels() map[string]string {
+	return map[string]string{
+		LabelEnvID:   c.Spec.EnvID,
+		LabelOwner:   c.owner.String(),
+		LabelStarted: c.StartedAt.UTC().Format(time.RFC3339),
+		// Empty where /proc cannot be read: a label with no value, which no sweep matches.
+		LabelPIDNamespace: c.owner.PIDNamespace,
+	}
+}
+
 // HostClient returns the client of the host daemon the nodes run on, for a test that needs a
-// helper container beside the cluster. Label what it creates with LabelEnvID and the cluster's
-// EnvID, so Down removes it even when the test's own cleanup never runs.
+// helper container beside the cluster. Label what it creates with Labels, so Down removes it even
+// when the test's own cleanup never runs, and a later run's sweep can tell whose it is.
 func (c *Cluster) HostClient() *dockerclient.Client {
 	return c.hostClient
 }
@@ -256,12 +278,12 @@ func bringUp(ctx context.Context, cluster *Cluster, log *slog.Logger) error {
 
 	networkName := ResourceName(spec.EnvID, "net")
 
-	err = createBridgeNetwork(ctx, hostClient, networkName, spec.EnvID)
+	err = createBridgeNetwork(ctx, hostClient, networkName, cluster.Labels())
 	if err != nil {
 		return err
 	}
 
-	nodes, err := provisionNodes(ctx, hostClient, spec, networkName)
+	nodes, err := provisionNodes(ctx, hostClient, spec, networkName, cluster.Labels())
 	if err != nil {
 		return err
 	}
@@ -311,7 +333,8 @@ func bringUp(ctx context.Context, cluster *Cluster, log *slog.Logger) error {
 func createBridgeNetwork(
 	ctx context.Context,
 	hostClient *dockerclient.Client,
-	name, envID string,
+	name string,
+	labels map[string]string,
 ) error {
 	_, err := withTimeout(
 		ctx,
@@ -319,7 +342,7 @@ func createBridgeNetwork(
 		func(opCtx context.Context) (dockerclient.NetworkCreateResult, error) {
 			return hostClient.NetworkCreate(opCtx, name, dockerclient.NetworkCreateOptions{
 				Driver: "bridge",
-				Labels: map[string]string{LabelEnvID: envID},
+				Labels: labels,
 			})
 		},
 	)
@@ -335,10 +358,19 @@ func provisionNodes(
 	hostClient *dockerclient.Client,
 	spec *Spec,
 	networkName string,
+	labels map[string]string,
 ) ([]Node, error) {
 	nodes := make([]Node, 0, spec.Workers+1)
 
-	manager, err := startNode(ctx, hostClient, spec, networkName, "manager-0", RoleManager)
+	manager, err := startNode(
+		ctx,
+		hostClient,
+		spec,
+		labels,
+		networkName,
+		"manager-0",
+		RoleManager,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -350,6 +382,7 @@ func provisionNodes(
 			ctx,
 			hostClient,
 			spec,
+			labels,
 			networkName,
 			fmt.Sprintf("worker-%d", idx),
 			RoleWorker,
@@ -368,6 +401,7 @@ func startNode(
 	ctx context.Context,
 	hostClient *dockerclient.Client,
 	spec *Spec,
+	labels map[string]string,
 	networkName, hostname string,
 	role NodeRole,
 ) (Node, error) {
@@ -387,7 +421,7 @@ func startNode(
 					// start-up for seconds to warn about unauthenticated TCP.
 					Env:          []string{"DOCKER_TLS_CERTDIR="},
 					Cmd:          []string{"--tls=false"},
-					Labels:       map[string]string{LabelEnvID: spec.EnvID},
+					Labels:       labels,
 					ExposedPorts: network.PortSet{portSpec: struct{}{}},
 				},
 				HostConfig: &container.HostConfig{
@@ -696,18 +730,109 @@ func ensureHostImage(
 
 // --- Teardown ---
 
-// sweep removes the environments of earlier runs that are older than maxAge — leaks from runs that
-// were killed before their teardown ran. Recent environments are left alone: they may belong to a
-// run still in progress.
+// defaultSweepRules returns the sweep rules for this process: now, this host, the configured
+// window and a PID check on this host.
+func defaultSweepRules(self string, owner Owner) (SweepRules, error) {
+	staleAfter, err := StaleAfterFromEnv()
+	if err != nil {
+		return SweepRules{}, err
+	}
+
+	return SweepRules{
+		Now:          time.Now(),
+		StaleAfter:   staleAfter,
+		Host:         owner.Host,
+		PIDNamespace: owner.PIDNamespace,
+		Self:         self,
+		Alive:        processAlive,
+	}, nil
+}
+
+// processAlive reports whether pid exists on this host: signal 0 checks without delivering, and a
+// permission error still means the process is there.
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// sweep removes the environments of earlier runs that rules finds abandoned -- leaks from runs that
+// were killed before their teardown ran. An environment that may still belong to a running test,
+// on this host or another, is left alone, and the reason is logged.
 func sweep(
 	ctx context.Context,
 	hostClient *dockerclient.Client,
-	maxAge time.Duration,
+	rules *SweepRules,
 	log *slog.Logger,
 ) {
+	for _, env := range listEnvironments(ctx, hostClient, log) {
+		verdict := rules.Decide(env)
+		if !verdict.Remove {
+			if env.ID != rules.Self {
+				log.Debug(
+					"sweep: keeping environment",
+					slog.String("other_envid", env.ID),
+					slog.String("reason", verdict.Reason),
+				)
+			}
+
+			continue
+		}
+
+		log.Info(
+			"sweep: removing leaked environment",
+			slog.String("leaked_envid", env.ID),
+			slog.String("reason", verdict.Reason),
+		)
+
+		cleanupErr := cleanup(ctx, hostClient, env.ID)
+		if cleanupErr != nil {
+			log.Warn(
+				"sweep: cleanup incomplete",
+				slog.String("leaked_envid", env.ID),
+				slog.String("err", cleanupErr.Error()),
+			)
+		}
+	}
+}
+
+// listEnvironments finds every environment with a container or network on the host daemon, from
+// their labels. A listing that fails is logged and leaves that kind of resource out: the sweep is
+// best-effort, and Down still removes the run's own resources by envid.
+func listEnvironments(
+	ctx context.Context,
+	hostClient *dockerclient.Client,
+	log *slog.Logger,
+) []Found {
 	filters := make(dockerclient.Filters).Add("label", LabelEnvID)
-	cutoff := time.Now().Add(-maxAge)
-	stale := make(map[string]bool)
+	byID := map[string]*Found{}
+
+	record := func(labels map[string]string) {
+		envID := labels[LabelEnvID]
+		if envID == "" {
+			return
+		}
+
+		found, ok := byID[envID]
+		if !ok {
+			found = &Found{ID: envID}
+			byID[envID] = found
+		}
+
+		// A helper container may carry the envid alone; the owner and start time come from
+		// whichever resource has them.
+		if found.Owner == "" {
+			found.Owner = labels[LabelOwner]
+		}
+
+		if found.Started == "" {
+			found.Started = labels[LabelStarted]
+		}
+
+		if found.PIDNamespace == "" {
+			found.PIDNamespace = labels[LabelPIDNamespace]
+		}
+	}
 
 	containers, err := withTimeout(
 		ctx,
@@ -724,10 +849,7 @@ func sweep(
 	}
 
 	for idx := range containers.Items {
-		ctr := &containers.Items[idx]
-		if time.Unix(ctr.Created, 0).Before(cutoff) {
-			stale[ctr.Labels[LabelEnvID]] = true
-		}
+		record(containers.Items[idx].Labels)
 	}
 
 	networks, err := withTimeout(
@@ -742,24 +864,15 @@ func sweep(
 	}
 
 	for idx := range networks.Items {
-		net := &networks.Items[idx]
-		if net.Created.Before(cutoff) {
-			stale[net.Labels[LabelEnvID]] = true
-		}
+		record(networks.Items[idx].Labels)
 	}
 
-	for envID := range stale {
-		log.Info("sweep: removing leaked environment", slog.String("leaked_envid", envID))
-
-		cleanupErr := cleanup(ctx, hostClient, envID)
-		if cleanupErr != nil {
-			log.Warn(
-				"sweep: cleanup incomplete",
-				slog.String("leaked_envid", envID),
-				slog.String("err", cleanupErr.Error()),
-			)
-		}
+	envs := make([]Found, 0, len(byID))
+	for _, found := range byID {
+		envs = append(envs, *found)
 	}
+
+	return envs
 }
 
 // cleanup removes every container (with its anonymous /var/lib/docker volume) and every network

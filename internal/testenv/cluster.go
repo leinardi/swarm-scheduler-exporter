@@ -131,6 +131,8 @@ type Cluster struct {
 	StartedAt time.Time
 
 	hostClient *dockerclient.Client
+	// owner is the go test process that brought the cluster up, recorded in LabelOwner.
+	owner Owner
 }
 
 // SpecFromEnv returns a Spec built from the SSE_IT_* environment variables, with a freshly

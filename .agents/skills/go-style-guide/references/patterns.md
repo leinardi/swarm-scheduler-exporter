@@ -8,28 +8,28 @@ one.
 ## Contents
 
 - Concurrency
-    - Rules
-    - Goroutine lifecycle with `sync.WaitGroup`
-    - Bounded dirty set instead of a goroutine per event
-    - Panic recovery in the reconciler
-    - `sync.RWMutex` for read-heavy caches
-    - Defensive copies
-    - Atomics for single values
-    - One-time init and "seen once"
-    - Index loops over large structs
+  - Rules
+  - Goroutine lifecycle with `sync.WaitGroup`
+  - Bounded dirty set instead of a goroutine per event
+  - Panic recovery in the reconciler
+  - `sync.RWMutex` for read-heavy caches
+  - Defensive copies
+  - Atomics for single values
+  - One-time init and "seen once"
+  - Index loops over large structs
 - HTTP server
-    - Rules
-    - Server with explicit timeouts, graceful shutdown
-    - Handler and mux construction
+  - Rules
+  - Server with explicit timeouts, graceful shutdown
+  - Handler and mux construction
 - Prometheus metrics
-    - Rules
-    - Naming constants
-    - Registration
-    - Nil guard before `Configure…` has run
-    - Publish rebuilt sets as a snapshot
-    - Exhaustive zero emission
-    - Delete, never zero, on removal
-    - Custom labels
+  - Rules
+  - Naming constants
+  - Registration
+  - Nil guard before `Configure…` has run
+  - Publish rebuilt sets as a snapshot
+  - Exhaustive zero emission
+  - Delete, never zero, on removal
+  - Custom labels
 
 ---
 
@@ -467,8 +467,9 @@ running.
 
 ### Custom labels
 
-User `-label` names are validated and sanitized in `main` (`labelutil.ValidateAndSanitizeLabelNames`,
-`labelutil.ValidateCustomLabelCount`), then appended after the base labels when the vec is built:
+User `-label` names are validated and sanitized in `main`
+(`labelutil.ValidateAndSanitizeLabelNames`, `labelutil.ValidateCustomLabelCount`), then appended
+after the base labels when the vec is built:
 
 ```go
 labelNames := append([]string{

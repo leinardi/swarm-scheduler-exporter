@@ -52,13 +52,28 @@ clean, review the branch against `master` (third row).
 
 Also read `git log --oneline` for the range and any linked issue/PR body — the stated
 **intent** is what you check the code against. A change that works but does something other
-than what it claims is a finding.
+than what it claims is a finding, and so is a commit type that ships the wrong version: `svu`
+derives the release from the Conventional Commits since the last tag, and pull requests land as
+merge commits, so every commit in the range counts. A change to the binary or the image that users
+should receive typed `chore`, `docs`, `perf` or `refactor` never ships; tooling typed `fix` or
+`feat` cuts a release with nothing in it; a stray `!` cuts a major; and a word ending in `fix` or
+`feat` right before a colon anywhere in a subject counts as that type (`AGENTS.md`,
+`docs/release.md`).
 
 Read every changed file in full, not just the hunks. A hunk looks correct in isolation and
 wrong against the 40 lines above it that git didn't show you. For non-trivial changes, also
 read the callers, implementations, tests and docs of what changed — found with a reference
 search, not assumed from the diff: a signature or behavior change is only safe if every call
 site agrees.
+
+A meta-test under `test/` guards a claim nothing else checks: the version pins and the
+always-run hooks (`test/toolchain`), the Dockerfile's posture (`test/dockerfiles`), the Docker SDK
+boundary (`test/boundary`), the Markdown links (`test/docs`), the licence headers and the
+suppression ratchet (`test/licenseheaders`, `test/suppressions`). Try to make the guarded thing go
+wrong and see whether the test still notices. A test that passes because its input is empty, its
+rule never ran or its tool was skipped (`toolgate` skips a missing golangci-lint unless
+`SSE_REQUIRE_TOOLS=1`) is a false pass, and a change that loosens one -- a wider allowlist, a
+narrower walk, a dropped negative control -- is a finding unless it says why.
 
 ## 2. Load the domain skill
 
@@ -256,7 +271,8 @@ intent was. If one exists, is the diff removing exactly what that line retires a
 ### (c) A new suppression has to show its work
 
 Any new `//nolint:`, `# shellcheck disable=` or `# hadolint ignore=` is a standing decision to
-let a linter stay silent, and nothing in this repo ratchets their number. So demand the attempt:
+let a linter stay silent. `scripts/check-suppressions.sh` makes the count visible -- the commit
+has to change `.suppressions-baseline` -- but it cannot judge the reason. So demand the attempt:
 for a complexity or length rule, was the obvious extraction tried and what broke? For
 `wrapcheck`, why is wrapping wrong here? For `varnamelen`, why does the name have to be short?
 A suppression whose reason comment restates the rule instead of explaining why the fix does not
@@ -296,6 +312,7 @@ caused as a confirmed finding with the output attached:
 | any `**/*.go` | `make go-build`, `make go-test` (race detector on), then `make check` |
 | `internal/collector/**`, `internal/testenv/**`, `cmd/**`, `test/integration/**` | also `make go-vet-integration` and `make go-test-integration` (a DinD Swarm; needs Docker with privileged containers) |
 | `go.mod` / `go.sum` | `make go-tidy` and `make audit-deps` (govulncheck; network required) |
+| `test/**`, `scripts/check-*.sh`, `.golangci.yaml`, `.pre-commit-config.yaml`, `.github/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...` (the CI `repo-gates` job), then `make check` |
 | `deployments/docker/Dockerfile` | hadolint via `make check`, plus `make docker-build` |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |

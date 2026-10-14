@@ -116,7 +116,7 @@ _, _ = io.WriteString(responseWriter, okBody)
 
 ---
 
-## 3. `nolint` directives
+## 3. `nolint` directives and the suppression ratchet
 
 `nolintlint` enforces three things:
 
@@ -136,6 +136,19 @@ func (handler *PlainTextHandler) Handle(_ context.Context, record slog.Record) e
 
 Multiple linters are comma-separated with no spaces. Name all that fire: `gocyclo` and
 `cyclop` measure the same thing, and `gocognit` often joins them.
+
+**Suppressions are ratcheted.** [`.suppressions-baseline`](../../../.suppressions-baseline) holds
+one count per rule (`nolint/<linter>`, plus the `shellcheck-disable` and `hadolint-ignore`
+families). `scripts/check-suppressions.sh` runs as the `check-suppressions` pre-commit hook and
+refuses a count above its baseline, a rule the baseline does not know, a count below its baseline
+(the file must describe the tree), and a staged diff that adds a suppression line without also
+changing the baseline. Every new, moved or removed suppression therefore needs
+`scripts/check-suppressions.sh --update`, committed with the change that earned it. Raising a count
+needs a reviewer's agreement; the baseline file is what they read.
+
+`exclusions.generated` is `strict`: only a file with the standard
+`// Code generated ... DO NOT EDIT.` header escapes the linters, so a comment that merely mentions
+generated code does not.
 
 ---
 
@@ -394,7 +407,9 @@ areas, each followed by examples from this codebase.
 - [ ] No `errors.New` or `%w`-less `fmt.Errorf` in a function body: wrap a package-level sentinel
 - [ ] `any` not `interface{}`; `new(expr)`, not a pointer-boxing helper
 - [ ] Numbers other than 0–3 extracted to named constants (non-test code)
-- [ ] Each `//nolint` names specific linters and explains why the fix does not apply
+- [ ] Each `//nolint` names specific linters and explains why the fix does not apply, and a new,
+      moved or removed one comes with `scripts/check-suppressions.sh --update` and the staged
+      `.suppressions-baseline`
 - [ ] No `FIXME` comments
 - [ ] Function statement count ≤ 50 (non-test code)
 - [ ] No shadowed variables
@@ -418,6 +433,8 @@ areas, each followed by examples from this codebase.
 1. Run `pre-commit run golangci-lint-fmt --files <changed .go files>` and
    `pre-commit run golangci-lint-full --files <changed .go files>` (or `--all-files`).
 2. Run `make go-vet` and `make go-test`; after touching integration-tagged code, also
-   `make go-vet-integration`.
-3. Fix each report and re-run from step 1 until all of them are clean.
+   `make go-vet-integration`. `make verify-go` runs the build, the race tests, both vets and
+   `make go-lint` (golangci-lint through the pre-commit hook, at its pinned version) in one go.
+3. Fix each report and re-run from step 1 until all of them are clean. If you added or removed a
+   suppression, run `scripts/check-suppressions.sh --update` and stage `.suppressions-baseline`.
 4. Check `git status`: the formatter hook rewrites files in place, so review and keep its changes.

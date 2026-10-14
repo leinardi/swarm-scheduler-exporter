@@ -372,7 +372,7 @@ func startSocketProxy(t *testing.T, imageRef string, allowlist map[string]string
 		Config: &container.Config{
 			Image:  imageRef,
 			Env:    env,
-			Labels: map[string]string{testenv.LabelEnvID: cluster.Spec.EnvID},
+			Labels: cluster.Labels(),
 		},
 		HostConfig: &container.HostConfig{
 			NetworkMode: "host",

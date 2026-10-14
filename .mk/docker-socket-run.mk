@@ -1,3 +1,27 @@
+#
+# MIT License
+#
+# Copyright (c) 2025 Roberto Leinardi
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+
 IMAGE_NAME ?= $(BIN_NAME)
 
 # Override DOCKER_SOCK to force a path:
@@ -31,6 +55,9 @@ SOCK_GID := $(shell \
 DOCKER_RUN_ARGS ?= -listen-addr 0.0.0.0:8888
 DOCKER_RUN_PORT ?= 8888
 
+# The exporter writes nothing to its filesystem and needs no Linux capability (it only reads the
+# Docker API through the socket its group may open), so the local run gets a read-only root, every
+# capability dropped and no privilege gain through setuid binaries.
 .PHONY: docker-run
 docker-run: ## Run the image locally binding the Docker socket and metrics port
 	@if [ ! -S "$(DOCKER_SOCK)" ]; then \
@@ -46,6 +73,9 @@ docker-run: ## Run the image locally binding the Docker socket and metrics port
 	docker run --rm \
 		--name "$(IMAGE_NAME)" \
 		--network host \
+		--read-only \
+		--cap-drop ALL \
+		--security-opt no-new-privileges \
 		--group-add "$(SOCK_GID)" \
 		-v "$(DOCKER_SOCK):/var/run/docker.sock:ro" \
 		"$(IMAGE_REPO):$(IMAGE_TAG)" \
