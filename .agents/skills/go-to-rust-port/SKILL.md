@@ -254,6 +254,10 @@ Rust tutorial. Seen in: awtrix-controller.
   `ReasonPhrase`, else `canonical_reason()`, else the bare code; and hyper-util's error
   `Display` is one level (`client error (Connect)`), so walk `source()`. (ureq 3.5.0
   `config.rs:1068`; hyper 1.12 `role.rs:1074`; tests with a recording proxy)
+- hyper 1.12 server: a response body of `BoxBody<Bytes, Box<dyn Error + Send + Sync>>` served
+  from a `tokio::spawn`ed `serve_connection` fails to build with "implementation of `From` is not
+  general enough" (a higher-ranked lifetime on the boxed error) → give the body a concrete error
+  type of its own. (failed build: a reverse proxy in the integration suite)
 - **Logging (slog):** tracing's `Visit` has no duration, time, list or group type (`valuable`
   needs `--cfg tracing_unstable`), `None` fields vanish and `INFO+1` has no `Level`, so a
   slog-compatible format cannot be a tracing formatter → for byte parity, an in-tree logger with

@@ -32,7 +32,8 @@
 //! Swarm. That is why the modules that reach a daemon sit behind the `integration` feature, as
 //! Go's sat behind its integration build tag, and why the exporter package depends on this crate
 //! in no table. The sweep rules, the redacting logger and the run filter need no daemon and always
-//! compile, so their tests run in a plain `cargo test`.
+//! compile, so their tests run in a plain `cargo test`; so does the reader of the exporter's
+//! `/metrics` text the suite scrapes.
 
 #[cfg(feature = "integration")]
 mod cluster;
@@ -45,6 +46,7 @@ pub mod envid;
 mod error;
 #[cfg(feature = "integration")]
 mod images;
+pub mod metrics_text;
 pub mod redact;
 pub mod run_filter;
 pub mod sweep_rules;

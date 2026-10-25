@@ -1355,10 +1355,15 @@ name = "testenv"
 version = "0.0.0"
 dependencies = [
  "bollard",
+ "bytes",
  "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "jiff",
  "regex",
  "rustix",
+ "serde_json",
  "swarm-scheduler-exporter",
  "tempfile",
  "tokio",

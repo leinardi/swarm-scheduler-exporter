@@ -36,11 +36,10 @@ jobs:
       - name: Run integration tests
         run: make go-test-integration
 
-  # The Rust harness (testenv) against the same kind of Swarm, beside the Go job. At this point the
-  # suite holds only the harness smoke test (bring-up, labels, the workload image on every node,
-  # pause and unpause, then a teardown that must leave nothing labelled behind); the Go suite's
-  # tests are ported onto it next. The make target builds the release binary first and fails if
-  # RUN selects no test.
+  # The Rust suite (testenv) against the same kind of Swarm and the Rust release binary, beside
+  # the Go job: the harness's own smoke test and the Go tests ported so far (cluster, exporter
+  # process, events, seed, snapshot and socket proxy); the rest follow. The make target builds the
+  # release binary first and fails if RUN selects no test.
   integration-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -59,5 +58,5 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'pull_request' }}
 
-      - name: Run the harness smoke test
-        run: make rust-test-integration RUN='^TestHarness_'
+      - name: Run the integration suite
+        run: make rust-test-integration

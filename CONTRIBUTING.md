@@ -31,9 +31,10 @@ make go-vet-integration                             # go vet, including the inte
 
 The harness is being ported to Rust (`testenv`, with the Docker SDK behind its `integration`
 feature). `make rust-test-integration` builds the release binary and runs the Rust suite against
-it, which so far holds only the harness's own smoke test. `RUN` takes go test's `-run` patterns
-(`'^TestHarness_'`), and a pattern that selects no test fails the run instead of passing it. The
-same `SSE_IT_*` variables apply.
+it, which so far holds the harness's own smoke test and part of the Go suite under the same
+names. `RUN` takes go test's `-run` patterns (`'^TestExporter_'`), and a pattern that selects no
+test fails the run instead of passing it. The same `SSE_IT_*` variables apply, and `UPDATE=1`
+rewrites the snapshot golden file the two suites share.
 
 - `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails, and prints
   the manager's address (`DOCKER_HOST=tcp://127.0.0.1:<port> docker node ls`) and the command that

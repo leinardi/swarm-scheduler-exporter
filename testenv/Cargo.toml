@@ -42,7 +42,9 @@ bollard = { version = "=0.21.1", default-features = false, features = [
     "pipe",
     "ssl",
 ], optional = true }
-futures-util = { version = "0.3.34", default-features = false, optional = true }
+futures-util = { version = "0.3.34", default-features = false, features = [
+    "std",
+], optional = true }
 # kill(pid, 0) for the sweep's liveness check, without unsafe code.
 rustix = { version = "1.1.5", default-features = false, features = [
     "std",
@@ -59,6 +61,31 @@ tokio = { version = "1.54.1", default-features = false, features = [
 # CancellationToken, Go's context: the suite deadline cancels every Docker call. io for the
 # archive's byte stream.
 tokio-util = { version = "0.7.20", default-features = false, features = ["io"], optional = true }
+
+# The suite's own needs, beside the library's: the exporter child processes, the signal that
+# cancels the suite, and the HTTP client and fault proxy (hyper, as the exporter uses it).
+[dev-dependencies]
+tokio = { version = "1.54.1", default-features = false, features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "signal",
+    "sync",
+    "time",
+] }
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1.21", default-features = false, features = [
+    "tokio",
+    "http1",
+    "client-legacy",
+] }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+# The daemon's JSON error bodies the socket-proxy test reads.
+serde_json = "1.0.154"
 
 [[test]]
 name = "integration"
