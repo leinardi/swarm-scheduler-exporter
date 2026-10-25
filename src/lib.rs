@@ -24,3 +24,5 @@
 
 //! swarm-scheduler-exporter: a Prometheus exporter for the Docker Swarm scheduler. The Go
 //! implementation still ships; the Rust modules land here as the port proceeds.
+
+pub mod labels;

@@ -63,6 +63,15 @@ Rust tutorial. Seen in: awtrix-controller.
   the UTC date flips in the local evening, so a New York 20:00 in June, before sunset, reads as
   night. (spike; golden test against go-solar v1.0.1)
 
+### Strings
+
+- A Go `string` holds arbitrary bytes, and `utf8.DecodeRune` (and `range`) reads every byte of an
+  invalid sequence as its own rune, a truncated `e2 82` included; `&str` cannot hold such bytes,
+  and `String::from_utf8_lossy` replaces a whole truncated sequence with **one** U+FFFD → port
+  per-rune byte logic (sanitizers, counters) over `&[u8]` with a decoder that takes a complete
+  valid sequence whole and steps one byte otherwise (`a\xe2\x82b` → 4 runes in Go, 3 chars lossy).
+  (throwaway Go program, go1.26)
+
 ### JSON and YAML
 
 - `encoding/json` escapes `<`, `>` and `&` as `\u003c`, `\u003e`, `\u0026`; serde_json writes
