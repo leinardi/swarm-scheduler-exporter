@@ -601,3 +601,41 @@ fn write_float_matches_go_on_the_s2_corpus() {
         assert_eq!(got, want, "{bits:016x}");
     }
 }
+
+/// client_golang's `With(prometheus.Labels)` and `Delete(labels)`: by label name, refusing a map
+/// that does not name exactly the family's labels.
+#[test]
+fn gauge_vec_by_label_map() {
+    let vec = GaugeVec::new(Desc::new("by_name", "help", Kind::Gauge, &["b", "a"]).unwrap());
+    let labels = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|&(key, value)| (key.to_owned(), value.to_owned()))
+            .collect()
+    };
+    vec.set_with(&labels(&[("a", "1"), ("b", "2")]), 7.0)
+        .unwrap();
+    assert_eq!(
+        vec.get(&["2", "1"]),
+        Some(7.0),
+        "values in label-name order"
+    );
+    assert_eq!(vec.get_with(&labels(&[("b", "2"), ("a", "1")])), Some(7.0));
+    let missing = vec
+        .set_with(&labels(&[("a", "1"), ("c", "2")]), 1.0)
+        .unwrap_err();
+    assert_eq!(
+        missing.to_string(),
+        "label name \"b\" missing in label map for by_name"
+    );
+    let extra = vec
+        .set_with(&labels(&[("a", "1"), ("b", "2"), ("c", "3")]), 1.0)
+        .unwrap_err();
+    assert_eq!(
+        extra.to_string(),
+        "inconsistent label cardinality for by_name: expected 2 label values but got 3"
+    );
+    assert!(!vec.delete_with(&labels(&[("a", "1")])));
+    assert!(vec.delete_with(&labels(&[("a", "1"), ("b", "2")])));
+    assert_eq!(vec.get_with(&labels(&[("a", "1"), ("b", "2")])), None);
+}

@@ -72,6 +72,13 @@ Rust tutorial. Seen in: awtrix-controller.
   per-rune byte logic (sanitizers, counters) over `&[u8]` with a decoder that takes a complete
   valid sequence whole and steps one byte otherwise (`a\xe2\x82b` → 4 runes in Go, 3 chars lossy).
   (throwaway Go program, go1.26)
+- `strings.EqualFold` compares whole simple-fold orbits (`k`, `K` and U+212A KELVIN SIGN are
+  equal, so are `s` and `ſ`) and `strings.ToLower` maps per code point (`ΑΣ` → `ασ`), both on
+  Go's Unicode 15; Rust's `eq_ignore_ascii_case` is ASCII only, and `to_lowercase` uses full
+  mappings, the final-sigma rule and Unicode 17 (U+1C89 lowercases in Rust only) → generate Go's
+  `SimpleFold` and `ToLower` tables with a Go program (550 lines as run-length groups) and port
+  `EqualFold`'s loop. A Go `key[:n]` may cut a rune; Rust's `&key[..n]` panics there → check
+  `is_char_boundary` first. (go1.26.10: 2,500 `EqualFold` pairs and 50 `ToLower` identical)
 
 ### Numbers and text output
 

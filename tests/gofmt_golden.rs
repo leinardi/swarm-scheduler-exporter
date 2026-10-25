@@ -29,14 +29,20 @@
 //! - `logger/fuzz_numbers.txt` (S4): bits, `FormatFloat 'g'`, `json.Marshal` (or `ERR`), the bits
 //!   shifted into an `int64` and its `Duration.String`, for the first 2,000 of S4's 20,000 random values;
 //! - `time/go-layouts.tsv` (S7): unix seconds, nanoseconds, the zone offset, `RFC3339Nano` and
-//!   `2006-01-02T15:04:05.000Z07:00`, for 70 instant and zone pairs.
+//!   `2006-01-02T15:04:05.000Z07:00`, for 70 instant and zone pairs;
+//! - `strings/go-strings.tsv` (go1.26.10): every pair of 50 words `strings.EqualFold` calls
+//!   equal, their `strings.ToLower`, and `strings.TrimSpace` of 10 texts, strings as the hex of
+//!   their bytes (`-` for empty);
+//! - `net/go-ip.tsv` (go1.26.10): `net.ParseIP` (16 bytes, or `nil`) of 36 texts, `net.ParseCIDR`
+//!   (network/mask, or `err`) of 20, and the `node.ip` constraint's `==` and `!=` for every text
+//!   against 6 node addresses.
 
 use std::fs;
 use std::path::PathBuf;
 
 use jiff::Timestamp;
 use jiff::tz::Offset;
-use swarm_scheduler_exporter::gofmt_compat::{duration, float, sort, time_layout};
+use swarm_scheduler_exporter::gofmt_compat::{duration, float, net_ip, sort, strings, time_layout};
 
 fn testdata(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -188,4 +194,102 @@ fn sort_matches_go_on_237_inputs() {
         differs_from_insertion >= 200,
         "only {differs_from_insertion} inputs tell pdqsort from insertion sort"
     );
+}
+
+/// A string printed as the hex of its bytes, `-` for the empty one.
+fn unhex(hex: &str) -> String {
+    if hex == "-" {
+        return String::new();
+    }
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&hex[index..index + 2], 16)
+                .unwrap_or_else(|error| panic!("{hex}: {error}"))
+        })
+        .collect();
+    String::from_utf8(bytes).unwrap_or_else(|error| panic!("{hex}: {error}"))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+#[test]
+fn strings_match_go_on_its_unicode_15_tables() {
+    let data = testdata("strings/go-strings.tsv");
+    let lines: Vec<Vec<&str>> = data
+        .lines()
+        .map(|line| line.split('\t').collect())
+        .collect();
+    let words: Vec<String> = lines
+        .iter()
+        .filter(|fields| fields[0] == "lower")
+        .map(|fields| unhex(fields[1]))
+        .collect();
+    let folds: std::collections::BTreeSet<(String, String)> = lines
+        .iter()
+        .filter(|fields| fields[0] == "fold")
+        .map(|fields| (unhex(fields[1]), unhex(fields[2])))
+        .collect();
+    let mut mismatches = Vec::new();
+    let mut checked = 0;
+    for left in &words {
+        for right in &words {
+            let want = folds.contains(&(left.clone(), right.clone()));
+            if strings::equal_fold(left, right) != want {
+                mismatches.push(format!("EqualFold({left:?}, {right:?}): Go {want}"));
+            }
+            checked += 1;
+        }
+    }
+    for fields in &lines {
+        let (input, want) = (unhex(fields[1]), unhex(fields[2]));
+        let got = match fields[0] {
+            "lower" => strings::to_lower(&input),
+            "trim" => strings::trim_space(&input).to_owned(),
+            _ => continue,
+        };
+        if got != want {
+            mismatches.push(format!(
+                "{}({input:?}): Go {want:?} Rust {got:?}",
+                fields[0]
+            ));
+        }
+        checked += 1;
+    }
+    expect_all("strings/go-strings.tsv", &mismatches, checked);
+    assert_eq!((words.len(), folds.len()), (50, 124));
+}
+
+#[test]
+fn net_ip_matches_go() {
+    let data = testdata("net/go-ip.tsv");
+    let mut mismatches = Vec::new();
+    let mut checked = 0;
+    for line in data.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let input = unhex(fields[1]);
+        let got = match fields[0] {
+            "ip" => net_ip::parse_ip(&input).map_or_else(|| "nil".to_owned(), |ip| hex(&ip)),
+            "cidr" => net_ip::parse_cidr(&input).map_or_else(
+                || "err".to_owned(),
+                |network| format!("{}/{}", hex(network.ip()), hex(network.mask())),
+            ),
+            _ => continue,
+        };
+        if got != fields[2] {
+            mismatches.push(format!(
+                "{} {input:?}: Go {} Rust {got}",
+                fields[0], fields[2]
+            ));
+        }
+        checked += 1;
+    }
+    expect_all("net/go-ip.tsv", &mismatches, checked);
+    assert_eq!(checked, 56);
 }

@@ -35,15 +35,21 @@
 //! - [`parse_float`] ports `strconv.ParseFloat(s, 32)`, which reads `Accept` q-values;
 //! - [`sort`] ports `sort.Sort`, whose order matters when the comparison is not a total order;
 //! - [`errno`] gives an `io::Error` Go's `syscall.Errno` text;
-//! - [`http_status`] ports `net/http.StatusText`.
+//! - [`http_status`] ports `net/http.StatusText`;
+//! - [`strings`] ports `strings.EqualFold`, `strings.ToLower` and `strings.TrimSpace`, with Go's
+//!   Unicode 15 case tables;
+//! - [`net_ip`] ports `net.ParseIP`, `net.ParseCIDR`, `IP.Equal` and `IPNet.Contains`.
 
 pub mod duration;
 pub mod errno;
 pub mod float;
 pub mod http_status;
 pub mod local_zone;
+pub mod net_ip;
 pub mod parse_float;
 pub mod quote;
 pub mod sort;
+pub mod strings;
 pub mod time_layout;
+mod unicode_case;
 mod unicode_tables;

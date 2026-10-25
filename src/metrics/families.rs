@@ -44,10 +44,19 @@ pub struct LabelsMismatch {
     family: String,
     want: usize,
     got: usize,
+    // A label name the label map lacks (client_golang's `With(prometheus.Labels)`).
+    missing: Option<String>,
 }
 
 impl fmt::Display for LabelsMismatch {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(missing) = &self.missing {
+            return write!(
+                formatter,
+                "label name {missing:?} missing in label map for {}",
+                self.family
+            );
+        }
         write!(
             formatter,
             "inconsistent label cardinality for {}: expected {} label values but got {}",
@@ -91,9 +100,36 @@ fn owned_values(desc: &Desc, label_values: &[&str]) -> Result<Vec<String>, Label
             family: desc.name().to_owned(),
             want: desc.label_names().len(),
             got: label_values.len(),
+            missing: None,
         });
     }
     Ok(label_values.iter().map(|&value| value.to_owned()).collect())
+}
+
+/// client_golang's `With(prometheus.Labels)`: the values of `labels` in label-name order, which
+/// must name exactly the family's labels.
+fn values_in_order<'labels>(
+    desc: &Desc,
+    labels: &'labels BTreeMap<String, String>,
+) -> Result<Vec<&'labels str>, LabelsMismatch> {
+    let mismatch = |missing| LabelsMismatch {
+        family: desc.name().to_owned(),
+        want: desc.label_names().len(),
+        got: labels.len(),
+        missing,
+    };
+    if labels.len() != desc.label_names().len() {
+        return Err(mismatch(None));
+    }
+    desc.label_names()
+        .iter()
+        .map(|name| {
+            labels
+                .get(name)
+                .map(String::as_str)
+                .ok_or_else(|| mismatch(Some(name.clone())))
+        })
+        .collect()
 }
 
 /// One scalar series with no labels.
@@ -204,6 +240,33 @@ impl GaugeVec {
     pub fn get(&self, label_values: &[&str]) -> Option<f64> {
         let key: Vec<String> = label_values.iter().map(|&value| value.to_owned()).collect();
         lock(&self.children).get(&key).copied()
+    }
+
+    /// client_golang's `With(labels).Set(value)`: [`GaugeVec::set`] by label name.
+    ///
+    /// # Errors
+    ///
+    /// [`LabelsMismatch`] when `labels` does not name exactly the family's labels.
+    pub fn set_with(
+        &self,
+        labels: &BTreeMap<String, String>,
+        value: f64,
+    ) -> Result<(), LabelsMismatch> {
+        self.set(&values_in_order(&self.desc, labels)?, value)
+    }
+
+    /// client_golang's `Delete(labels)`: whether the series existed; false as well when `labels`
+    /// does not name exactly the family's labels.
+    pub fn delete_with(&self, labels: &BTreeMap<String, String>) -> bool {
+        values_in_order(&self.desc, labels).is_ok_and(|values| self.delete(&values))
+    }
+
+    /// The value of the series `labels` name, if it exists.
+    #[must_use]
+    pub fn get_with(&self, labels: &BTreeMap<String, String>) -> Option<f64> {
+        values_in_order(&self.desc, labels)
+            .ok()
+            .and_then(|values| self.get(&values))
     }
 }
 
