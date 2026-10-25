@@ -22,9 +22,9 @@
  * SOFTWARE.
  */
 
-// Package toolchain_test pins the repository's tooling: the shared version pins, Docker staying out
-// of untagged tests, the always-run hooks running once, and the absence of flags that make a gate
-// pass on nothing.
+// Package toolchain_test pins the repository's Go tooling: the shared version pins and Docker
+// staying out of untagged tests. The always-run hooks and the vacuous-flag scan are meta crate
+// tests (meta/tests/toolchain.rs).
 package toolchain_test
 
 import (
@@ -34,8 +34,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"go.yaml.in/yaml/v3"
 
 	"github.com/leinardi/swarm-scheduler-exporter/test/internal/toolgate"
 )
@@ -50,37 +48,6 @@ func readRepoFile(t *testing.T, rel string) string {
 	}
 
 	return string(data)
-}
-
-// preCommitHook is one hook's mapping as written; its keys are pre-commit's own snake_case names.
-type preCommitHook map[string]any
-
-// preCommitHooks parses .pre-commit-config.yaml and returns its hooks by id; an id with aliases
-// (the actionlint, shellcheck and yamllint variants) appears more than once.
-func preCommitHooks(t *testing.T) map[string][]preCommitHook {
-	t.Helper()
-
-	var config struct {
-		Repos []struct {
-			Hooks []preCommitHook `yaml:"hooks"`
-		} `yaml:"repos"`
-	}
-
-	err := yaml.Unmarshal([]byte(readRepoFile(t, ".pre-commit-config.yaml")), &config)
-	if err != nil {
-		t.Fatalf("parse .pre-commit-config.yaml: %v", err)
-	}
-
-	hooks := map[string][]preCommitHook{}
-
-	for _, repo := range config.Repos {
-		for _, hook := range repo.Hooks {
-			id, _ := hook["id"].(string)
-			hooks[id] = append(hooks[id], hook)
-		}
-	}
-
-	return hooks
 }
 
 // githubYAML lists every YAML file under .github, relative to the repository root.

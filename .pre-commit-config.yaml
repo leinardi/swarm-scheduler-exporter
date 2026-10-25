@@ -79,12 +79,12 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      # Every relative link and fragment in the tracked Markdown resolves (test/docs). -count=1
-      # because the file list comes from git ls-files, which the test cache cannot see; always_run
-      # because deleting a linked page passes no file to the hook at all.
+      # Every relative link and fragment in the tracked Markdown resolves (meta/tests/docs.rs).
+      # always_run because deleting a linked page passes no file to the hook at all; cargo test
+      # caches no result, so the file list git ls-files gives is read on every run.
       - id: docs-links
         name: docs links
-        entry: go test -count=1 ./test/docs/
+        entry: cargo test --locked -p meta --test docs
         language: system
         pass_filenames: false
         always_run: true

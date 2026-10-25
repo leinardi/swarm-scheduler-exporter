@@ -12,7 +12,12 @@ all-features = true
 version = 2
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+    # Unmaintained, the parser under serde_yaml_ng, which only the meta crate's tests use, to read
+    # this repository's own .pre-commit-config.yaml; nothing it parses reaches the exporter. No
+    # vulnerability is reported against it; serde-saphyr is the safe-Rust way out if that changes.
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, transitive via serde_yaml_ng in the meta crate's tests only; no known vulnerability" },
+]
 
 [licenses]
 version = 2

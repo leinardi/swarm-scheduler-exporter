@@ -12,5 +12,12 @@ publish = false
 [lints]
 workspace = true
 
+# The Dockerfile reader and the Markdown link checker.
+[dependencies]
+regex = "1.13.1"
+
+# The pre-commit configuration (YAML), the scratch repositories, and the workspace manifests.
 [dev-dependencies]
+serde_yaml_ng = "0.10"
+tempfile = "3.27.0"
 toml = "1.1.8"

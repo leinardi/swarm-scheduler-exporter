@@ -66,14 +66,16 @@ read the callers, implementations, tests and docs of what changed — found with
 search, not assumed from the diff: a signature or behavior change is only safe if every call
 site agrees.
 
-A meta-test under `test/` guards a claim nothing else checks: the version pins and the
-always-run hooks (`test/toolchain`), the Dockerfile's posture (`test/dockerfiles`), the Docker SDK
-boundary (`test/boundary`), the Markdown links (`test/docs`), the licence headers and the
-suppression ratchet (`test/licenseheaders`, `test/suppressions`). Try to make the guarded thing go
-wrong and see whether the test still notices. A test that passes because its input is empty, its
-rule never ran or its tool was skipped (`toolgate` skips a missing golangci-lint unless
-`SSE_REQUIRE_TOOLS=1`) is a false pass, and a change that loosens one -- a wider allowlist, a
-narrower walk, a dropped negative control -- is a finding unless it says why.
+A meta-test under `test/` or `meta/tests/` guards a claim nothing else checks: the Go version
+pins (`test/toolchain`), the always-run hooks and vacuous flags (`meta/tests/toolchain.rs`), the
+Dockerfile's posture (`meta/tests/dockerfiles.rs`, its Go build stage in `test/dockerfiles`), the
+Docker SDK boundary (`test/boundary`), the Markdown links (`meta/tests/docs.rs`), the licence
+headers and the suppression ratchet (`meta/tests/license_headers.rs`, `meta/tests/suppressions.rs`).
+Try to make the guarded thing go wrong and see whether the test still notices. A test that passes
+because its input is empty, its rule never ran or its tool was skipped (`toolgate` skips a missing
+tool unless `SSE_REQUIRE_TOOLS=1`, or `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` in the meta crate)
+is a false pass, and a change that loosens one -- a wider allowlist, a narrower walk, a dropped
+negative control -- is a finding unless it says why.
 
 ## 2. Load the domain skill
 

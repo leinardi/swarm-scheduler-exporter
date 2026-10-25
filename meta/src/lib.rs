@@ -24,8 +24,10 @@
 
 //! Repository meta-tests: checks on the repository itself rather than on the exporter. The tests
 //! live under `tests/`; this library holds what they share: the repository's files, the gated
-//! external tools and an isolated git environment.
+//! external tools, an isolated git environment, and the Dockerfile and Markdown readers.
 
+pub mod dockerfile;
 pub mod gitenv;
+pub mod links;
 pub mod repo;
 pub mod toolgate;

@@ -56,8 +56,8 @@
 # repository wrote is not a decision this ratchet can hold anyone to, and refreshing a file from
 # make-common must not move the baseline.
 #
-# scripts/check-suppressions.sh is exercised by test/suppressions, which drives it against scratch
-# repositories rather than this one.
+# scripts/check-suppressions.sh is exercised by meta/tests/suppressions.rs, which drives it against
+# scratch repositories rather than this one.
 
 set -euo pipefail
 

@@ -26,13 +26,16 @@ make docker-build
 make docker-run           # runs the image locally (read-only, no capabilities), binding the Docker socket and the metrics port
 ```
 
-The meta-tests under `test/` (outside `test/integration`) check the repository rather than the
-exporter, and need no Docker: the version pins, the always-run hooks, the integration tag and the
-absence of `|| true`-style flags (`test/toolchain`), the Dockerfile (`test/dockerfiles`), the Docker
-SDK boundary rule (`test/boundary`), the Markdown links (`test/docs`), and the two scripts below
-(`test/licenseheaders`, `test/suppressions`). `go test ./...` runs them;
+The meta-tests check the repository rather than the exporter, and need no Docker. The Go ones
+under `test/` (outside `test/integration`) cover the Go version pins and the integration tag
+(`test/toolchain`), the Go build stage and version stamps (`test/dockerfiles`) and the Docker SDK
+boundary rule (`test/boundary`); `go test ./...` runs them, and
 `SSE_REQUIRE_TOOLS=1 go test ./test/...` turns a missing golangci-lint into a failure instead of a
-skip, as CI's `repo-gates` job does.
+skip, as CI's `repo-gates` job does. The meta crate's (`meta/tests/`, `cargo test -p meta`) cover
+the always-run hooks and the absence of `|| true`-style flags (`toolchain.rs`), the rest of the
+Dockerfile (`dockerfiles.rs`), the Markdown links (`docs.rs`) and the two scripts below
+(`license_headers.rs`, `suppressions.rs`); `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` is their
+missing-tool gate.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -134,15 +137,15 @@ Run before considering an edit done. `make check` applies to every row.
 | --- | --- |
 | `**/*.go` | `make verify-go`; after integration-tagged code (`internal/testenv`, `test/integration`, or anything they exercise), `make go-test-integration` (Docker) |
 | `go.mod`, `go.sum` | `make go-tidy`, `make audit-deps` (network) |
-| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `go test ./test/dockerfiles/ ./test/toolchain/`, `make docker-build` |
+| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `go test ./test/dockerfiles/ ./test/toolchain/`, `cargo test -p meta --test dockerfiles`, `make docker-build` |
 | `.golangci.yaml` | `go test ./test/boundary/`, `make go-lint` |
-| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `go test ./test/toolchain/` |
+| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `go test ./test/toolchain/`, `cargo test -p meta --test toolchain --test dockerfiles` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
-| `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `go test ./test/toolchain/`, `make help` |
-| `scripts/check-license-headers.sh` | `go test ./test/licenseheaders/` |
-| `scripts/check-suppressions.sh`, `.suppressions-baseline` | `go test ./test/suppressions/` |
-| `test/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...` |
-| `**/*.md` | `go test -count=1 ./test/docs/`; prose wraps at 100 columns |
+| `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `go test ./test/toolchain/`, `cargo test -p meta --test toolchain`, `make help` |
+| `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
+| `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
+| `test/**`, `meta/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...`, `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` |
+| `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
 
 ## Project skills
 
