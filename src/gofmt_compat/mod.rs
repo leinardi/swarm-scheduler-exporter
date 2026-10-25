@@ -33,10 +33,14 @@
 //! - [`time_layout`] ports the `time.RFC3339Nano` and `2006-01-02T15:04:05.000Z07:00` layouts;
 //! - [`local_zone`] ports how Go's `time.Local` is resolved from `TZ` and the zoneinfo files;
 //! - [`parse_float`] ports `strconv.ParseFloat(s, 32)`, which reads `Accept` q-values;
-//! - [`sort`] ports `sort.Sort`, whose order matters when the comparison is not a total order.
+//! - [`sort`] ports `sort.Sort`, whose order matters when the comparison is not a total order;
+//! - [`errno`] gives an `io::Error` Go's `syscall.Errno` text;
+//! - [`http_status`] ports `net/http.StatusText`.
 
 pub mod duration;
+pub mod errno;
 pub mod float;
+pub mod http_status;
 pub mod local_zone;
 pub mod parse_float;
 pub mod quote;

@@ -27,6 +27,7 @@
 
 pub mod cli;
 pub mod clock;
+pub mod docker;
 pub mod gofmt_compat;
 pub mod labels;
 pub mod logger;

@@ -27,6 +27,13 @@ allow = [
     # unicode-ident, (MIT OR Apache-2.0) AND Unicode-3.0: through proc-macro2 under clap_derive
     # in the exporter's own graph, and under meta's toml dev-dependency.
     "Unicode-3.0",
+    # ring (Apache-2.0 AND ISC), under rustls and tokio-rustls for the Docker TLS (and rcgen in
+    # the tests).
+    "Apache-2.0",
+    # ring, rustls-webpki and untrusted.
+    "ISC",
+    # subtle, under rustls.
+    "BSD-3-Clause",
 ]
 confidence-threshold = 0.9
 

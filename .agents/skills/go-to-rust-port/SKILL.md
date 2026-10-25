@@ -190,6 +190,24 @@ Rust tutorial. Seen in: awtrix-controller.
   features = ["rustls"]` only drops gzip; and ureq 3 turns a 4xx/5xx into `Err(StatusCode)`
   unless `http_status_as_error(false)`, which Go's `resp.StatusCode` check needs. (ureq 3.5
   source)
+- **Docker (moby client):** bollard 0.21 fails parity: `Url::join` with an absolute path drops
+  the `/v1.xx` prefix, so negotiation never reaches the wire; it negotiates through
+  `GET /version`, which a socket proxy allowing only the read endpoints answers 403; it sends no
+  `Accept` or User-Agent, its timeout covers only the headers, and its closed enums fail a whole
+  list on one unknown state → an in-tree client on hyper 1 `client::conn::http1` (pool and
+  retries by hand, `title_case_headers(true)`) porting moby's `HEAD /_ping` then `GET /_ping`,
+  its discarded negotiation error (`_ = cli.checkVersion`: the request still goes out at the max
+  version and the next one pings again), and go-connections' transport: a 10s dial, keep-alive
+  15s, two idle connections for 30s, a retry on a reused connection, and on TCP (not unix)
+  `Accept-Encoding: gzip` with transparent decompression. go-connections also sets
+  `Proxy: http.ProxyFromEnvironment` for TCP hosts; decide whether to keep it. (S1: 8 of 8 ping
+  cases against a fake Engine, moby v0.6.0)
+- rustls PEM loading needs no rustls-pemfile: `rustls_pki_types::pem::PemObject`
+  (`CertificateDer::pem_slice_iter`, `PrivateKeyDer::from_pem_slice`); it skips section kinds it
+  does not know (an `ENCRYPTED PRIVATE KEY` is invisible to it), so mirror go-connections' checks
+  (a `DEK-Info` header is "encrypted", no certificate in `ca.pem` is an error) on the text. Go's
+  `tlsconfig.Client` trusts the system pool **plus** `ca.pem` → `rustls-native-certs` plus the
+  file into one `RootCertStore`. (rustls-pki-types 1.15)
 - **Logging (slog):** tracing's `Visit` has no duration, time, list or group type (`valuable`
   needs `--cfg tracing_unstable`), `None` fields vanish and `INFO+1` has no `Level`, so a
   slog-compatible format cannot be a tracing formatter → for byte parity, an in-tree logger with
@@ -281,4 +299,5 @@ Rust tutorial. Seen in: awtrix-controller.
 
 Verified against (2026-10): Rust 1.98.0, tokio 1.54, jiff 0.2.38, serde_json 1.0, serde_yaml_ng
 0.10.0, ureq 3.5.0, sunrise 3.0.0, tracing-subscriber 0.3.23, clap 4.6.7, flate2 1.1.10,
-cargo-deny 0.20.2, cargo-zigbuild 0.24.0, zig 0.17.0; Go baselines from go1.25.
+hyper 1.12.0, rustls 0.23.46, cargo-deny 0.20.2, cargo-zigbuild 0.24.0, zig 0.17.0; Go
+baselines from go1.25.
