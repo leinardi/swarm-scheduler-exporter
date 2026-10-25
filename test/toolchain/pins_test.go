@@ -103,21 +103,22 @@ func TestGolangciLintIsOneVersion(t *testing.T) {
 	}, steps[golangciLintA])
 }
 
-// TestHadolintIsOneVersion: the hadolint hook runs the system binary, so the version CI installs
-// is the one that lints; it must follow the hook's rev, which Dependabot moves.
-func TestHadolintIsOneVersion(t *testing.T) {
+// TestShellCheckIsOneVersion: droast's ShellCheck bridge runs the shellcheck on PATH, which CI
+// installs with setup-shellcheck; it must be the release the shellcheck-py hook wraps (its rev adds
+// a fourth component for the wrapper), which Dependabot moves.
+func TestShellCheckIsOneVersion(t *testing.T) {
 	t.Parallel()
 
-	expectOneValue(t, "hadolint", []pinSource{
+	expectOneValue(t, "ShellCheck", []pinSource{
 		{
 			file: ".pre-commit-config.yaml",
 			pattern: regexp.MustCompile(
-				`repo: https://github\.com/hadolint/hadolint\s+rev:\s*(v[\d.]+)`,
+				`repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)`,
 			),
 		},
 		{
-			file:    ".github/actions/setup-hadolint/action.yaml",
-			pattern: regexp.MustCompile(`HADOLINT_VERSION:\s*["']?(v[\d.]+)`),
+			file:    ".github/actions/setup-shellcheck/action.yaml",
+			pattern: regexp.MustCompile(`SHELLCHECK_VERSION:\s*["']?(v[\d.]+)`),
 		},
 	}, nil)
 }

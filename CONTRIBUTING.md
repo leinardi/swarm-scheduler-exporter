@@ -6,6 +6,11 @@ Install [`pre-commit`](https://pre-commit.com/), then install the hooks once wit
 `make pre-commit-install`. It installs both the `pre-commit` and the `commit-msg` hooks, so commit
 messages are checked when you commit, not when the release runs.
 
+The Dockerfile hook, [droast](https://github.com/immanuwell/dockerfile-roast), is built by
+pre-commit from source at its pinned rev, so it needs a Rust toolchain (`cargo`). Its required
+ShellCheck bridge runs the `shellcheck` on `PATH`: install ShellCheck at the release
+`.github/actions/setup-shellcheck` pins (CI installs it with that action).
+
 `make check` runs the full pre-commit suite on every file, and `make check-stage` runs it on the
 staged files only.
 

@@ -70,7 +70,7 @@ ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
 
-# The seven OCI labels .hadolint.yaml requires (label-schema, DL3049 as an error).
+# The seven OCI labels droast.toml requires ([required-labels], strict-labels).
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.description="Prometheus exporter for Docker Swarm services/tasks" \
 	org.opencontainers.image.source="https://github.com/leinardi/swarm-scheduler-exporter" \
