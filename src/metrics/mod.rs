@@ -32,10 +32,13 @@
 //!
 //! The families: [`Gauge`], [`GaugeVec`], [`Counter`], [`CounterVec`], [`Histogram`],
 //! [`GaugeFunc`] (evaluated at scrape) and the snapshot families ([`SnapshotCollector`],
-//! [`SnapshotFamily`]), which are rebuilt whole and swapped in at once.
+//! [`SnapshotFamily`]), which are rebuilt whole and swapped in at once. [`process`] and
+//! [`promhttp`] add client_golang's runtime families (Q1).
 
 pub mod exposition;
 mod families;
+pub mod process;
+pub mod promhttp;
 mod snapshot;
 pub mod text;
 
@@ -149,6 +152,13 @@ impl Desc {
     pub fn label_names(&self) -> &[String] {
         &self.label_names
     }
+}
+
+/// The descriptor of a family whose name, help and labels are constants of the exporter: a
+/// refusal is a typo the tests catch at once, so it panics rather than return an error.
+pub(crate) fn constant_desc(name: &str, help: &str, kind: Kind, label_names: &[&str]) -> Arc<Desc> {
+    Desc::new(name, help, kind, label_names)
+        .unwrap_or_else(|error| panic!("constant descriptor refused: {error}"))
 }
 
 /// A legacy-valid label name: `[a-zA-Z_][a-zA-Z0-9_]*`.

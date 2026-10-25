@@ -43,6 +43,7 @@ use std::io::Write as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
+use crate::gofmt_compat::float;
 use crate::gofmt_compat::parse_float::{ParseFloatError, parse_float32};
 use crate::gofmt_compat::sort;
 
@@ -328,18 +329,9 @@ fn expect_quality(text: &str) -> (f64, &str) {
         denominator = denominator.wrapping_mul(10);
     }
     (
-        quality + int_to_f64(numerator) / int_to_f64(denominator),
+        quality + float::from_int(numerator) / float::from_int(denominator),
         &rest[end..],
     )
-}
-
-/// Go's `float64(int)`.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "Go converts the int the same way, rounding above 2^53"
-)]
-fn int_to_f64(value: i64) -> f64 {
-    value as f64
 }
 
 /// gddo's `header.ParseAccept` over every value of the header.

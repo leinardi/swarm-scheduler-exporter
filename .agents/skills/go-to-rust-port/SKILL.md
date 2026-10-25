@@ -222,6 +222,13 @@ Rust tutorial. Seen in: awtrix-controller.
   identity), turns a best q of 0 into identity, and takes q as `0` or `1` plus decimals (`q=2`
   drops the element, `q=1.5` counts). flate2 (`rust_backend`) writes Go's gzip header bytes but
   other deflate bytes → compare bodies decompressed. (95 Go answers, common v0.71.0)
+- client_golang's process collector (procfs v0.21.1) counts CPU and start time in a hard-coded
+  100 ticks per second, not `CLK_TCK`; takes `open_fds` from the `st_size` of `/proc/self/fd`
+  (Linux 6.2+); reads its network counters from `/proc/self/net/netstat` `IpExt`, which are
+  **namespace-wide**, not per process; and without `ReportErrors` silently drops the families a
+  failed file feeds. The procfs crate 0.18 has no netstat parser and uses the system tick rate →
+  an in-tree `/proc` reader with std only (the page size from `AT_PAGESZ` in `/proc/self/auxv`,
+  where Go's runtime gets it). (S6: 9 of 9 values identical on a stopped process)
 - **YAML (yaml.v3):** serde_yaml_ng, see §2.
 
 ## 4. Concurrency and shutdown

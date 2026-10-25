@@ -38,6 +38,16 @@
 
 use std::fmt::Write as _;
 
+/// Go's `float64(x)` of an integer of any width: the nearest `f64`, ties to even, which is what
+/// Rust's `as` does for every integer type.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "this is Go's conversion: above 2^53 the rounding is the value Go writes"
+)]
+pub fn from_int(value: impl Into<i128>) -> f64 {
+    value.into() as f64
+}
+
 /// `strconv.FormatFloat(value, 'g', -1, 64)`.
 #[must_use]
 pub fn format_g(value: f64) -> String {

@@ -70,7 +70,7 @@ fn encode_family(out: &mut String, family: &Gathered) {
                         "_bucket",
                         &series.labels,
                         Some(bound),
-                        count_value(cumulative),
+                        float::from_int(cumulative),
                     );
                     infinity_seen |= bound == f64::INFINITY;
                 }
@@ -81,7 +81,7 @@ fn encode_family(out: &mut String, family: &Gathered) {
                         "_bucket",
                         &series.labels,
                         Some(f64::INFINITY),
-                        count_value(*count),
+                        float::from_int(*count),
                     );
                 }
                 push_sample(out, &family.name, "_sum", &series.labels, None, *sum);
@@ -91,20 +91,11 @@ fn encode_family(out: &mut String, family: &Gathered) {
                     "_count",
                     &series.labels,
                     None,
-                    count_value(*count),
+                    float::from_int(*count),
                 );
             }
         }
     }
-}
-
-/// A histogram count as a sample value, converted as Go's `float64(count)` is.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "Go writes float64(count): above 2^53 the same rounding is the exact output"
-)]
-fn count_value(count: u64) -> f64 {
-    count as f64
 }
 
 /// `writeSample`: the name and suffix, the label pairs plus an optional `le`, and the value.
