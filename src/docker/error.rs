@@ -88,10 +88,16 @@ pub enum ErrorKind {
     Response,
     /// The response body failed after the headers.
     Body,
+    /// The response body is not the JSON the call expects.
+    Decode,
+    /// The call was refused before any request, as moby refuses an empty ID.
+    InvalidParameter,
+    /// The caller's deadline passed first: Go's `context.DeadlineExceeded`.
+    DeadlineExceeded,
 }
 
 /// A failed request.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Error {
     kind: ErrorKind,
     message: String,
@@ -121,6 +127,38 @@ impl Error {
             message,
             status: None,
         }
+    }
+
+    pub(crate) fn decode(message: String) -> Self {
+        Self {
+            kind: ErrorKind::Decode,
+            message,
+            status: None,
+        }
+    }
+
+    pub(crate) fn invalid_parameter(message: String) -> Self {
+        Self {
+            kind: ErrorKind::InvalidParameter,
+            message,
+            status: None,
+        }
+    }
+
+    /// Go's `context.DeadlineExceeded`, which moby passes through undecorated.
+    #[must_use]
+    pub fn deadline_exceeded() -> Self {
+        Self {
+            kind: ErrorKind::DeadlineExceeded,
+            message: "context deadline exceeded".to_owned(),
+            status: None,
+        }
+    }
+
+    /// containerd's `errdefs.IsNotFound` of a moby error: the daemon answered 404.
+    #[must_use]
+    pub fn is_not_found(&self) -> bool {
+        self.kind == ErrorKind::Response && self.status == Some(StatusCode::NOT_FOUND)
     }
 
     /// The kind of failure.

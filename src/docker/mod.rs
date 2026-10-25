@@ -23,7 +23,8 @@
  */
 
 //! The read-only Docker Engine client, in-tree on hyper (S1): the transport and moby client
-//! v0.6.0's lazy API version negotiation. The endpoints arrive in plan phase 8.
+//! v0.6.0's lazy API version negotiation, the read-only [`DockerApi`] on top of it, the
+//! [`types`] it decodes and the [`events`] stream.
 //!
 //! - [`Settings::from_env`] reads `DOCKER_HOST`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and
 //!   `DOCKER_API_VERSION` as the Go exporter's `newDockerClient` does (moby's `FromEnv` parts on a
@@ -37,19 +38,28 @@
 //!   from 1.56; a failed negotiation is not an error, exactly as in moby, and concurrent first
 //!   requests share one ping (Q11).
 //!
-//! Read-only by construction: the request builder only makes `GET` requests, and `HEAD` is set
-//! in one place, the ping, on `/_ping`.
+//! Read-only by construction: the request builder only makes `GET` requests, `HEAD` is set in
+//! one place, the ping, on `/_ping`, and [`DockerApi`] has list, inspect and events calls only.
 
+mod api;
 mod client;
 mod connect;
 mod error;
+pub mod events;
 mod host;
 mod pool;
 mod tls;
+pub mod types;
 pub mod version;
 
+pub use api::{
+    CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, ClientEventStream, DOCKER_REQUEST_TIMEOUT,
+    DockerApi, EventStream, Filters, since_parameter, with_deadline, with_docker_timeout,
+    with_timeout,
+};
 pub use client::{Body, Client, Settings};
 pub use error::{ConfigError, Error, ErrorKind};
+pub use events::{StreamError, StreamErrorKind};
 pub use tls::PathError;
 pub use version::{MAX_API_VERSION, MIN_API_VERSION, UnsupportedApiVersion};
 

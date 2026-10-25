@@ -232,7 +232,7 @@ pub(crate) fn escape_host(host: &str) -> String {
 }
 
 /// `%XX`, upper-case as Go writes it.
-fn push_percent(out: &mut String, byte: u8) {
+pub(crate) fn push_percent(out: &mut String, byte: u8) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     out.push('%');
     out.push(char::from(HEX[usize::from(byte >> 4)]));

@@ -33,3 +33,6 @@ pub mod labels;
 pub mod logger;
 pub mod metrics;
 pub mod version;
+
+#[cfg(test)]
+mod test_support;

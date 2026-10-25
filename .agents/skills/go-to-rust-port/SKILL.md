@@ -208,6 +208,14 @@ Rust tutorial. Seen in: awtrix-controller.
   (a `DEK-Info` header is "encrypted", no certificate in `ca.pem` is an error) on the text. Go's
   `tlsconfig.Client` trusts the system pool **plus** `ca.pem` → `rustls-native-certs` plus the
   file into one `RootCertStore`. (rustls-pki-types 1.15)
+- Go reads the Docker event stream as `io.EOF` (clean: only whitespace left and the terminating
+  chunk) or anything else, and every real close is a **cut** without the terminating chunk (an
+  HAProxy server timeout, a killed proxy, a stopped daemon), so not clean in Go; hyper 1.12
+  surfaces a cut as a body `Err` (`unexpected EOF during chunk size line`) with
+  `is_incomplete_message() == false` → classify on "the body returned `Err`" vs "the body ended",
+  decode with serde_json's `StreamDeserializer` over a growing buffer (an `is_eof()` error means
+  "read more"), and port moby's RS (0x1E) filter for `application/json-seq`, which bollard lacks.
+  (S1: fake Engine clean, mid-object and cut endings; HAProxy `timeout server 3s`)
 - **Logging (slog):** tracing's `Visit` has no duration, time, list or group type (`valuable`
   needs `--cfg tracing_unstable`), `None` fields vanish and `INFO+1` has no `Level`, so a
   slog-compatible format cannot be a tracing formatter → for byte parity, an in-tree logger with
