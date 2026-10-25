@@ -32,10 +32,15 @@ use std::time::Duration;
 
 use bollard::errors::Error as DockerError;
 use bollard::models::{
-    ServiceSpec, ServiceSpecMode, ServiceSpecModeReplicated, TaskSpec, TaskSpecContainerSpec,
-    TaskSpecPlacement, TaskSpecRestartPolicy, TaskSpecRestartPolicyConditionEnum, TaskState,
+    HealthConfig, NodeSpec, NodeSpecAvailabilityEnum, NodeState, ServiceSpec, ServiceSpecMode,
+    ServiceSpecModeReplicated, ServiceSpecModeReplicatedJob, ServiceSpecUpdateConfig,
+    ServiceUpdateStatusStateEnum, TaskSpec, TaskSpecContainerSpec, TaskSpecPlacement,
+    TaskSpecRestartPolicy, TaskSpecRestartPolicyConditionEnum, TaskState,
 };
-use bollard::query_parameters::{InspectServiceOptions, ListTasksOptions, UpdateServiceOptions};
+use bollard::query_parameters::{
+    InspectServiceOptions, ListNodesOptions, ListTasksOptions, UpdateNodeOptions,
+    UpdateServiceOptions,
+};
 use jiff::Timestamp;
 use testenv::context::{Context, Ended};
 use testenv::metrics_text::{Labels, labels};
@@ -52,11 +57,16 @@ pub const DOCKER_OP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const TEARDOWN_TIMEOUT: Duration = Duration::from_mins(2);
 /// Bounds the wait for a removed service's tasks to disappear.
 const TASK_REAP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Bounds the wait for every node to be Ready and Active again.
+const NODES_SETTLE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// One second, in the nanoseconds the Engine API counts durations in.
+pub const SECOND_NANOS: i64 = 1_000_000_000;
 
 /// The default workload: it idles, and exits promptly on SIGTERM. A bare sleep would run as PID 1
 /// with no SIGTERM handler and hold every stop (scale down, update, removal) for the whole grace
 /// period.
-const STOP_FAST: &[&str] = &[
+pub const STOP_FAST: &[&str] = &[
     "sh",
     "-c",
     "trap 'exit 0' TERM; while true; do sleep 1; done",
@@ -128,19 +138,34 @@ impl ServiceKey {
     }
 }
 
+/// A service's Swarm mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Replicated,
+    Global,
+    ReplicatedJob,
+    GlobalJob,
+}
+
 /// The knobs of [`deploy_service`]. The default is a replicated service with one replica
 /// running [`STOP_FAST`].
 #[derive(Debug, Clone, Default)]
 pub struct ServiceOpts {
-    pub global: bool,
+    pub mode: Mode,
+    /// Replicated job only: its total completions; 0 leaves Swarm's default.
+    pub completions: u64,
     /// Replicated only; 0 means 1 unless `zero_replicas` is set.
     pub replicas: u64,
     pub zero_replicas: bool,
     /// Defaults to [`STOP_FAST`].
     pub command: Option<Vec<String>>,
+    pub env: Vec<String>,
     pub constraints: Vec<String>,
     /// Swarm's default (any) when `None`.
     pub restart_condition: Option<TaskSpecRestartPolicyConditionEnum>,
+    pub update_config: Option<ServiceSpecUpdateConfig>,
+    pub healthcheck: Option<HealthConfig>,
     /// Extra service labels, for the exporter's `--label`.
     pub labels: HashMap<String, String>,
 }
@@ -187,22 +212,30 @@ fn service_spec(stack: &str, name: &str, opts: &ServiceOpts) -> ServiceSpec {
         .clone()
         .unwrap_or_else(|| STOP_FAST.iter().map(|&part| part.to_owned()).collect());
 
-    let mode = if opts.global {
-        ServiceSpecMode {
+    let mode = match opts.mode {
+        Mode::Global => ServiceSpecMode {
             global: Some(HashMap::default()),
             ..ServiceSpecMode::default()
-        }
-    } else {
-        let replicas = if opts.replicas == 0 && !opts.zero_replicas {
-            1
-        } else {
-            opts.replicas
-        };
-        ServiceSpecMode {
-            replicated: Some(ServiceSpecModeReplicated {
-                replicas: Some(i64::try_from(replicas).unwrap_or(i64::MAX)),
+        },
+        Mode::GlobalJob => ServiceSpecMode {
+            global_job: Some(HashMap::default()),
+            ..ServiceSpecMode::default()
+        },
+        Mode::ReplicatedJob => ServiceSpecMode {
+            replicated_job: Some(ServiceSpecModeReplicatedJob {
+                total_completions: (opts.completions > 0)
+                    .then(|| i64::try_from(opts.completions).unwrap_or(i64::MAX)),
+                ..ServiceSpecModeReplicatedJob::default()
             }),
             ..ServiceSpecMode::default()
+        },
+        Mode::Replicated => {
+            let replicas = if opts.replicas == 0 && !opts.zero_replicas {
+                1
+            } else {
+                opts.replicas
+            };
+            replicated_mode(replicas)
         }
     };
 
@@ -213,12 +246,13 @@ fn service_spec(stack: &str, name: &str, opts: &ServiceOpts) -> ServiceSpec {
             container_spec: Some(TaskSpecContainerSpec {
                 image: Some(cluster().workload_image_id.clone()),
                 command: Some(command),
+                env: (!opts.env.is_empty()).then(|| opts.env.clone()),
                 labels: Some(HashMap::from([(
                     STACK_NAMESPACE_LABEL.to_owned(),
                     stack.to_owned(),
                 )])),
-                // One second, in nanoseconds.
-                stop_grace_period: Some(1_000_000_000),
+                stop_grace_period: Some(SECOND_NANOS),
+                health_check: opts.healthcheck.clone(),
                 ..TaskSpecContainerSpec::default()
             }),
             placement: Some(TaskSpecPlacement {
@@ -234,7 +268,17 @@ fn service_spec(stack: &str, name: &str, opts: &ServiceOpts) -> ServiceSpec {
             ..TaskSpec::default()
         }),
         mode: Some(mode),
+        update_config: opts.update_config.clone(),
         ..ServiceSpec::default()
+    }
+}
+
+fn replicated_mode(replicas: u64) -> ServiceSpecMode {
+    ServiceSpecMode {
+        replicated: Some(ServiceSpecModeReplicated {
+            replicas: Some(i64::try_from(replicas).unwrap_or(i64::MAX)),
+        }),
+        ..ServiceSpecMode::default()
     }
 }
 
@@ -264,6 +308,39 @@ pub async fn update_service(
     op(ctx, swarm().update_service(service_id, spec, options, None))
         .await
         .map_err(|error| test.fatal(format!("update service {service_id}: {error}")))?;
+    Ok(())
+}
+
+/// Sets a replicated service's replica count.
+pub async fn scale_service(
+    test: &TestHandle,
+    service_id: &str,
+    replicas: u64,
+) -> Result<(), Fatal> {
+    Box::pin(update_service(test, service_id, |spec| {
+        spec.mode = Some(replicated_mode(replicas));
+    }))
+    .await
+}
+
+/// Swarm's own view of the service's last update: `Ok` once it is in `want`.
+pub async fn check_update_state(
+    ctx: &Context,
+    service_id: &str,
+    want: ServiceUpdateStatusStateEnum,
+) -> Result<(), String> {
+    let inspected = op(
+        ctx,
+        swarm().inspect_service(service_id, None::<InspectServiceOptions>),
+    )
+    .await
+    .map_err(|error| format!("inspect service {service_id}: {error}"))?;
+    let status = inspected.update_status;
+    if status.as_ref().and_then(|status| status.state) != Some(want) {
+        return Err(format!(
+            "swarm update status of {service_id} is {status:?}, want {want}: not yet"
+        ));
+    }
     Ok(())
 }
 
@@ -359,6 +436,11 @@ pub async fn list_tasks(ctx: &Context, service_id: &str) -> Result<Vec<TaskInfo>
     Ok(tasks)
 }
 
+/// Every task of the service, retired ones included, oldest first; a failed listing is fatal.
+pub async fn task_placement(test: &TestHandle, service_id: &str) -> Result<Vec<TaskInfo>, Fatal> {
+    list_tasks(test.ctx(), service_id).await.or_fatal(test)
+}
+
 /// The tasks that are running and meant to be.
 pub fn running_tasks(tasks: &[TaskInfo]) -> Vec<TaskInfo> {
     tasks
@@ -377,4 +459,85 @@ pub fn describe_tasks(tasks: &[TaskInfo]) -> String {
         .map(|task| format!("  {task}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Applies `mutate` to the node's current spec and submits it; a failure is fatal.
+pub async fn update_node(
+    test: &TestHandle,
+    node_id: &str,
+    mutate: impl FnOnce(&mut NodeSpec),
+) -> Result<(), Fatal> {
+    update_node_spec(test.ctx(), node_id, mutate)
+        .await
+        .or_fatal(test)
+}
+
+/// Applies `mutate` to the node's current spec and submits it.
+pub async fn update_node_spec(
+    ctx: &Context,
+    node_id: &str,
+    mutate: impl FnOnce(&mut NodeSpec),
+) -> Result<(), String> {
+    let inspected = op(ctx, swarm().inspect_node(node_id))
+        .await
+        .map_err(|error| format!("inspect node {node_id}: {error}"))?;
+    let mut spec = inspected.spec.unwrap_or_default();
+    mutate(&mut spec);
+    let options = UpdateNodeOptions {
+        version: inspected
+            .version
+            .and_then(|version| version.index)
+            .and_then(|index| i64::try_from(index).ok())
+            .unwrap_or_default(),
+    };
+    op(ctx, swarm().update_node(node_id, spec, options))
+        .await
+        .map_err(|error| format!("update node {node_id}: {error}"))
+}
+
+/// Waits until every cluster node is Ready and Active, the state a disruptive test must leave
+/// the cluster in.
+pub async fn wait_nodes_ready_active(ctx: &Context) -> Result<(), String> {
+    poll_until(ctx, NODES_SETTLE_TIMEOUT, async || {
+        nodes_ready_active(ctx).await
+    })
+    .await
+}
+
+/// Holds when every cluster node is listed, Ready and Active.
+pub async fn nodes_ready_active(ctx: &Context) -> Result<(), String> {
+    let listed = op(ctx, swarm().list_nodes(None::<ListNodesOptions>))
+        .await
+        .map_err(|error| format!("list nodes: {error}"))?;
+    let not_settled: Vec<String> = listed
+        .iter()
+        .filter_map(|node| {
+            let state = node.status.as_ref().and_then(|status| status.state);
+            let availability = node.spec.as_ref().and_then(|spec| spec.availability);
+            if state == Some(NodeState::READY)
+                && availability == Some(NodeSpecAvailabilityEnum::ACTIVE)
+            {
+                return None;
+            }
+            let hostname = node
+                .description
+                .as_ref()
+                .and_then(|description| description.hostname.clone())
+                .unwrap_or_default();
+            let show = |value: Option<String>| value.unwrap_or_default();
+            Some(format!(
+                "{hostname}={}/{}",
+                show(state.map(|state| state.to_string())),
+                show(availability.map(|availability| availability.to_string()))
+            ))
+        })
+        .collect();
+    let total = cluster().nodes.len();
+    if listed.len() != total || !not_settled.is_empty() {
+        return Err(format!(
+            "{} of {total} nodes listed, not ready+active: {not_settled:?}: not yet",
+            listed.len()
+        ));
+    }
+    Ok(())
 }

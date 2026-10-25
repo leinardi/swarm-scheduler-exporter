@@ -110,6 +110,7 @@ struct Inner {
     path: Vec<String>,
     ctx: Context,
     failed: Cell<bool>,
+    skipped: Cell<bool>,
     cleanups: RefCell<Vec<Cleanup>>,
 }
 
@@ -123,6 +124,7 @@ impl TestHandle {
             path,
             ctx,
             failed: Cell::new(false),
+            skipped: Cell::new(false),
             cleanups: RefCell::new(Vec::new()),
         }))
     }
@@ -165,6 +167,14 @@ impl TestHandle {
     /// `test.Fatalf`: records a failure; return the [`Fatal`] to stop the test.
     pub fn fatal(&self, message: impl Display) -> Fatal {
         self.error(message);
+        Fatal
+    }
+
+    /// `test.Skipf`: logs why, and marks the test skipped unless it has already failed; return
+    /// the [`Fatal`] to stop it.
+    pub fn skip(&self, message: impl Display) -> Fatal {
+        self.log(message);
+        self.0.skipped.set(true);
         Fatal
     }
 
@@ -239,7 +249,13 @@ async fn execute(test: &TestHandle, body: impl Future<Output = TestResult>) {
         };
         cleanup().await;
     }
-    let verdict = if test.failed() { "FAIL" } else { "PASS" };
+    let verdict = if test.failed() {
+        "FAIL"
+    } else if test.0.skipped.get() {
+        "SKIP"
+    } else {
+        "PASS"
+    };
     say_raw(&format!(
         "{}--- {verdict}: {} ({:.2}s)\n",
         test.indent(),

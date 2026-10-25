@@ -35,7 +35,7 @@ use testenv::metrics_text::{format_sample, format_series, labels};
 use crate::cluster_smoke::node_count;
 use crate::http::scrape_metrics;
 use crate::launcher::Launch;
-use crate::swarm::{ServiceKey, ServiceOpts, deploy_service};
+use crate::swarm::{Mode, ServiceKey, ServiceOpts, deploy_service};
 use crate::testing::{TestHandle, TestResult};
 use crate::wait::{
     LABEL_SERVICE, LABEL_STACK, METRIC_DESIRED, METRIC_NODES_BY_STATE, METRIC_REPLICAS_STATE,
@@ -147,7 +147,7 @@ fn snapshot_services() -> [(ServiceKey, ServiceOpts); 6] {
         (
             agent,
             ServiceOpts {
-                global: true,
+                mode: Mode::Global,
                 ..ServiceOpts::default()
             },
         ),
@@ -161,7 +161,7 @@ fn snapshot_services() -> [(ServiceKey, ServiceOpts); 6] {
         (
             nowhere,
             ServiceOpts {
-                global: true,
+                mode: Mode::Global,
                 constraints: vec!["node.labels.it-unsatisfiable==true".to_owned()],
                 ..ServiceOpts::default()
             },

@@ -36,16 +36,23 @@
 //! seconds, then the run prints the selected, passed and failed counts; any failure exits 1.
 
 mod cluster_smoke;
+mod containers;
 mod events;
 mod exporter_process;
+mod global;
 mod harness;
 mod http;
+mod jobs;
 mod launcher;
+mod node;
 mod proxy;
+mod replicated;
+mod service;
 mod snapshot;
 mod socket_proxy;
 mod swarm;
 mod testing;
+mod update;
 mod wait;
 
 use std::path::PathBuf;
@@ -83,6 +90,10 @@ const TESTS: &[Test] = &[
         run: |test| Box::pin(cluster_smoke::cluster_smoke(test)),
     },
     Test {
+        name: "TestContainers_OptIn",
+        run: |test| Box::pin(containers::containers_opt_in(test)),
+    },
+    Test {
         name: "TestEvents_ReconnectResyncs",
         run: |test| Box::pin(events::reconnect_resyncs(test)),
     },
@@ -103,12 +114,44 @@ const TESTS: &[Test] = &[
         run: |test| Box::pin(exporter_process::healthcheck_unhealthy(test)),
     },
     Test {
+        name: "TestGlobal_Constraints",
+        run: |test| Box::pin(global::global_constraints(test)),
+    },
+    Test {
+        name: "TestJobs_Finished",
+        run: |test| Box::pin(jobs::jobs_finished(test)),
+    },
+    Test {
+        name: "TestNode_Drain",
+        run: |test| Box::pin(node::node_drain(test)),
+    },
+    Test {
+        name: "TestNode_Down",
+        run: |test| Box::pin(node::node_down(test)),
+    },
+    Test {
+        name: "TestReplicated_Scale",
+        run: |test| Box::pin(replicated::replicated_scale(test)),
+    },
+    Test {
+        name: "TestService_Removed",
+        run: |test| Box::pin(service::service_removed(test)),
+    },
+    Test {
         name: "TestSnapshot_SteadyState",
         run: |test| Box::pin(snapshot::steady_state(test)),
     },
     Test {
         name: "TestSocketProxy_ExampleAllowlist",
         run: |test| Box::pin(socket_proxy::example_allowlist(test)),
+    },
+    Test {
+        name: "TestUpdate_Completed",
+        run: |test| Box::pin(update::update_completed(test)),
+    },
+    Test {
+        name: "TestUpdate_StartFirstFailure",
+        run: |test| Box::pin(update::update_start_first_failure(test)),
     },
 ];
 

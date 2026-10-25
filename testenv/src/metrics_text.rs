@@ -130,13 +130,14 @@ impl Scrape {
         }
     }
 
-    /// The sum of every sample of `name` matching `matching`.
+    /// The sum of every sample of `name` matching `matching`, 0 when none does. It folds from
+    /// `0.0`: `Iterator::sum` of no `f64` is `-0.0`, which prints as `-0` and fails an exact
+    /// comparison with 0.
     #[must_use]
     pub fn sum(&self, name: &str, matching: &Labels) -> f64 {
         self.find(name, matching)
             .iter()
-            .map(|sample| sample.value)
-            .sum()
+            .fold(0.0, |total, sample| total + sample.value)
     }
 
     /// Whether any sample of `name` matches `matching`.
@@ -345,7 +346,7 @@ fn parse_value(text: &str) -> Option<f64> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{Scrape, format_sample, labels};
+    use super::{Scrape, format_sample, format_value, labels};
 
     const EXPOSITION: &str = r#"# HELP swarm_service_desired_replicas Desired replicas.
 # TYPE swarm_service_desired_replicas gauge
@@ -406,6 +407,12 @@ nan_thing NaN
         assert_eq!(scrape.value("swarm_exporter_polls_total", &none), Some(7.0));
         assert_eq!(scrape.value("untyped_thing", &none), Some(f64::INFINITY));
         assert!(scrape.samples[4].value.is_nan());
+        let empty = scrape.sum("absent_family", &none);
+        assert!(
+            empty.total_cmp(&0.0).is_eq(),
+            "an empty sum is +0, not {empty}"
+        );
+        assert_eq!(format_value(empty), "0");
     }
 
     #[test]

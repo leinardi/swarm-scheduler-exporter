@@ -45,7 +45,7 @@ make go-test-integration                            # the whole suite
 make go-test-integration RUN='^TestNode_'           # a subset
 make go-test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden files
 make go-vet-integration                             # go vet including the integration-tagged code
-make rust-test-integration RUN='^TestExporter_'     # the Rust suite (testenv), part ported so far
+make rust-test-integration RUN='^TestNode_'         # the Rust suite (testenv), the same tests
 make sweep-test-leaks                               # remove every labelled test container and network
 ```
 

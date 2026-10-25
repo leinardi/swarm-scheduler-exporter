@@ -38,7 +38,7 @@ use testenv::metrics_text::labels;
 use crate::http::{get, scrape_metrics};
 use crate::launcher::Launch;
 use crate::swarm::{
-    DOCKER_OP_TIMEOUT, ServiceKey, ServiceOpts, TaskInfo, deploy_service, describe_tasks,
+    DOCKER_OP_TIMEOUT, Mode, ServiceKey, ServiceOpts, TaskInfo, deploy_service, describe_tasks,
     list_tasks, op, running_tasks,
 };
 use crate::testing::{OrFatal as _, TestHandle, TestResult, cluster, swarm};
@@ -58,7 +58,7 @@ pub async fn cluster_smoke(test: TestHandle) -> TestResult {
         STACK,
         everywhere.service,
         &ServiceOpts {
-            global: true,
+            mode: Mode::Global,
             ..ServiceOpts::default()
         },
     )
@@ -132,7 +132,7 @@ pub fn node_count() -> f64 {
 }
 
 /// Holds when there is exactly one running task on each cluster node.
-fn runs_on_every_node(running: &[TaskInfo]) -> Result<(), String> {
+pub fn runs_on_every_node(running: &[TaskInfo]) -> Result<(), String> {
     let mut per_node: HashMap<&str, usize> = HashMap::new();
     for task in running {
         *per_node.entry(task.node_id.as_str()).or_default() += 1;

@@ -37,9 +37,8 @@ jobs:
         run: make go-test-integration
 
   # The Rust suite (testenv) against the same kind of Swarm and the Rust release binary, beside
-  # the Go job: the harness's own smoke test and the Go tests ported so far (cluster, exporter
-  # process, events, seed, snapshot and socket proxy); the rest follow. The make target builds the
-  # release binary first and fails if RUN selects no test.
+  # the Go job: the harness's own smoke test and every Go integration test, under the same names.
+  # The make target builds the release binary first and fails if RUN selects no test.
   integration-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 20

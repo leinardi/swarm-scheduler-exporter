@@ -46,6 +46,12 @@ pub const METRIC_NODES_BY_STATE: &str = "swarm_cluster_nodes_by_state";
 pub const METRIC_DESIRED: &str = "swarm_service_desired_replicas";
 pub const METRIC_RUNNING: &str = "swarm_service_running_replicas";
 pub const METRIC_AT_DESIRED: &str = "swarm_service_at_desired";
+pub const METRIC_SCHEDULABLE: &str = "swarm_service_schedulable_replicas";
+pub const METRIC_UPDATE_STATE: &str = "swarm_service_update_state_info";
+pub const METRIC_UPDATE_STARTED: &str = "swarm_service_update_started_timestamp_seconds";
+pub const METRIC_UPDATE_COMPLETE: &str = "swarm_service_update_completed_timestamp_seconds";
+pub const METRIC_CONTAINER_STATE: &str = "swarm_container_state";
+pub const METRIC_POLLS_TOTAL: &str = "swarm_exporter_polls_total";
 pub const METRIC_REPLICAS_STATE: &str = "swarm_task_replicas_state";
 pub const METRIC_HEALTH: &str = "swarm_exporter_health";
 pub const METRIC_BUILD_INFO: &str = "swarm_exporter_build_info";
@@ -102,14 +108,97 @@ pub async fn eventually(
         .map_err(|error| test.fatal(format!("condition not met: {error}")))
 }
 
+/// Waits until the exporter has completed a poll that started after this call, so the next
+/// scrape reflects the Swarm state as of now. A poll already running when this was called can
+/// finish first, hence the second one.
+pub async fn wait_for_fresh_poll(test: &TestHandle, base_url: &str) -> Result<(), Fatal> {
+    let mut start: Option<f64> = None;
+    eventually(test, Duration::from_secs(30), async |ctx| {
+        let scraped = scrape_metrics(ctx, base_url).await?;
+        let polls = scraped
+            .value(METRIC_POLLS_TOTAL, &no_labels())
+            .ok_or_else(|| format!("no {METRIC_POLLS_TOTAL} series: not yet"))?;
+        let first = *start.get_or_insert(polls);
+        if polls < first + 2.0 {
+            return Err(format!(
+                "{METRIC_POLLS_TOTAL} at {}, waiting for {}: not yet",
+                format_value(polls),
+                format_value(first + 2.0)
+            ));
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Checks a condition that must keep holding, such as "X is absent": re-runs `check` every
+/// [`POLL_INTERVAL`] until the exporter has completed `polls` polls that started after the
+/// call, and fails the test on the first error. [`eventually`] would be wrong here: one passing
+/// scrape proves little for an absence, while one failing scrape proves the exporter reported X.
+pub async fn consistently(
+    test: &TestHandle,
+    base_url: &str,
+    polls: u32,
+    mut check: impl AsyncFnMut(&Context) -> Result<(), String>,
+) -> Result<(), Fatal> {
+    let ctx = test.ctx().clone();
+    let deadline = Instant::now() + Duration::from_secs(30) * (polls + 1);
+    let mut ticker = tokio::time::interval(POLL_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ticker.tick().await;
+    let mut start: Option<f64> = None;
+    loop {
+        check(&ctx)
+            .await
+            .map_err(|error| test.fatal(format!("condition stopped holding: {error}")))?;
+        let scraped = scrape_metrics(&ctx, base_url)
+            .await
+            .map_err(|error| test.fatal(error))?;
+        let completed = scraped
+            .value(METRIC_POLLS_TOTAL, &no_labels())
+            .ok_or_else(|| test.fatal(format!("no {METRIC_POLLS_TOTAL} series")))?;
+        let first = *start.get_or_insert(completed);
+        // +1: the poll running when this started may have begun before it.
+        if completed >= first + f64::from(polls) + 1.0 {
+            return Ok(());
+        }
+        match ctx
+            .run(tokio::time::timeout_at(deadline, ticker.tick()))
+            .await
+        {
+            Err(ended) => {
+                return Err(test.fatal(format!(
+                    "condition held, but the test ended before {polls} exporter polls: {ended}"
+                )));
+            }
+            Ok(Err(_)) => {
+                return Err(test.fatal(format!(
+                    "condition held, but the exporter did not complete {polls} polls in time"
+                )));
+            }
+            Ok(Ok(_)) => {}
+        }
+    }
+}
+
 /// One expectation on a scrape.
 #[derive(Debug, Clone)]
 pub struct MetricWant {
     name: &'static str,
     labels: Labels,
-    value: f64,
-    /// Compare the sum over every matching series instead of a single series.
-    sum: bool,
+    kind: WantKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WantKind {
+    /// A single series with this value.
+    Value(f64),
+    /// The sum over every matching series is this value.
+    Sum(f64),
+    /// A single series with any value above zero.
+    Positive,
+    /// No matching series at all.
+    Absent,
 }
 
 /// A single series with this value.
@@ -117,8 +206,7 @@ pub fn want(name: &'static str, labels: Labels, value: f64) -> MetricWant {
     MetricWant {
         name,
         labels,
-        value,
-        sum: false,
+        kind: WantKind::Value(value),
     }
 }
 
@@ -127,8 +215,25 @@ pub fn want_sum(name: &'static str, labels: Labels, value: f64) -> MetricWant {
     MetricWant {
         name,
         labels,
-        value,
-        sum: true,
+        kind: WantKind::Sum(value),
+    }
+}
+
+/// A single series with any value above zero.
+pub fn want_positive(name: &'static str, labels: Labels) -> MetricWant {
+    MetricWant {
+        name,
+        labels,
+        kind: WantKind::Positive,
+    }
+}
+
+/// No series matches.
+pub fn want_absent(name: &'static str, labels: Labels) -> MetricWant {
+    MetricWant {
+        name,
+        labels,
+        kind: WantKind::Absent,
     }
 }
 
@@ -151,24 +256,30 @@ impl MetricWant {
     /// Whether the expectation holds, and the actual value as the failure table shows it.
     fn check(&self, scraped: &Scrape) -> (String, bool) {
         let found = scraped.find(self.name, &self.labels);
-        if self.sum {
-            // A family that only emits the combinations present (nodes_by_state) drops a series
-            // rather than zeroing it, so no series sums to zero.
-            let total = scraped.sum(self.name, &self.labels);
-            return (format_value(total), same(total, self.value));
-        }
-        match found.as_slice() {
-            [] => ("absent".to_owned(), false),
-            [only] => (format_value(only.value), same(only.value, self.value)),
-            many => (format!("{} series", many.len()), false),
+        match (self.kind, found.as_slice()) {
+            (WantKind::Absent, []) => ("absent".to_owned(), true),
+            (WantKind::Absent, many) => (format!("{} series", many.len()), false),
+            (WantKind::Sum(value), _) => {
+                // A family that only emits the combinations present (nodes_by_state) drops a
+                // series rather than zeroing it, so no series sums to zero.
+                let total = scraped.sum(self.name, &self.labels);
+                (format_value(total), same(total, value))
+            }
+            (WantKind::Value(_) | WantKind::Positive, []) => ("absent".to_owned(), false),
+            (WantKind::Value(value), [only]) => (format_value(only.value), same(only.value, value)),
+            (WantKind::Positive, [only]) => (format_value(only.value), only.value > 0.0),
+            (WantKind::Value(_) | WantKind::Positive, many) => {
+                (format!("{} series", many.len()), false)
+            }
         }
     }
 
     fn expected(&self) -> String {
-        if self.sum {
-            format!("sum {}", format_value(self.value))
-        } else {
-            format_value(self.value)
+        match self.kind {
+            WantKind::Value(value) => format_value(value),
+            WantKind::Sum(value) => format!("sum {}", format_value(value)),
+            WantKind::Positive => "> 0".to_owned(),
+            WantKind::Absent => "absent".to_owned(),
         }
     }
 }

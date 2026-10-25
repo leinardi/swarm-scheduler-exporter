@@ -110,6 +110,9 @@ Rust tutorial. Seen in: awtrix-controller.
 - Go's `strings.ToLower` maps U+0130 `İ` to a plain `i`; Rust's `to_lowercase` gives `i` plus a
   combining dot, so a case-insensitive match (`İNFO` is a Go log level) differs → special-case
   it. (throwaway Go program)
+- `Iterator::sum` over no `f64` is `-0.0` in Rust 1.98, where Go's `total := 0.0` loop gives
+  `+0`; `'g'` formatting prints it as `-0`, and a `total_cmp` comparison with `0.0` fails → fold
+  from `0.0`. (probe; a failed integration test expecting "sum 0")
 
 ### JSON and YAML
 
@@ -209,6 +212,11 @@ Rust tutorial. Seen in: awtrix-controller.
   `Accept-Encoding: gzip` with transparent decompression. go-connections also sets
   `Proxy: http.ProxyFromEnvironment` for TCP hosts; decide whether to keep it. (S1: 8 of 8 ping
   cases against a fake Engine, moby v0.6.0)
+- bollard 0.21's models rename `ContainerSpec.Healthcheck` to `HealthCheck`, while the Engine
+  writes `Healthcheck` and serde matches keys case-sensitively: an inspected service spec comes
+  back without its healthcheck, and inspect, mutate, update silently removes it (the Engine's
+  case-insensitive decoder still takes it on create) → set the field again before every update.
+  (a start-first update test that failed until the healthcheck was re-applied)
 - rustls PEM loading needs no rustls-pemfile: `rustls_pki_types::pem::PemObject`
   (`CertificateDer::pem_slice_iter`, `PrivateKeyDer::from_pem_slice`); it skips section kinds it
   does not know (an `ENCRYPTED PRIVATE KEY` is invisible to it), so mirror go-connections' checks
