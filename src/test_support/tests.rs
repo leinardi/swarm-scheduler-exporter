@@ -59,6 +59,7 @@ async fn fake_docker_answers_from_its_fields_and_counts_calls() {
         fake.service_inspect("s2").await.unwrap(),
         Service::default()
     );
+    assert_eq!(fake.service_inspect_calls(), 2);
     assert!(fake.task_list().await.unwrap().is_empty());
     assert!(fake.container_list().await.unwrap().is_empty());
     fake.container_inspect("c1").await.unwrap();

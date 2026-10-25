@@ -279,6 +279,10 @@ Rust tutorial. Seen in: awtrix-controller.
   (`set_reuse_address(true)`), so a quick restart cannot rebind. (server restart test)
 - Give shutdown one overall deadline and hand each step only what remains; never a fresh grace
   period per step, never sequential per-session waits. (plan review)
+- `sync.Map.LoadOrStore` never overwrites: a "log only when it changed" cache built on it keeps
+  the first key, so every later, different value logs on each recurrence. A port to
+  `HashMap::insert` quietly logs less → use `entry().or_insert()` and pin it with a test, or
+  list the fix as a behaviour change. (Go source read; ported at-desired log)
 
 ## 5. Tooling, lints and packaging
 

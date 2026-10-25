@@ -35,6 +35,7 @@ use jiff::tz::TimeZone;
 
 pub(crate) use fake_docker::FakeDocker;
 
+use crate::docker::types::{Node, NodeDescription, NodeSpec, NodeStatus, Platform};
 use crate::logger::{Config, Format, Level, Logger, MemorySink};
 
 /// How often [`eventually`] checks its condition.
@@ -68,6 +69,30 @@ pub(crate) async fn eventually(what: &str, within: Duration, mut condition: impl
             "timed out after {within:?} waiting for {what}"
         );
         tokio::time::sleep(EVENTUALLY_INTERVAL).await;
+    }
+}
+
+/// Go's `makeSchedulableNode`: a ready, active linux/amd64 worker.
+pub(crate) fn schedulable_node(id: &str, hostname: &str) -> Node {
+    Node {
+        id: id.to_owned(),
+        description: NodeDescription {
+            hostname: hostname.to_owned(),
+            platform: Platform {
+                architecture: "amd64".to_owned(),
+                os: "linux".to_owned(),
+            },
+            ..NodeDescription::default()
+        },
+        status: NodeStatus {
+            state: "ready".to_owned(),
+            ..NodeStatus::default()
+        },
+        spec: NodeSpec {
+            role: "worker".to_owned(),
+            availability: "active".to_owned(),
+            ..NodeSpec::default()
+        },
     }
 }
 

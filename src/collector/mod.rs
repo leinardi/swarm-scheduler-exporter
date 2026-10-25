@@ -27,7 +27,10 @@
 //! modules here are the pieces it composes.
 
 pub mod desired;
+pub mod error;
 pub mod metrics_ids;
 pub mod nodes;
+pub mod poll_snapshot;
+pub mod replicas_state;
 pub mod service_update;
 pub mod types;

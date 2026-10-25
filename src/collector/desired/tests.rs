@@ -28,27 +28,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::collector::metrics_ids::{SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB};
 use crate::docker::types::{EngineDescription, NodeDescription, NodeSpec, NodeStatus};
-
-/// Go's `makeSchedulableNode`: a ready, active linux/amd64 worker.
-fn schedulable_node(id: &str, hostname: &str) -> Node {
-    Node {
-        id: id.to_owned(),
-        description: NodeDescription {
-            hostname: hostname.to_owned(),
-            platform: platform("linux", "amd64"),
-            ..NodeDescription::default()
-        },
-        status: NodeStatus {
-            state: "ready".to_owned(),
-            ..NodeStatus::default()
-        },
-        spec: NodeSpec {
-            role: "worker".to_owned(),
-            availability: "active".to_owned(),
-            ..NodeSpec::default()
-        },
-    }
-}
+use crate::test_support::schedulable_node;
 
 fn platform(os: &str, architecture: &str) -> Platform {
     Platform {

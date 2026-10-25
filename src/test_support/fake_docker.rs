@@ -67,6 +67,7 @@ pub(crate) struct FakeDocker {
 
     pub(crate) node_list_calls: AtomicUsize,
     pub(crate) inspect_calls: AtomicUsize,
+    pub(crate) service_inspect_calls: AtomicUsize,
 }
 
 impl FakeDocker {
@@ -80,6 +81,11 @@ impl FakeDocker {
     /// How many times `node_list` was called.
     pub(crate) fn node_list_calls(&self) -> usize {
         self.node_list_calls.load(Ordering::SeqCst)
+    }
+
+    /// How many times `service_inspect` was called.
+    pub(crate) fn service_inspect_calls(&self) -> usize {
+        self.service_inspect_calls.load(Ordering::SeqCst)
     }
 
     /// How many times `container_inspect` was called.
@@ -105,6 +111,7 @@ impl DockerApi for FakeDocker {
     }
 
     fn service_inspect(&self, id: &str) -> impl Future<Output = Result<Service, Error>> + Send {
+        self.service_inspect_calls.fetch_add(1, Ordering::SeqCst);
         ready(self.service_by_id.get(id).map_or_else(
             || {
                 self.service_inspect_err
