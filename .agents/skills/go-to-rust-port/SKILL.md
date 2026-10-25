@@ -21,7 +21,8 @@ Rust tutorial. Seen in: awtrix-controller.
 - Port leaf modules first, each together with its Go tests. Give every ported test a doc comment
   naming the Go test it replaces (`/// Go: TestX`), and justify every Go test you do not port.
 - Capture Go reference values (timestamps, encoded payloads) with a throwaway Go program outside
-  the module, rather than reasoning about what Go "probably" returns.
+  the module, rather than reasoning about what Go "probably" returns. Put the operands in variables:
+  Go folds a constant expression exactly (`0.1+0.2` is `0.3`), so a constant tests nothing.
 - List every intended behaviour change up front. Any other difference from Go is a defect.
 - Use non-release commit types until the cutover, so a release-from-commits tool does not ship a
   half-port.
@@ -71,6 +72,26 @@ Rust tutorial. Seen in: awtrix-controller.
   per-rune byte logic (sanitizers, counters) over `&[u8]` with a decoder that takes a complete
   valid sequence whole and steps one byte otherwise (`a\xe2\x82b` → 4 runes in Go, 3 chars lossy).
   (throwaway Go program, go1.26)
+
+### Numbers and text output
+
+- Rust's `{:e}` and `{}` give the shortest round-trip length but break an exact tie between two
+  shortest candidates **upward**; Go's `strconv` (and ryu) round to even (`2.1717180002771212e+15`
+  in Go, `…213e15` in Rust; 577 of 100,000 random values) → take only the digit count from
+  `{:e}` and recompute the digits with `{:.N$e}`, then lay them out as Go's `'g'` (`%e` when the
+  exponent is below -4 or at least 6). (250,034 values from Go)
+- `strconv.Quote` and slog's `needsQuoting` use Go's Unicode tables (15.0 in go1.26); Rust 1.98's
+  `char` methods and `escape_debug` follow Unicode 17, so code points assigned since print raw in
+  Rust and escaped in Go (`\u0897`, `\U0001cc00`) → generate `IsPrint`/`IsSpace` range tables
+  from Go and port `strconv.Quote`. (Go 1.26 / Rust 1.98 probe)
+- jiff's RFC 3339 output writes UTC as `+00:00` (Go: `Z`) and rounds a sub-minute offset (LMT
+  `+00:19:32` → `+00:20`, Go truncates to `+00:19`); `TimeZone::system()` accepts POSIX `TZ`
+  strings and case-insensitive names where Go's `time.Local` falls back to UTC → resolve `TZ`
+  as Go's `initLocal` does, read the TZif file yourself into `TimeZone::tzif`, and format with
+  an in-tree layout. (S7: 70 of 70 layouts; zone probe in `dhi.io/static`)
+- Go's `strings.ToLower` maps U+0130 `İ` to a plain `i`; Rust's `to_lowercase` gives `i` plus a
+  combining dot, so a case-insensitive match (`İNFO` is a Go log level) differs → special-case
+  it. (throwaway Go program)
 
 ### JSON and YAML
 
@@ -143,8 +164,21 @@ Rust tutorial. Seen in: awtrix-controller.
   features = ["rustls"]` only drops gzip; and ureq 3 turns a 4xx/5xx into `Err(StatusCode)`
   unless `http_status_as_error(false)`, which Go's `resp.StatusCode` check needs. (ureq 3.5
   source)
-- **Logging (slog):** tracing + tracing-subscriber; bridge crates that log through `log` with
-  tracing-log. (spike)
+- **Logging (slog):** tracing's `Visit` has no duration, time, list or group type (`valuable`
+  needs `--cfg tracing_unstable`), `None` fields vanish and `INFO+1` has no `Level`, so a
+  slog-compatible format cannot be a tracing formatter → for byte parity, an in-tree logger with
+  typed values that ports slog's `commonHandler` step by step. hyper, hyper-util, tokio and rustls
+  (no default features) emit nothing through `log`, and hyper-util's `tracing` events vanish
+  without a subscriber: no bridge is needed. (tracing-core 0.1.36 `field.rs`; 306 of 306 corpus
+  records)
+- slog's JSON handler has **two** escapers: strings and keys through its own (`\u0008`, `\u000c`,
+  `<>&` literal), a `[]string` through encoding/json (`\b`, `\f`); floats go through
+  `json.Marshal` (`%f` unless below 1e-6 or from 1e21, `e-07` → `e-7`; NaN becomes the string
+  `"!ERROR:json: unsupported value: NaN"`), text floats through `'g'` → port both escapers and
+  three float layouts; serde_json writes `\b` everywhere. (Go 1.26 captures)
+- slog's `ReplaceAttr` runs on **every** non-group attribute, so a time stripper keyed `time`
+  also drops user attributes named `time`, at any depth; a group it empties is erased without
+  restoring the separator (JSON `"msg":"x""k":1`) or the text key prefix (`g.k=1`). (Go 1.26)
 - **YAML (yaml.v3):** serde_yaml_ng, see §2.
 
 ## 4. Concurrency and shutdown

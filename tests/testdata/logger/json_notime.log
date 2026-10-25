@@ -1,0 +1,54 @@
+{"level":"INFO","msg":"plain","s":"plain"}
+{"level":"INFO","msg":"with space","s":"with space"}
+{"level":"INFO","msg":"say \"hi\"","s":"say \"hi\""}
+{"level":"INFO","msg":"k=v","s":"k=v"}
+{"level":"INFO","msg":"C:\\path\\x","s":"C:\\path\\x"}
+{"level":"INFO","msg":"line1\nline2","s":"line1\nline2"}
+{"level":"INFO","msg":"a\tb","s":"a\tb"}
+{"level":"INFO","msg":"a\rb","s":"a\rb"}
+{"level":"INFO","msg":"a\u0001b","s":"a\u0001b"}
+{"level":"INFO","msg":"ab","s":"ab"}
+{"level":"INFO","msg":"a\u0008b\u000cc","s":"a\u0008b\u000cc"}
+{"level":"INFO","msg":"a\ufffdb","s":"a\ufffdb"}
+{"level":"INFO","msg":"\ufffd","s":"\ufffd"}
+{"level":"INFO","msg":"ok 🚀","s":"ok 🚀"}
+{"level":"INFO","msg":"🚀","s":"🚀"}
+{"level":"INFO","msg":"","s":""}
+{"level":"INFO","msg":"html <a>&amp;","s":"html <a>&amp;"}
+{"level":"INFO","msg":"nbsp x","s":"nbsp x"}
+{"level":"INFO","msg":"zw​x","s":"zw​x"}
+{"level":"INFO","msg":"ls\u2028x","s":"ls\u2028x"}
+{"level":"INFO","msg":"é","s":"é"}
+{"level":"INFO","msg":"repl�x","s":"repl�x"}
+{"level":"INFO","msg":"bidi‮x","s":"bidi‮x"}
+{"level":"INFO","msg":"c1x","s":"c1x"}
+{"level":"INFO","msg":"{brace}","s":"{brace}"}
+{"level":"INFO","msg":"-dash","s":"-dash"}
+{"level":"INFO","msg":"日本語","s":"日本語"}
+{"level":"INFO","msg":"😀\u0000","s":"😀\u0000"}
+{"level":"INFO","msg":"tab\tand space","s":"tab\tand space"}
+{"level":"INFO","msg":"trailing ","s":"trailing "}
+{"level":"INFO","msg":" leading","s":" leading"}
+{"level":"INFO","msg":"keys","with space":"v","":"emptykey","a=b":"v","q\"k":"v","dot.key":"v","k\nnl":"v"}
+{"level":"INFO","msg":"ints","zero":0,"neg":-42,"min":-9223372036854775808,"max":9223372036854775807,"umax":18446744073709551615,"u":7}
+{"level":"INFO","msg":"floats","half":0.5,"big":1e+21,"e20":100000000000000000000,"small":1e-7,"e6":0.000001,"mil":123456789,"negzero":-0,"sum":0.3,"rsum":0.30000000000000004,"stamp":1729771234.5,"one":1,"maxf":1.7976931348623157e+308,"sub":5e-324,"e21m":123456789012345680000}
+{"level":"INFO","msg":"nan","nan":"!ERROR:json: unsupported value: NaN","after":"x"}
+{"level":"INFO","msg":"inf","pinf":"!ERROR:json: unsupported value: +Inf","ninf":"!ERROR:json: unsupported value: -Inf"}
+{"level":"INFO","msg":"bools","t":true,"f":false}
+{"level":"INFO","msg":"durations","zero":0,"ms":500000000,"s30":30000000000,"m1":60000000000,"hms":3723500000000,"ns":1,"us":1500,"neg":-2000000000,"min":-9223372036854775808,"max":9223372036854775807,"h100":360000000000000,"frac":1234567890,"ms1":1000001}
+{"level":"INFO","msg":"times","cet":"2026-10-25T14:03:04.567891234+01:00","utc":"2026-01-02T03:04:05Z","frac":"2026-01-02T03:04:05.12Z","neg":"1999-12-31T23:59:59.999999999-05:30","zero":"0001-01-01T00:00:00Z"}
+{"level":"INFO","msg":"slices and errors","list":["a","b c"],"empty":[],"one":["x"],"ctl":["a\bb\f","\u0001","\u2028\u2029","nl\n",""],"quoted":["\"q\"","<&>"],"err":"dial tcp: \"x\" refused","wrapped":"service list: boom\nline2","nilerr":null}
+{"level":"INFO","msg":"invalid utf8 slice","bad":["\ufffd"]}
+{"level":"INFO","msg":"groups","req":{"method":"GET","n":2},"a":{"b":{"c":1}},"inl":1,"sp ace":{"k":"v w"}}
+{"level":"DEBUG","msg":"debug"}
+{"level":"INFO","msg":"info"}
+{"level":"WARN","msg":"warn"}
+{"level":"ERROR","msg":"error"}
+{"level":"INFO+1","msg":"info+1"}
+{"level":"DEBUG-1","msg":"debug-1"}
+{"level":"ERROR+4","msg":"error+4"}
+{"level":"INFO+3","msg":"warn-1"}
+{"level":"INFO","msg":"with","component":"reconciler","g":{"x":1,"y":2}}
+{"level":"INFO","msg":"with empty group","c":"d"}
+{"level":"INFO","msg":"nested with groups","g1":{"g2":{"h":{"i":3}}}}
+{"level":"INFO","msg":"","k":1}

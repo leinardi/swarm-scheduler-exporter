@@ -1,0 +1,54 @@
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO plain s=plain
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO with space s="with space"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO say "hi" s="say \"hi\""
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO k=v s="k=v"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO C:\\path\\x s="C:\\path\\x"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO line1\nline2 s="line1\nline2"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO a\tb s="a\tb"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO a\rb s="a\rb"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO a\x01b s="a\x01b"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO a\x7fb s="a\x7fb"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO a\x08b\x0cc s="a\bb\fc"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO a\xffb s="a\xffb"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO \xff s="\xff"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO ok 🚀 s="ok 🚀"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO 🚀 s=🚀
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO s=""
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO html <a>&amp; s="html <a>&amp;"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO nbsp\u00a0x s="nbsp\u00a0x"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO zw\u200bx s="zw\u200bx"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO ls\u2028x s="ls\u2028x"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO é s=é
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO repl�x s=repl�x
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO bidi\u202ex s="bidi\u202ex"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO c1\u0085x s="c1\u0085x"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO {brace} s="{brace}"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO -dash s=-dash
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO 日本語 s=日本語
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO 😀\x00 s="😀\x00"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO tab\tand space s="tab\tand space"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO trailing  s="trailing "
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO  leading s=" leading"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO keys "with space"=v ""=emptykey "a=b"=v "q\"k"=v dot.key=v "k\nnl"=v
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO ints zero=0 neg=-42 min=-9223372036854775808 max=9223372036854775807 umax=18446744073709551615 u=7
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO floats half=0.5 big=1e+21 e20=1e+20 small=1e-07 e6=1e-06 mil=1.23456789e+08 negzero=-0 sum=0.3 rsum=0.30000000000000004 stamp=1.7297712345e+09 one=1 maxf=1.7976931348623157e+308 sub=5e-324 e21m=1.2345678901234568e+20
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO nan nan=NaN after=x
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO inf pinf=+Inf ninf=-Inf
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO bools t=true f=false
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO durations zero=0s ms=500ms s30=30s m1=1m0s hms=1h2m3.5s ns=1ns us=1.5µs neg=-2s min=-2562047h47m16.854775808s max=2562047h47m16.854775807s h100=100h0m0s frac=1.23456789s ms1=1.000001ms
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO times cet=2026-10-25T14:03:04.567891234+01:00 utc=2026-01-02T03:04:05Z frac=2026-01-02T03:04:05.12Z neg=1999-12-31T23:59:59.999999999-05:30 zero=0
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO slices and errors list="[a b c]" empty=[] one=[x] ctl="[a\bb\f \x01\x7f \u2028\u2029 nl\n ]" quoted="[\"q\" <&>]" err="dial tcp: \"x\" refused" wrapped="service list: boom\nline2" nilerr=<nil>
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO invalid utf8 slice bad="[\xff]"
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO groups req={req.method=GET req.n=2} a={a.b={a.b.c=1}} "sp ace"={"sp ace.k"="v w"}
+time=2026-10-25T14:03:04.567891234+01:00 level=DEBUG debug
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO info
+time=2026-10-25T14:03:04.567891234+01:00 level=WARN warn
+time=2026-10-25T14:03:04.567891234+01:00 level=ERROR error
+time=2026-10-25T14:03:04.567891234+01:00 level=ERROR info+1
+time=2026-10-25T14:03:04.567891234+01:00 level=DEBUG debug-1
+time=2026-10-25T14:03:04.567891234+01:00 level=ERROR error+4
+time=2026-10-25T14:03:04.567891234+01:00 level=ERROR warn-1
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO with g.component=reconciler g.x=1 g.y=2
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO with empty group eg.c=d
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO nested with groups g1.g2.h={g1.g2.h.i=3}
+time=2026-10-25T14:03:04.567891234+01:00 level=INFO k=1

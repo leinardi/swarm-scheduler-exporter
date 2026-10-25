@@ -29,10 +29,14 @@
 //! one per character, as Go does per rune: names are taken as bytes, because a Go string (and a
 //! command-line argument) may hold invalid UTF-8, and Go counts each invalid byte as one rune.
 //! Label values are never sanitized.
+//!
+//! The high-cardinality warning goes to the global logger, once per label key.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::{LazyLock, Mutex, PoisonError};
+
+use crate::logger::{self, Attr};
 
 /// A reasonable upper bound on a sanitized name's length; Prometheus has no hard limit.
 const MAX_LABEL_NAME_LEN: usize = 100;
@@ -155,15 +159,20 @@ fn log_warn_once(key: &str, warning: impl FnOnce() -> HighCardinalityWarning) {
     }
 }
 
-/// Where a warning goes. The logger is not ported yet, so for now the warning is built and
-/// dropped (the tests capture it); the logger replaces this body.
+/// Logs the warning at warn level on the global logger (the tests also capture it).
 fn emit_warning(warning: &HighCardinalityWarning) {
     #[cfg(test)]
     tests::EMITTED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(warning.clone());
-    let _ = warning;
+    logger::global().warn(
+        HIGH_CARDINALITY_MESSAGE,
+        &[
+            Attr::string("label", &warning.label),
+            Attr::string("sample_value", &warning.sample_value),
+        ],
+    );
 }
 
 /// Maps `name` to a label name: every character outside `[A-Za-z0-9_]` becomes one `_`, non-ASCII
@@ -568,6 +577,26 @@ mod tests {
         maybe_warn_high_cardinality("empty_key", "");
         assert!(!warned("empty_key"));
         assert!(emitted("empty_key").is_empty());
+    }
+
+    /// The warning reaches the global logger at warn level, with Go's message and attributes.
+    #[test]
+    fn high_cardinality_warning_is_logged_at_warn() {
+        let sink = logger::MemorySink::default();
+        logger::set_global(logger::Logger::new(
+            logger::Config {
+                format: logger::Format::Text,
+                level: logger::Level::INFO,
+                include_time: false,
+            },
+            Box::new(sink.clone()),
+            jiff::tz::TimeZone::UTC,
+            std::sync::Arc::new(crate::gofmt_compat::time_layout::go_zero_time),
+        ));
+        maybe_warn_high_cardinality("logged_key", "aabbccddeeff0011");
+        let line = "level=WARN msg=\"label appears high-cardinality; consider avoiding IDs/hashes as \
+                    metric labels\" label=logged_key sample_value=aabbccddeeff0011\n";
+        assert!(sink.contents().contains(line), "{:?}", sink.contents());
     }
 
     /// The warning's sample is the value cut to its first 64 bytes, and the message is Go's.

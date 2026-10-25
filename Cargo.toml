@@ -56,6 +56,11 @@ publish = false
 [lints]
 workspace = true
 
+[dependencies]
+# Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
+# in-tree, the way Go does (src/gofmt_compat), so none of jiff's tzdb or system features is on.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+
 [profile.release]
 lto = true
 codegen-units = 1
