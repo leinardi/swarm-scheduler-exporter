@@ -51,8 +51,9 @@ jobs:
       - name: Install pre-commit
         run: pip install --no-cache-dir pre-commit==4.6.2
 
-      - name: Set up hadolint
-        uses: ./.github/actions/setup-hadolint
+      # droast's ShellCheck bridge runs the shellcheck on PATH: the pinned one, not the runner's.
+      - name: Set up ShellCheck
+        uses: ./.github/actions/setup-shellcheck
 
       # Restore only: pre-commit-warmup.yaml saves the entry on master under the same key.
       - name: Restore the pre-commit cache
@@ -117,9 +118,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The hadolint hook runs the system binary (language: system), which the runner lacks.
-      - name: Set up hadolint
-        uses: ./.github/actions/setup-hadolint
+      # droast's ShellCheck bridge runs the shellcheck on PATH: the pinned one, not the runner's.
+      - name: Set up ShellCheck
+        uses: ./.github/actions/setup-shellcheck
 
       - name: Run pre-commit hooks + reviewdog diff
         uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
@@ -136,7 +137,7 @@ jobs:
             check-toml
             check-added-large-files
             dclint
-            hadolint
+            droast
 
   markdownlint:
     # Reports inline PR review comments over a diff range; a manual dispatch has
@@ -253,7 +254,6 @@ jobs:
         run: bash .github/scripts/binary-attestation-status.test.sh
 
   # The Rust workspace: the same workspace-wide commands as make verify and the pre-commit hooks,
-  # the meta-tests with their tools required (a missing hadolint fails here instead of skipping),
   # plus cargo-deny (advisories, licences, bans and sources; the advisory database needs the
   # network). The toolchain matches rust-toolchain.toml. The cache is saved only on a pull
   # request, as in pre-commit-all.
@@ -276,9 +276,6 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'pull_request' }}
 
-      - name: Set up hadolint
-        uses: ./.github/actions/setup-hadolint
-
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -287,8 +284,6 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run the tests
-        env:
-          SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS: "1"
         run: cargo test --workspace --locked
 
       - name: Check dependencies with cargo-deny

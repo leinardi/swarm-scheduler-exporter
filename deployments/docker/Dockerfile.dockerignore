@@ -22,6 +22,13 @@ tests
 target
 dist
 
+# Local secrets: the build copies the whole context (COPY .), so an environment file must never
+# reach it.
+.env
+**/.env
+.env.*
+**/.env.*
+
 # Editor/IDE
 .idea
 .vscode

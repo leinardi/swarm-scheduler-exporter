@@ -115,10 +115,10 @@ the tagged commit (see [Recovering a failed publish](#recovering-a-failed-publis
    not `refs/heads/master`, and every other job waits on it. `workflow_dispatch` lets the caller
    pick any branch, and the release job holds `contents: write`, `packages: write` and an OIDC
    identity.
-2. **Verify.** `test` (clippy, then `cargo test --workspace` with
-   `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`) and `audit` (cargo-deny over the workspace). They are
-   copies of the CI jobs rather than a call into `ci.yaml`, so a release never depends on which pull
-   request last ran CI, and `test` pins the same Rust toolchain the release builds with.
+2. **Verify.** `test` (clippy, then `cargo test --workspace`) and `audit` (cargo-deny over the
+   workspace). They are copies of the CI jobs rather than a call into `ci.yaml`, so a release never
+   depends on which pull request last ran CI, and `test` pins the same Rust toolchain the release
+   builds with.
 3. **Resolve the version**, as in [Versioning](#versioning).
 4. **Check the tag.** If `refs/tags/<version>` already exists on the remote, the run continues only
    when it points at `HEAD`, as a recovery. Pointing anywhere else is a hard failure. The tag is

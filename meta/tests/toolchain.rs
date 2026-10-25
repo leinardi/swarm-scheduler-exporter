@@ -24,9 +24,9 @@
 
 //! The repository's tooling pins: one Rust line across rust-toolchain.toml, Cargo.toml, the image
 //! and every CI toolchain step; the image's toolchain patch and its musl standard libraries; one
-//! zig and one cargo-zigbuild between the image and CI; one hadolint between the hook and CI; one
+//! zig and one cargo-zigbuild between the image and CI; one ShellCheck between the hook and CI; one
 //! Trivy between the release and the scheduled scan; the always-run hooks running once; no flag
-//! that makes a gate pass on nothing; and the closed list of tools a meta-test may skip on.
+//! that makes a gate pass on nothing; and no meta-test that skips on a missing tool.
 
 use std::collections::BTreeMap;
 
@@ -368,20 +368,21 @@ fn cargo_zigbuild_is_one_version() {
     );
 }
 
-/// Go: `TestHadolintIsOneVersion`. The hadolint hook runs the system binary, so the version CI
-/// installs is the one that lints; it must follow the hook's rev, which Dependabot moves.
+/// Go: `TestShellCheckIsOneVersion`. droast's ShellCheck bridge runs the `shellcheck` on `PATH`,
+/// which CI installs with setup-shellcheck; it must be the release the shellcheck-py hook wraps
+/// (its rev adds a fourth component for the wrapper), which Dependabot moves.
 #[test]
-fn hadolint_is_one_version() {
+fn shellcheck_is_one_version() {
     expect_one_value(
-        "hadolint",
+        "ShellCheck",
         &[
             source(
                 ".pre-commit-config.yaml",
-                r"repo: https://github\.com/hadolint/hadolint\s+rev:\s*(v[\d.]+)",
+                r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)",
             ),
             source(
-                ".github/actions/setup-hadolint/action.yaml",
-                r#"HADOLINT_VERSION:\s*["']?(v[\d.]+)"#,
+                ".github/actions/setup-shellcheck/action.yaml",
+                r#"SHELLCHECK_VERSION:\s*["']?(v[\d.]+)"#,
             ),
         ],
     );
@@ -633,47 +634,28 @@ fn vacuous_flags_are_recognized() {
     }
 }
 
-/// Go: `TestToolGateListIsClosed`. The tools a meta-test may skip on are exactly toolgate's
-/// closed list, hadolint (the Go list held only the Go linter, removed with the Go code), every
-/// gated lookup names one of its constants, and no other source looks a tool up on `PATH` itself,
-/// which would be a skip CI cannot turn into a failure.
+/// Go: `TestToolGateListIsClosed`. No meta-test may skip on a missing tool: none looks a tool up
+/// on `PATH`, since a skip on a missing tool is a pass CI cannot turn into a failure. (The Go list
+/// held only the Go linter; the Dockerfile linter, droast, runs only as a pre-commit hook.) A test
+/// that needs an external tool fails without it.
 #[test]
-fn tool_gate_list_is_closed() {
-    assert_eq!(meta::toolgate::TOOLS, [meta::toolgate::HADOLINT]);
-
+fn no_meta_test_skips_on_a_missing_tool() {
     let own_lookup =
         re(r"\bsplit_paths\(|\bvar_os\(\s*\x22PATH\x22|Command::new\(\s*\x22which\x22");
-    let gated = re(r"toolgate::lookup\(\s*([^)]*)\)");
     let sources = repo::files_under("meta", &[".rs"]);
     assert!(
-        sources.iter().any(|path| path == "meta/src/toolgate.rs"),
-        "the walk did not reach toolgate.rs: {sources:?}"
+        sources.iter().any(|path| path == "meta/tests/toolchain.rs"),
+        "the walk did not reach meta/tests: {sources:?}"
     );
     for path in &sources {
-        let text = repo::read(path);
-        if path != "meta/src/toolgate.rs" {
-            assert!(
-                !own_lookup.is_match(&text),
-                "{path} looks a tool up itself; gate it through toolgate::lookup"
-            );
-        }
-        for call in gated.captures_iter(&text) {
-            let argument = call[1].trim();
-            assert!(
-                argument.starts_with("toolgate::") || argument.starts_with("meta::toolgate::"),
-                "{path} gates on {argument}, which is not a toolgate constant"
-            );
-        }
+        assert!(
+            !own_lookup.is_match(&repo::read(path)),
+            "{path} looks a tool up on PATH; a meta-test needing a tool must fail without it"
+        );
     }
 
-    // The negative control: both checks fire on what they are meant to catch. The samples are split
-    // so this file does not match its own check.
+    // The negative control. The samples are split so this file does not match its own check.
     assert!(own_lookup.is_match(concat!("let found = env::split", "_paths(&paths);")));
     assert!(own_lookup.is_match(concat!("std::env::var", "_os(\x22PATH\x22)")));
-    let sample = concat!("let tool = toolgate::look", "up(\x22hadolint\x22);");
-    let argument = gated
-        .captures(sample)
-        .map(|call| call[1].trim().to_owned())
-        .unwrap_or_default();
-    assert_eq!(argument, "\x22hadolint\x22");
+    assert!(own_lookup.is_match(concat!("Command::new(\x22wh", "ich\x22)")));
 }

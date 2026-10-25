@@ -48,7 +48,7 @@ The pedantic lints that come up most:
 - `missing_errors_doc`, `missing_panics_doc`: a public function returning `Result` has an
   `# Errors` section; one that can panic has `# Panics` (better: make it not panic).
 - `doc_markdown`: identifiers in doc comments go in backticks (`` `service_id` ``,
-  `` `DockerApi` ``); `clippy.toml`'s `doc-valid-idents` adds only `OpenMetrics`.
+  `` `DockerApi` ``); `clippy.toml`'s `doc-valid-idents` adds only `OpenMetrics` and `ShellCheck`.
 - `too_many_lines` (100): split the function into named steps.
 - `needless_pass_by_value`, `trivially_copy_pass_by_ref`: borrow what you only read; pass small
   `Copy` types by value.
@@ -251,8 +251,8 @@ rustfmt does not wrap comments: keep them at 100 columns by hand.
     assert it did not happen, and say so in a comment.
   - **Real elapsed time:** only when the duration is the point (the shutdown budget), as a named
     constant.
-- A meta-test gated on a tool returns early through `meta::toolgate::lookup` when the tool is
-  missing, unless `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`, which CI sets. Every meta-test has
+- A meta-test never skips on a missing tool (`no_meta_test_skips_on_a_missing_tool`): one that
+  needs a tool fails without it. Every meta-test has
   a negative control: a check that passes on an empty input is no check.
 
 ## 14. What to avoid

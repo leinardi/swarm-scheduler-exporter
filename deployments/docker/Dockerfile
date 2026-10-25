@@ -53,8 +53,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # curl and xz fetch and unpack zig and the standard libraries; nothing from this stage but the
 # binary ships. Unpinned: dhi.io republishes this tag with a refreshed package index, which would
-# break any pinned version, and every download below is checked by its own sha256 (.hadolint.yaml
-# ignores DL3008 for this reason).
+# break any pinned version, and every download below is checked by its own sha256.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
 	&& rm -rf /var/lib/apt/lists/*
@@ -132,7 +131,7 @@ ARG VERSION="dev"
 ARG COMMIT="none"
 ARG DATE="unknown"
 
-# The seven OCI labels .hadolint.yaml requires (label-schema, DL3049 as an error).
+# The seven OCI labels droast.toml requires ([required-labels], strict-labels).
 LABEL org.opencontainers.image.title="swarm-scheduler-exporter" \
 	org.opencontainers.image.description="Prometheus exporter for Docker Swarm services/tasks" \
 	org.opencontainers.image.source="https://github.com/leinardi/swarm-scheduler-exporter" \

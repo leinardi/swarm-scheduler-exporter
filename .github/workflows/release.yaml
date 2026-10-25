@@ -125,17 +125,10 @@ jobs:
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      # hadolint on PATH, as in CI's rust job: a meta-test gated on it runs
-      # instead of failing under SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS.
-      - name: Set up hadolint
-        uses: ./.github/actions/setup-hadolint
-
       - name: Lint with clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run the test suite
-        env:
-          SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS: "1"
         run: cargo test --workspace --locked
 
   audit:

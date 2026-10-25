@@ -1,0 +1,47 @@
+#:schema https://raw.githubusercontent.com/immanuwell/dockerfile-roast/main/schemas/droast.schema.json
+
+# Balanced checks for production Dockerfiles
+preset = "production"
+
+# Show warnings and errors, but fail CI only on errors
+min-severity = "warning"
+fail-on = "error"
+
+# Technical diagnostics without humorous messages
+no-roast = true
+
+# Allow justified exceptions, but require explanations
+inline-suppressions = true
+require-suppression-reason = true
+report-unused-suppressions = true
+
+# DF052 (apk add without pinned versions) is info, so min-severity hides it on purpose: Alpine
+# drops superseded package versions from its index, so an exact pin stops building; a stage that
+# installs packages pins its base instead. No Dockerfile here runs apk add today.
+
+# Reject any label outside [required-labels]
+strict-labels = true
+
+# Escalate important reproducibility and security rules
+[severity-overrides]
+DF001 = "error" # Avoid :latest base images
+DF057 = "error" # Require pipefail for shell pipelines
+
+# The seven OCI labels every image carries, each required and validated
+[required-labels]
+"org.opencontainers.image.title" = "text"
+"org.opencontainers.image.description" = "text"
+"org.opencontainers.image.source" = "url"
+"org.opencontainers.image.version" = "text"
+"org.opencontainers.image.revision" = "text"
+"org.opencontainers.image.created" = "text"
+"org.opencontainers.image.licenses" = "spdx"
+
+# ShellCheck must be available; never silently skip it
+[shellcheck]
+mode = "required"
+exclude = []
+
+# Match Docker/BuildKit context conventions
+[workflow]
+engine = "docker"

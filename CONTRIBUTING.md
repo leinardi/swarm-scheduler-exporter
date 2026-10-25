@@ -10,9 +10,8 @@
   only to build the static musl binaries the releases ship outside Docker (the versions
   `.github/actions/setup-zigbuild` pins; `rust-toolchain.toml` adds both musl targets)
 - Docker, for building the container image and running the integration tests
-- [hadolint](https://github.com/hadolint/hadolint) on `PATH`, at the release
-  `.github/actions/setup-hadolint` pins: the hadolint hook and the Dockerfile meta-tests run it (the
-  meta-tests skip without it, unless `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`)
+- [ShellCheck](https://github.com/koalaman/shellcheck) on `PATH`, at the release
+  `.github/actions/setup-shellcheck` pins, for the Dockerfile hook below
 - [`pre-commit`](https://pre-commit.com/): install the hooks once with `make pre-commit-install`. It
   installs both the `pre-commit` and the `commit-msg` hooks, so commit messages are checked when you
   commit, not when the release runs.
@@ -30,6 +29,11 @@ make audit-deps      # cargo-deny against the RustSec advisories (network requir
 make rust-deny       # every cargo-deny check: advisories, licences, bans, sources (network required)
 make docker-build    # the container image, for the host's architecture
 ```
+
+The Dockerfile hook, [droast](https://github.com/immanuwell/dockerfile-roast), is built by
+pre-commit from source at its pinned rev with the Rust toolchain above. Its required
+ShellCheck bridge runs the `shellcheck` on `PATH`: install ShellCheck at the release
+`.github/actions/setup-shellcheck` pins (CI installs it with that action).
 
 `make check` runs the full pre-commit suite on every file, and `make check-stage` runs it on the
 staged files only.

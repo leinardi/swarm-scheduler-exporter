@@ -248,8 +248,8 @@ always-run hooks and vacuous flags (`meta/tests/toolchain.rs`), the plain/integr
 `suppressions.rs`). Run the vacuity pass on every one the diff touches, or whose input the diff
 changes: try to make the guarded thing go wrong and see whether the test still notices. A test
 that passes because its walk found no file, its regex matched nothing, its rule never ran or its
-tool was skipped (`meta::toolgate` skips a missing tool unless
-`SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`) is a false pass. Every rule needs a negative control
+tool was missing is a false pass (no meta-test may skip on one:
+`no_meta_test_skips_on_a_missing_tool`). Every rule needs a negative control
 that fails on a planted violation, and a non-empty-input assertion. A change that loosens one —
 a wider allowlist, a narrower walk, a dropped negative control, a pattern that no longer
 matches the file it reads — is a finding unless it says why.
@@ -305,7 +305,7 @@ intent was. If one exists, is the diff removing exactly what that line retires a
 
 ### (c) A new suppression has to show its work
 
-Any new `#[expect(...)]`, `# shellcheck disable=` or `# hadolint ignore=` is a standing decision to
+Any new `#[expect(...)]`, `# shellcheck disable=` or `# droast ignore=` is a standing decision to
 let a linter stay silent. `scripts/check-suppressions.sh` makes the count visible -- the commit
 has to change `.suppressions-baseline` -- but it cannot judge the reason. So demand the attempt:
 for `too_many_lines`, was the obvious extraction tried and what broke? For a cast lint, why is
@@ -347,15 +347,14 @@ treat a failure it caused as a confirmed finding with the output attached:
 | any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` (build, fmt, clippy, tests), then `make check` |
 | `src/collector/**`, `src/docker/**`, `testenv/**` | also `make test-integration` (a DinD Swarm; needs Docker with privileged containers) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (cargo-deny; network required) |
-| `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
-| `deployments/docker/Dockerfile` | hadolint via `make check`, plus `make docker-build` |
+| `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
+| `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, plus `make docker-build` |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 
 Several hooks rewrite files (prettier, markdownlint, dclint): check `git status` afterwards and
 report a rewrite as a finding instead of reviewing the rewritten tree. A skipped test is not a
-pass: a meta-test whose tool is missing returns early with a note on stderr unless
-`SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`, and the integration runner prints `SKIP`. If a gate
+pass: the integration runner prints `SKIP` for a test it could not run. If a gate
 is impractical here (no Docker daemon, no network for cargo-deny), say so explicitly and mark
 that risk unverified rather than implying it passed.
 

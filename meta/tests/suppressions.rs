@@ -108,12 +108,12 @@ fn run() {}
 fn real() {}
 "##;
 
-/// Both hadolint forms: the per-line one and the global one, which silences a rule for the whole
+/// Both droast forms: the per-line one and the global one, which silences a rule for the whole
 /// file and is therefore counted as its own family.
 const DOCKERFILE_WITH_IGNORES: &str = "FROM scratch
 
-# hadolint global ignore=DL3006
-# hadolint ignore=DL3007,DL3008
+# droast global ignore=DF020 reason=\x22the runtime injects a numeric user\x22
+# droast ignore=DF007,DF052 reason=\x22the workspace needs the whole context\x22
 COPY x /x
 ";
 
@@ -439,12 +439,12 @@ fn counts_every_family() {
     assert!(updated, "--update failed:\n{output}");
     let written = scratch.read(BASELINE_FILE);
 
-    // The global hadolint form is its own family, and each code of a multi-code directive and each
+    // The global droast form is its own family, and each code of a multi-code directive and each
     // lint of a multi-lint attribute counts separately.
     for line in [
-        "hadolint-global-ignore/DL3006\t1",
-        "hadolint-ignore/DL3007\t1",
-        "hadolint-ignore/DL3008\t1",
+        "droast-global-ignore/DF020\t1",
+        "droast-ignore/DF007\t1",
+        "droast-ignore/DF052\t1",
         "shellcheck-disable/SC2086\t1",
         "expect/clippy::pedantic\t1",
         "expect/clippy::too_many_lines\t1",

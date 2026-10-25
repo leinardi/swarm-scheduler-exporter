@@ -34,8 +34,7 @@ exporter, and need no Docker: the toolchain pins and the always-run hooks (`tool
 plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
 the Docker SDK boundary (`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the
 Markdown links (`docs.rs`) and the two scripts below (`license_headers.rs`, `suppressions.rs`).
-`SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` turns a missing hadolint into a failure instead of a
-skip, as CI's `rust` job does.
+None of them skips on a missing tool.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -86,7 +85,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   exporter package depends on it in no table; `meta/tests/docker_boundary.rs` checks it), and the
   integration suite's runner and tests under `testenv/tests/integration`.
 - `meta/` — the meta-tests, which check the repository rather than the exporter, with their
-  helpers in `meta/src` (`repo`, `gitenv`, `toolgate`, the Dockerfile and Markdown readers).
+  helpers in `meta/src` (`repo`, `gitenv`, the Dockerfile and Markdown readers).
 - `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
@@ -141,7 +140,7 @@ The ones to keep in mind while writing code:
   the reason is mandatory, and an `#[expect]` that stops firing fails the build.
 - Fixtures under `testdata/` are byte-for-byte captures (Engine API wire captures, golden files);
   the whitespace pre-commit hooks skip them, so do not tidy them by hand.
-- A new `#[expect]`, `# shellcheck disable=` or `# hadolint ignore=` explains why the fix does not
+- A new `#[expect]`, `# shellcheck disable=` or `# droast ignore=` explains why the fix does not
   apply here, not which lint fired.
 - Where a test or a module replaces Go code, its provenance (`/// Go: TestX`) is a doc comment;
   sources name no Go source file, and the reasoning behind a port lives in the commit bodies.
@@ -154,8 +153,8 @@ header, with the year of the file's first commit (`scripts/check-license-headers
 
 Every in-file suppression is counted per rule against `.suppressions-baseline` by the
 `check-suppressions` hook (`scripts/check-suppressions.sh`), in five families: each lint of an
-`#[expect(...)]` or `#[allow(...)]`, `# shellcheck disable=`, `# hadolint ignore=` and
-`# hadolint global ignore=`. A commit that adds one, swaps one or moves one must change the
+`#[expect(...)]` or `#[allow(...)]`, `# shellcheck disable=`, `# droast ignore=` and
+`# droast global ignore=`. A commit that adds one, swaps one or moves one must change the
 baseline too, and so must one whose count fell below it: run
 `scripts/check-suppressions.sh --update` and commit the baseline with the change.
 
@@ -167,13 +166,13 @@ Run before considering an edit done. `make check` applies to every row.
 | --- | --- |
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (network) |
-| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
+| `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
 | `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
 | `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
-| `meta/**` | `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` |
+| `meta/**` | `cargo test -p meta` |
 | `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
 
 ## Project skills
