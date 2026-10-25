@@ -606,7 +606,7 @@ scrape_configs:
 ## 🛠 Addressed vs Original Project
 
 - **Data races**: one reconciler task owns every cache and per-service metric write; removed
-  global `nodeCount`; no per-event tasks.
+  the shared global node count; no per-event tasks.
 - **Event resiliency**: reconnect with capped backoff and a resync on every reconnect; a bounded
   dirty set that falls back to a full resync; periodic resync.
 - **Series lifecycle**: `replicas_state` is rebuilt and published as one snapshot per poll, so a
@@ -626,6 +626,9 @@ scrape_configs:
   rollbacks/paused/update flows.
 - **SLO helpers**: `swarm_service_running_replicas` and `swarm_service_at_desired` for direct
   alerting/dashboards.
+- **Footprint**: since 2.0 a static Rust binary on a distroless base, with a smaller image and
+  binary than the Go 1.x releases (see [Resource usage](#-resource-usage)), and a Docker client
+  that can only send read requests.
 
 ## 🔄 Migrating from 1.x
 

@@ -317,9 +317,11 @@ is compromised, would execute inside the release job, which holds `contents: wri
 `packages: write` and an OIDC identity. A SHA cannot be moved. Dependabot's `github-actions`
 ecosystem updates the pins and rewrites the comment.
 
-**Every image the release job runs is pinned by digest**: the job-local registry (`REGISTRY_IMAGE`)
-and skopeo (`SKOPEO_IMAGE`) in the workflow's `env`, and the base images in the Dockerfile. The
-Dockerfile frontend (`# syntax=docker/dockerfile:…`) is pinned by digest too, so BuildKit never
+**Every image the release job runs itself is pinned by digest**: the job-local registry
+(`REGISTRY_IMAGE`) and skopeo (`SKOPEO_IMAGE`) in the workflow's `env`. The `dhi.io` base images of
+the Dockerfile are the exception, pinned by tag for the reason given under
+[Why the build happens before the tag](#why-the-build-happens-before-the-tag). The Dockerfile
+frontend (`# syntax=docker/dockerfile:…`) is pinned by digest too, so BuildKit never
 pulls a frontend that moved under its tag. Dependabot's `docker` ecosystem does not update that
 syntax line, nor the images in the workflow's `env`, so they are bumped by hand: resolve the new
 index digest with `docker buildx imagetools inspect <image>:<tag>` and replace the tag and the
@@ -405,6 +407,27 @@ merge.
 Repository admins keep the ruleset's pull-request bypass, so an admin can still merge a pull request
 whose check fails. That is a deliberate escape hatch, not a gap in the check.
 
+### Bumping the Rust toolchain
+
+One exact Rust release builds everything: `rust-toolchain.toml`, every `dtolnay/rust-toolchain`
+step in the workflows and the `dhi.io/rust:<version>-debian13-dev` tag of the Dockerfile's build
+stage, and `meta/tests/toolchain.rs` fails when any of them differs, patch included. Dependabot
+ignores the `rust` image on purpose: `dhi.io/rust` has no rustup, so the build stage adds each musl
+target by unpacking `rust-std-<version>-<triple>.tar.xz` from static.rust-lang.org and checking it
+against a sha256 written in the Dockerfile, and those archives must be the image's exact release.
+A bump is therefore one hand-made pull request that moves, together:
+
+1. the image tag and `ARG RUST_VERSION` in the Dockerfile;
+2. the two `rust-std` sha256s (the `.sha256` file published next to each archive);
+3. `rust-toolchain.toml` and every toolchain step under `.github`;
+4. the MSRV in `Cargo.toml` when the minor version changes.
+
+zig and cargo-zigbuild follow the same rule between the Dockerfile and
+`.github/actions/setup-zigbuild`: the version and the x86_64 archive's sha256 are each one value,
+checked by the same meta-test. A release built after such a bump produces new binary digests, as
+any toolchain change does; a recovery of an older release must run on its own commit, which still
+names its own toolchain.
+
 ## Commit messages are checked on every pull request
 
 Every commit must be a Conventional Commit with a scope (see
@@ -419,3 +442,20 @@ Only merge commits are enabled on this repository; squash and rebase merging are
 commit in a pull request therefore lands on `master` as it is, and the pull-request title never
 becomes a commit subject, which is why there is no title check. If squash merging is ever enabled,
 the title becomes the commit subject, and a pull-request title check has to be added to CI first.
+
+## Historical notes: the Go releases (1.x)
+
+Releases up to and including `v1.3.2` were built from the Go implementation, which the 2.0 cutover
+replaced. What differed then, for anyone recovering or auditing one of them:
+
+- The binaries were built by `go build` with `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`,
+  the version stamped through `-ldflags -X`, and the Go version taken from `go.mod`; the image's
+  build stage was `dhi.io/golang`.
+- The `test` job ran `make go-vet` and `go test -race ./...`, and the `audit` job ran govulncheck;
+  CI's required `ci-result` also needed `repo-gates`, `go-test` and `go-vulncheck`.
+- `svu` was installed with `go install`, and the Go module and build caches were restored by
+  `actions/setup-go`.
+- Dependabot's `gomod` updates were the dependency bumps committed as `fix(deps)`.
+
+A recovery of a 1.x release runs on that release's commit, whose workflows still describe all of
+this, so nothing in this section is needed to run one.

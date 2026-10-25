@@ -40,8 +40,15 @@ staged files only.
 manager and two workers, each a privileged `docker:dind` container on your Docker daemon, joined
 over a dedicated bridge network. The harness is the `testenv` crate, with the Docker SDK behind its
 `integration` feature, and the suite is its `integration` test target (`testenv/tests/integration`),
-a runner of its own: one cluster for the whole run, the tests one after another. The same suite runs
-on every pull request (`.github/workflows/integration.yaml`).
+a runner of its own (`harness = false`): one cluster for the whole run, the tests one after another,
+since they share the cluster and several of them disrupt its nodes. A plain `cargo test` never
+builds it, because the target requires the `integration` feature; that is what keeps the ordinary
+test run free of Docker. The same suite runs on every pull request
+(`.github/workflows/integration.yaml`).
+
+A new test is a function in one of the modules under `testenv/tests/integration`, registered by
+name in the `TESTS` table of `main.rs`; the names keep the `TestArea_Behaviour` form, so a `RUN`
+pattern selects them the way it always has.
 
 Prerequisites: a Docker daemon that allows privileged containers. The host may itself be a Swarm
 node: the test Swarm lives entirely inside the DinD containers, and nothing on the host daemon is
@@ -54,11 +61,13 @@ make test-integration RUN='^TestNode_'           # only the tests matching a reg
 make test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden file under testenv/tests/integration/testdata
 ```
 
-`RUN` takes the patterns of Go's `-run` flag: a regular expression per `/`-separated level
-(`'^TestSocketProxy_ExampleAllowlist/denied'`), unanchored. A pattern that selects no test fails the
-run instead of passing it, and the run prints how many tests it selected. Each test and subtest
-prints a `--- PASS` or `--- FAIL` line with its duration, then the run prints the selected, passed
-and failed counts. `SSE_IT_BINARY` names another binary to test instead of the release build.
+`RUN` takes the patterns of Go's `-run` flag rather than libtest's substring filter: a regular
+expression per `/`-separated level (`'^TestSocketProxy_ExampleAllowlist/denied'`), unanchored, with
+a top-level `|` separating whole alternatives (`'^TestNode_Drain$|^TestService_'`). A pattern that
+selects no test fails the run instead of passing it, so a typo cannot certify coverage, and the run
+prints how many tests it selected. Each test and subtest prints a `--- PASS` or `--- FAIL` line with
+its duration, then the run prints the selected, passed and failed counts. `SSE_IT_BINARY` names
+another binary to test instead of the release build.
 
 - `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails, and prints
   the manager's address (`DOCKER_HOST=tcp://127.0.0.1:<port> docker node ls`) and the command that

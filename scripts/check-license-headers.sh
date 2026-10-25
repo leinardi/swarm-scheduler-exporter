@@ -160,7 +160,7 @@ done < <(git ls-files -z)
 if [[ ${#missing[@]} -gt 0 ]]; then
 	echo "These files lack the MIT header:" >&2
 	printf '  %s\n' "${missing[@]}" >&2
-	echo "Copy the header from any Go or shell file (IntelliJ: the MIT copyright profile), with" >&2
+	echo "Copy the header from any Rust or shell file (IntelliJ: the MIT copyright profile), with" >&2
 	echo "the year of the file's first commit." >&2
 	exit 1
 fi
