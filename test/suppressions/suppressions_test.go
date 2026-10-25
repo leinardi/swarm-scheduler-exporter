@@ -136,6 +136,54 @@ const shellWithDisableSC2034 = `#!/usr/bin/env bash
 unused=1
 `
 
+// rustWithAttributes carries every Rust lint-attribute form the ratchet counts: an inner and an
+// outer expect, an allow, and a multi-line expect naming two clippy lints the way rustfmt wraps a
+// long attribute. The reason item is not a lint, commas and parentheses inside it included.
+const rustWithAttributes = `#![expect(clippy::pedantic, reason = "scratch fixture, (inner)")]
+
+#[expect(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    reason = "scratch fixture"
+)]
+fn long() {}
+
+#[allow(dead_code)]
+fn unused() {}
+
+#![allow(missing_docs)]
+`
+
+// rustWithAttributeText mentions lint attributes only as data: in a raw string spanning lines, in
+// a string, in a line comment and in a nested block comment, around character literals holding a
+// quote. None of it is a suppression.
+const rustWithAttributeText = `const FIXTURE: &str = r#"
+#[allow(clippy::unwrap_used)]
+"#;
+const TEXT: &str = "#[expect(dead_code)]";
+// #[allow(dead_code)]
+/* #[allow(dead_code)] /* nested */ #[allow(dead_code)] */
+fn quote<'a>(text: &'a str) -> char { let _quote = '"'; '#' }
+`
+
+// rustWithMultiLineExpect is a multi-line expect naming one lint.
+const rustWithMultiLineExpect = `#[expect(
+    clippy::too_many_lines,
+    reason = "scratch fixture"
+)]
+fn long() {}
+`
+
+// rustWithMultiLineExpectExtended adds a second lint on its own line inside the same attribute:
+// the opening line is untouched, so only the line naming the lint shows the addition.
+const rustWithMultiLineExpectExtended = `#[expect(
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    reason = "scratch fixture"
+)]
+fn long() {}
+`
+
 // backquote opens and closes a Go raw string, which a raw string in this file cannot contain.
 const backquote = "`"
 
@@ -388,6 +436,8 @@ func TestCheckSuppressionsCountsEveryFamily(t *testing.T) {
 	writeFile(t, dir, "run.sh", shellWithDisable)
 	writeFile(t, dir, "bare.go", goWithBareNolint)
 	writeFile(t, dir, "spaced.go", goWithSpacedList)
+	writeFile(t, dir, "src/attributes.rs", rustWithAttributes)
+	writeFile(t, dir, "src/text.rs", rustWithAttributeText)
 	writeBaseline(t, dir, "")
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "-q", "-m", "one file per family")
@@ -408,12 +458,52 @@ func TestCheckSuppressionsCountsEveryFamily(t *testing.T) {
 		"nolint/*\t1",
 		"nolint/gosec\t1",
 		"nolint/errcheck\t1",
+		"expect/clippy::pedantic\t1",
+		"expect/clippy::too_many_lines\t1",
+		"expect/clippy::cast_possible_truncation\t1",
+		"allow/dead_code\t1",
+		"allow/missing_docs\t1",
 	}
 
 	for _, line := range want {
 		if !strings.Contains(written, line) {
 			t.Errorf("baseline does not record %q:\n%s", line, written)
 		}
+	}
+
+	// The Rust text fixture names clippy::unwrap_used and expect/dead_code only as data; the one
+	// real allow(dead_code) is in the attributes fixture.
+	for _, unwanted := range []string{"allow/clippy::unwrap_used", "expect/dead_code", "reason"} {
+		if strings.Contains(written, unwanted) {
+			t.Errorf("baseline records %q, which is not a suppression:\n%s", unwanted, written)
+		}
+	}
+}
+
+// TestCheckSuppressionsSeesALintAddedToAMultiLineExpect pins that a Rust lint is located on the
+// line that names it, not on the line that opens the attribute: rustfmt puts each lint of a long
+// attribute on its own line, and adding one there leaves the opening line untouched.
+func TestCheckSuppressionsSeesALintAddedToAMultiLineExpect(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	writeFile(t, dir, "scratch.rs", rustWithMultiLineExpect)
+	writeBaseline(t, dir, "expect/clippy::too_many_lines\t1")
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "-q", "-m", "scratch fixture")
+
+	writeFile(t, dir, "scratch.rs", rustWithMultiLineExpectExtended)
+	git(t, dir, "add", "scratch.rs")
+
+	output, err := runRatchet(t, dir)
+	if err == nil {
+		t.Fatalf("the ratchet accepted a lint added to an existing expect:\n%s", output)
+	}
+
+	if !strings.Contains(output, "scratch.rs:3\texpect/clippy::cast_possible_truncation") {
+		t.Errorf("output does not locate the added lint on its own line:\n%s", output)
 	}
 }
 

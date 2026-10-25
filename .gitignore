@@ -28,6 +28,9 @@ desktop.ini
 *.coverprofile
 profile.*
 
+# Rust build outputs
+/target/
+
 # Go workspaces and vendoring
 go.work
 go.work.sum

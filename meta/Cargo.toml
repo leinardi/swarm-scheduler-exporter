@@ -1,0 +1,16 @@
+[package]
+name = "meta"
+version = "0.0.0"
+description = "Repository meta-tests for swarm-scheduler-exporter"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+toml = "1.1.8"

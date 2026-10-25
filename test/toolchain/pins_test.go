@@ -51,6 +51,7 @@ var exactTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 const (
 	setupGo       = "actions/setup-go"
 	golangciLintA = "golangci/golangci-lint-action"
+	rustToolchain = "dtolnay/rust-toolchain"
 )
 
 // TestActionStepsArePinned: no setup-go or golangci-lint-action step under .github leaves its
@@ -120,6 +121,33 @@ func TestHadolintIsOneVersion(t *testing.T) {
 			pattern: regexp.MustCompile(`HADOLINT_VERSION:\s*["']?(v[\d.]+)`),
 		},
 	}, nil)
+}
+
+// TestRustToolchainIsOneValue: every dtolnay/rust-toolchain step installs the toolchain
+// rust-toolchain.toml pins, so CI lints and tests with the compiler the developers use.
+func TestRustToolchainIsOneValue(t *testing.T) {
+	t.Parallel()
+
+	var installs []pinValue
+
+	for _, step := range githubActionSteps(t) {
+		if step.action != rustToolchain {
+			continue
+		}
+
+		installs = append(installs, pinValue{step.with["toolchain"], step.file})
+	}
+
+	if len(installs) == 0 {
+		t.Error("no workflow installs the Rust toolchain; the rust job needs it")
+	}
+
+	expectOneValue(t, "Rust toolchain", []pinSource{
+		{
+			file:    "rust-toolchain.toml",
+			pattern: regexp.MustCompile(`(?m)^channel = "(\d+\.\d+\.\d+)"$`),
+		},
+	}, installs)
 }
 
 // TestTrivyIsOneVersion: the release scan and the scheduled scan of the published image use one

@@ -126,6 +126,22 @@ func TestHeaderCases(t *testing.T) {
 			},
 			false,
 		},
+		// Rust carries the same /* */ block as Go.
+		"rust file with the header": {
+			map[string]string{"src/x.rs": strings.Replace(goHeader, "package x\n", "fn x() {}\n", 1)},
+			true,
+		},
+		"rust file without a header": {map[string]string{"src/x.rs": "fn x() {}\n"}, false},
+		"rust file with another copyright holder": {
+			map[string]string{
+				"meta/src/x.rs": strings.ReplaceAll(goHeader, "Roberto Leinardi", "Someone Else"),
+			},
+			false,
+		},
+		"rust testdata fixture": {
+			map[string]string{"tests/testdata/fixture.rs": "fn x() {}\n"},
+			true,
+		},
 		"shell script with the header": {map[string]string{"scripts/a.sh": shellHeader}, true},
 		"shell script without a header": {
 			map[string]string{"scripts/a.sh": "#!/usr/bin/env bash\necho\n"},
@@ -143,6 +159,7 @@ func TestHeaderCases(t *testing.T) {
 			false,
 		},
 		"local make fragment, no header": {map[string]string{".mk/verify.mk": "x:\n"}, false},
+		"rust make fragment, no header":  {map[string]string{".mk/rust.mk": "x:\n"}, false},
 		"makefile without a header":      {map[string]string{"Makefile": makefile}, false},
 		// goHeader's last required line is its eighth: 22 lines before it put it on line 30, the
 		// last line of the window, and one more pushes it out.

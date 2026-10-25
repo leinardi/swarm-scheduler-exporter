@@ -1,0 +1,15 @@
+# Applies to every workspace member: clippy reads the clippy.toml of the workspace root.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# The exporter reads the wall clock through the injected Clock, so the tests can drive it with
+# tokio's paused clock. Only the clock module reads it directly, through an
+# #[expect(clippy::disallowed_methods, reason = "...")]. tokio::time::Instant::now stays allowed:
+# it follows the paused clock.
+disallowed-methods = [
+    { path = "jiff::Timestamp::now", reason = "read the time from the injected Clock" },
+    { path = "jiff::Zoned::now", reason = "read the time from the injected Clock" },
+    { path = "std::time::SystemTime::now", reason = "read the time from the injected Clock" },
+    { path = "std::time::Instant::now", reason = "read the time from the injected Clock" },
+]

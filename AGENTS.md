@@ -151,6 +151,9 @@ after review:
 
 - `go-style-guide` — before any `.go` edit.
 - `adversarial-review` — for any review request ("review my diff", "is this ready to merge").
+- `go-to-rust-port` — before planning, implementing or reviewing any part of the port to Rust.
+  A new learning goes into this repository copy (never `~/.claude`), in the same commit as the
+  change that found it.
 
 ## Commit messages
 

@@ -1,0 +1,66 @@
+[workspace]
+# Listed explicitly, never as a glob: meta/tests/workspace_lints.rs checks each member's manifest.
+members = [".", "meta", "testenv"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+authors = ["Roberto Leinardi"]
+repository = "https://github.com/leinardi/swarm-scheduler-exporter"
+
+# The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
+# not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
+# workspace-wide.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Only `#[expect(lint, reason = "...")]` may silence a lint: it fails once the lint stops firing,
+# and the reason is mandatory. Every one is counted by scripts/check-suppressions.sh.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# No panics outside tests; clippy.toml allows both in tests.
+unwrap_used = "deny"
+expect_used = "deny"
+# Output goes through the logger, or an explicit writeln! to a handle.
+print_stdout = "deny"
+print_stderr = "deny"
+# A match on an enum names every variant, so a new variant is a compile-time decision everywhere.
+wildcard_enum_match_arm = "deny"
+# Descriptive names; clippy's default allow-list applies.
+min_ident_chars = "deny"
+# The wall-clock ban in clippy.toml is only enforced if the lint is.
+disallowed_methods = "deny"
+
+# Dependency conventions, for the crates the port adds (S1-S8 spikes):
+# - rustls and tokio-rustls with `default-features = false` plus the `ring` feature, which keeps
+#   aws-lc-sys (C, hard to cross-build for musl) out of the graph;
+# - hyper and hyper-util with only `http1`, `client` or `server`, and the tokio features;
+# - no tracing or log bridge: the logger is in-tree, and hyper, hyper-util, tokio and rustls print
+#   nothing without a subscriber.
+
+[package]
+name = "swarm-scheduler-exporter"
+version = "0.0.0"
+description = "Prometheus exporter for the Docker Swarm scheduler"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+# unwind, not abort (awtrix-controller aborts): the reconciler recovers a panicking step with
+# catch_unwind, logs it and requests a resync, the way the Go code recovers it with recover().
+# Under panic = "abort" there would be nothing to catch.
+panic = "unwind"

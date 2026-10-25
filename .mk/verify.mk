@@ -25,7 +25,8 @@
 ifndef MK_LOCAL_VERIFY_INCLUDED
 MK_LOCAL_VERIFY_INCLUDED := 1
 
-# Local snippet (NOT part of make-common): one command that verifies the Go code the way CI does.
+# Local snippet (NOT part of make-common): one command that verifies the Go and the Rust code the
+# way CI does. verify-rust lives in rust.mk.
 #
 # go-vet sees only untagged files. The integration-tagged harness and suite are vetted on their
 # own, so a Go change that breaks them fails here and not first on a machine with Docker; running
@@ -36,6 +37,6 @@ MK_LOCAL_VERIFY_INCLUDED := 1
 verify-go: go-build go-test go-vet go-vet-integration go-lint ## Verify the Go code (build, race tests, vet untagged and integration-tagged, lint)
 
 .PHONY: verify
-verify: verify-go ## Verify everything (the Go code)
+verify: verify-go verify-rust ## Verify everything (the Go and the Rust code)
 
 endif  # MK_LOCAL_VERIFY_INCLUDED

@@ -70,3 +70,18 @@ updates:
       go-modules:
         patterns:
           - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # chore, not fix, while Go is the shipped product: the Rust crates reach neither the binary nor
+    # the image yet, so a bump must not cut a Go release. Becomes fix(deps) when Rust ships.
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    groups:
+      cargo-crates:
+        patterns:
+          - "*"

@@ -31,9 +31,9 @@
 # Two rules, and the second is the one that matters:
 #
 #   1. No count may exceed its baseline, and no rule may appear that the baseline does not know.
-#      Counts are per rule: one per nolint linter, and one per code for the shellcheck and
-#      hadolint directives. Deleting a suppression
-#      of one rule therefore cannot pay for adding a suppression of another.
+#      Counts are per rule: one per nolint linter or Rust lint, and one per code for the hadolint
+#      and shellcheck directives. Deleting a suppression of one rule therefore cannot pay for
+#      adding a suppression of another.
 #   2. A staged diff that adds a suppression line is refused unless the same commit also changes
 #      the baseline file. Rule 1 alone is blind to a swap within the same rule (delete one
 #      //nolint:gosec, add another), and the baseline file is the thing a reviewer reads.
@@ -45,10 +45,12 @@
 # file -- has to stage: those leave every count where it was, so without the stamp rule 2 would
 # refuse with nothing to change.
 #
-# These four families (nolint, shellcheck-disable, hadolint-ignore, hadolint-global-ignore) are
-# the mechanisms this repository's code linters read. Others exist -- markdownlint-disable,
-# yamllint's disable-line, shellcheck directives inside workflow run: blocks -- and are not counted;
-# adding a family here is the moment to start counting one.
+# These six families (nolint, expect, allow, shellcheck-disable, hadolint-ignore,
+# hadolint-global-ignore) are the mechanisms this repository's code linters read. The two Rust
+# families key on the lint path as written, so expect/clippy::unwrap_used and expect/unwrap_used
+# would be different rules; a cfg_attr-wrapped lint attribute is not counted. Others exist --
+# markdownlint-disable, yamllint's disable-line, shellcheck directives inside workflow run: blocks
+# -- and are not counted; adding a family here is the moment to start counting one.
 #
 # Upstream and fixture files are not scanned (see EXCLUDED_PREFIXES): a suppression nobody in this
 # repository wrote is not a decision this ratchet can hold anyone to, and refreshing a file from
@@ -153,9 +155,170 @@ function go_comment_start(s,   i, n, c, next_c, quote) {
 	return 0
 }
 
+# --- Rust ---
+#
+# A Rust lint attribute counts wherever it sits in code: outer or inner, on a line of its own or
+# after other tokens, and spread over several lines the way rustfmt wraps a long one. Each lint it
+# names is a rule of its own, reported on the line that names it, so adding a lint to an existing
+# multi-line attribute is an addition too. The reason = "..." item is not a lint and is skipped.
+#
+# Strings, raw strings, character literals and (nesting) block comments are tracked across lines,
+# so attribute text inside a fixture or a comment is not a suppression.
+
+function rs_finish_item(   name) {
+	name = attr_item
+	gsub(/[ \t]/, "", name)
+	if (name ~ /^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$/) {
+		printf "%s:%d\t%s/%s\n", path, attr_item_line, attr_family, name
+	}
+	attr_item = ""
+	attr_item_line = 0
+}
+
+# rs_attr_char feeds one character of an attribute's argument list, outside any string or comment.
+function rs_attr_char(c) {
+	if (c == "(") {
+		attr_item = attr_item c
+		attr_depth++
+		return
+	}
+	if (c == ")") {
+		attr_depth--
+		if (attr_depth == 0) {
+			rs_finish_item()
+			attr_family = ""
+			return
+		}
+		attr_item = attr_item c
+		return
+	}
+	if (c == "," && attr_depth == 1) {
+		rs_finish_item()
+		return
+	}
+	if (attr_item_line == 0 && c !~ /[ \t]/) {
+		attr_item_line = FNR
+	}
+	attr_item = attr_item c
+}
+
+function rs_scan(s,   i, n, c, two, closing, token, prev) {
+	n = length(s)
+	i = 1
+
+	while (i <= n) {
+		c = substr(s, i, 1)
+		two = substr(s, i, 2)
+
+		if (rs_block > 0) {
+			if (two == "/*") {
+				rs_block++
+				i += 2
+			} else if (two == "*/") {
+				rs_block--
+				i += 2
+			} else {
+				i++
+			}
+			continue
+		}
+
+		if (rs_raw >= 0) {
+			closing = "\""
+			for (token = 0; token < rs_raw; token++) {
+				closing = closing "#"
+			}
+			if (substr(s, i, length(closing)) == closing) {
+				rs_raw = -1
+				i += length(closing)
+			} else {
+				i++
+			}
+			continue
+		}
+
+		if (rs_str) {
+			if (c == "\\") {
+				i += 2
+			} else {
+				if (c == "\"") {
+					rs_str = 0
+				}
+				i++
+			}
+			continue
+		}
+
+		if (two == "//") {
+			return
+		}
+
+		if (two == "/*") {
+			rs_block = 1
+			i += 2
+			continue
+		}
+
+		prev = (i > 1 ? substr(s, i - 1, 1) : "")
+		if ((c == "r" || c == "b") && prev !~ /[A-Za-z0-9_]/ && match(substr(s, i), /^b?r#*"/)) {
+			token = substr(s, i, RLENGTH)
+			rs_raw = gsub(/#/, "", token)
+			if (attr_family != "") {
+				attr_item = attr_item "\""
+			}
+			i += RLENGTH
+			continue
+		}
+
+		if (c == "\"") {
+			rs_str = 1
+			if (attr_family != "") {
+				attr_item = attr_item c
+			}
+			i++
+			continue
+		}
+
+		if (c == quote_rune) {
+			if (substr(s, i + 1, 1) == "\\") {
+				token = index(substr(s, i + 3), quote_rune)
+				i = (token > 0 ? i + 3 + token : n + 1)
+			} else if (substr(s, i + 2, 1) == quote_rune) {
+				i += 3
+			} else {
+				# A lifetime or a label.
+				i++
+			}
+			continue
+		}
+
+		if (attr_family != "") {
+			rs_attr_char(c)
+			i++
+			continue
+		}
+
+		if (c == "#" && match(substr(s, i), /^#!?\[[ \t]*(expect|allow)[ \t]*\(/)) {
+			token = substr(s, i, RLENGTH)
+			attr_family = (token ~ /expect/ ? "expect" : "allow")
+			attr_depth = 1
+			attr_item = ""
+			attr_item_line = 0
+			i += RLENGTH
+			continue
+		}
+
+		i++
+	}
+}
+
 FNR == 1 {
 	raw_open = 0
 	block_open = 0
+	rs_block = 0
+	rs_raw = -1
+	rs_str = 0
+	attr_family = ""
 }
 
 {
@@ -195,6 +358,11 @@ FNR == 1 {
 				emit("nolint/*")
 			}
 		}
+		next
+	}
+
+	if (path ~ /\.rs$/) {
+		rs_scan(line)
 		next
 	}
 
@@ -263,7 +431,7 @@ is_excluded() {
 # is_scanned reports whether a path is one of the file kinds the detector understands.
 is_scanned() {
 	case "$1" in
-	*.go | *.sh | *Dockerfile) return 0 ;;
+	*.go | *.rs | *.sh | *Dockerfile) return 0 ;;
 	*) return 1 ;;
 	esac
 }
@@ -281,7 +449,7 @@ scanned_files() {
 		if ! is_excluded "$path" && is_scanned "$path"; then
 			SCANNED+=("$path")
 		fi
-	done < <(git ls-files -z -- '*.go' '*.sh' '*Dockerfile')
+	done < <(git ls-files -z -- '*.go' '*.rs' '*.sh' '*Dockerfile')
 }
 
 # current_counts prints the tree's suppression counts as "<key><TAB><count>", sorted by key.

@@ -1,0 +1,13 @@
+[package]
+name = "testenv"
+version = "0.0.0"
+description = "DinD Swarm test harness for swarm-scheduler-exporter"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
