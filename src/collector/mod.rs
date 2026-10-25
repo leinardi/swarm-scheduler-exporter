@@ -28,4 +28,6 @@
 
 pub mod desired;
 pub mod metrics_ids;
+pub mod nodes;
+pub mod service_update;
 pub mod types;
