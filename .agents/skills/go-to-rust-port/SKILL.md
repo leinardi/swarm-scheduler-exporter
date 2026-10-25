@@ -369,6 +369,10 @@ Rust tutorial. Seen in: awtrix-controller.
 - Go's `t.Skip` has no libtest equivalent: a test gated on an external tool returns early with a
   note on stderr → add an environment variable that turns the missing tool into a panic and set
   it in CI, or the check passes silently exactly where it is meant to guard. (ported meta-tests)
+- Code behind an optional feature (Go's build tag → a Cargo feature) is neither built nor linted
+  by `cargo clippy --workspace --all-targets` → pass `--all-features` to build and clippy, but not
+  to `cargo test` when the feature's tests need a daemon; give that test target
+  `required-features`. (clippy 1.98: 10 lint errors that appeared only with the feature on)
 - A golden test that needs the compile-time version stamps (`option_env!`) cannot get them from
   the test build without stamping every target, and a stamped and an unstamped build in one
   target directory keep rebuilding each other → have the test build a stamped copy once

@@ -32,7 +32,9 @@ MK_LOCAL_RUST_INCLUDED := 1
 # package would leave the others unchecked. --locked everywhere: Cargo.lock is the pin, and a
 # command that rewrote it would test a dependency graph nobody reviewed. cargo deny takes
 # --workspace for the same reason: the root is a package too, and cargo-deny would otherwise check
-# its graph alone.
+# its graph alone. Build and clippy take --all-features, so the harness code behind testenv's
+# integration feature is compiled and linted like the rest; the tests do not, since that
+# feature's suite needs Docker (rust-test-integration).
 
 CARGO ?= cargo
 
@@ -50,7 +52,7 @@ RUST_VERSION_ENV = \
 
 .PHONY: rust-build
 rust-build: ## Build the Rust workspace, with the version stamps
-	$(RUST_VERSION_ENV) $(CARGO) build --workspace --all-targets --locked
+	$(RUST_VERSION_ENV) $(CARGO) build --workspace --all-targets --all-features --locked
 
 .PHONY: rust-test
 rust-test: ## Run the Rust tests, meta-tests included
@@ -65,7 +67,7 @@ rust-run: ## Run the Rust exporter against the local Docker daemon, with the ver
 
 .PHONY: rust-clippy
 rust-clippy: ## Lint the Rust workspace with clippy, warnings as errors
-	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings
+	$(CARGO) clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 .PHONY: rust-fmt
 rust-fmt: ## Format the Rust code

@@ -11,3 +11,57 @@ publish = false
 
 [lints]
 workspace = true
+
+# integration is Go's integration build tag: it compiles the modules that talk to a Docker daemon
+# (the cluster, its bring-up and teardown, the images) and the suite. Without it, only the sweep
+# rules, the redacting logger and the run filter build, and their tests run in a plain cargo test.
+[features]
+integration = [
+    "dep:bollard",
+    "dep:futures-util",
+    "dep:rustix",
+    "dep:tempfile",
+    "dep:tokio",
+    "dep:tokio-util",
+]
+
+[dependencies]
+# The exporter's slog-compatible logger, and Go's time.ParseDuration and Duration.String. The
+# dependency only goes this way: the exporter package names testenv in no table (the boundary
+# meta-test checks it), so nothing here reaches the shipped binary.
+swarm-scheduler-exporter = { path = ".." }
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# The run filter: Go's -run patterns are regular expressions.
+regex = "1.13.1"
+# The Docker SDK, for the harness only, which creates and removes containers, networks and a
+# Swarm on purpose. An optional normal dependency, not a dev-dependency: the suite reaches it
+# through this library's API, and a dev-dependency is not available to library code. ring, not
+# aws-lc-sys, behind ssl.
+bollard = { version = "=0.21.1", default-features = false, features = [
+    "http",
+    "pipe",
+    "ssl",
+], optional = true }
+futures-util = { version = "0.3.34", default-features = false, optional = true }
+# kill(pid, 0) for the sweep's liveness check, without unsafe code.
+rustix = { version = "1.1.5", default-features = false, features = [
+    "std",
+    "process",
+], optional = true }
+# The workload image archive, saved once on the host and loaded on every node.
+tempfile = { version = "3.27.0", optional = true }
+tokio = { version = "1.54.1", default-features = false, features = [
+    "fs",
+    "io-util",
+    "rt",
+    "time",
+], optional = true }
+# CancellationToken, Go's context: the suite deadline cancels every Docker call. io for the
+# archive's byte stream.
+tokio-util = { version = "0.7.20", default-features = false, features = ["io"], optional = true }
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+harness = false
+required-features = ["integration"]

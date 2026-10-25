@@ -116,8 +116,10 @@ repos:
         require_serial: true
         files: ^go\.(mod|sum)$
   # The Rust workspace. Every command is workspace-wide, so the meta and testenv crates are held to
-  # the same lints as the exporter, and --locked, so Cargo.lock is what gets tested. The toolchain
-  # comes from rust-toolchain.toml.
+  # the same lints as the exporter, and --locked, so Cargo.lock is what gets tested. clippy takes
+  # --all-features, so the harness code behind testenv's integration feature is linted too; the
+  # tests do not, since that feature's suite needs Docker. The toolchain comes from
+  # rust-toolchain.toml.
   - repo: local
     hooks:
       - id: cargo-fmt
@@ -128,7 +130,7 @@ repos:
         files: '(\.rs$|^rustfmt\.toml$|^rust-toolchain\.toml$)'
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --workspace --all-targets --locked -- -D warnings
+        entry: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         language: system
         pass_filenames: false
         require_serial: true

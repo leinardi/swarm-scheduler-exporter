@@ -45,6 +45,7 @@ make go-test-integration                            # the whole suite
 make go-test-integration RUN='^TestNode_'           # a subset
 make go-test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden files
 make go-vet-integration                             # go vet including the integration-tagged code
+make rust-test-integration RUN='^TestHarness_'      # the Rust harness (testenv): its smoke test
 make sweep-test-leaks                               # remove every labelled test container and network
 ```
 
@@ -70,6 +71,9 @@ refresh: `make mk-common-update`. Project targets live in the local `.mk/*.mk` f
 - `internal/logger/`, `internal/server/` — slog setup; `/metrics` and `/healthz`.
 - `internal/testenv/`, `test/integration/` — the DinD Swarm harness and the `integration`-tagged
   suite.
+- `testenv/` — the harness ported to Rust, with bollard behind its `integration` feature (the
+  exporter package depends on it in no table; `meta/tests/docker_boundary.rs` checks it), and the
+  suite's runner under `testenv/tests/integration`.
 - `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
@@ -144,6 +148,7 @@ Run before considering an edit done. `make check` applies to every row.
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `go test ./test/toolchain/`, `cargo test -p meta --test toolchain`, `make help` |
 | `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
+| `testenv/**` | `make verify`; `make rust-test-integration` (Docker) |
 | `test/**`, `meta/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...`, `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` |
 | `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
 

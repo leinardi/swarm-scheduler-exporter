@@ -23,8 +23,9 @@
 #
 
 # Local snippet (NOT part of make-common): integration tests against a throwaway multi-node Swarm
-# made of privileged docker:dind containers on the host daemon. The tests carry
-# //go:build integration and run the exporter binary built by go-build against that Swarm.
+# made of privileged docker:dind containers on the host daemon. The Go tests carry
+# //go:build integration and run the exporter binary built by go-build against that Swarm; the
+# Rust suite is rust-test-integration below.
 #
 # Prerequisites: a Docker daemon that allows privileged containers. The host may itself be a Swarm
 # node: the test Swarm lives entirely inside the DinD containers.
@@ -53,6 +54,21 @@ go-test-integration: go-build ## Run the DinD Swarm integration tests (requires 
 go-vet-integration: ## Static checks including the integration-tagged packages
 	$(GO) vet -tags=integration $(GO_PKG)
 
+# The Rust harness and suite (testenv, behind its integration feature) run against the release
+# binary unless SSE_IT_BINARY is set in the environment or on the command line; the default above
+# names the Go binary, so the origin decides. RUN goes to the runner's --run, which reads it with
+# go test's -run semantics and fails when it selects nothing; the runner prints the selected count.
+#   make rust-test-integration RUN='^TestHarness_'
+#   make rust-test-integration UPDATE=1 RUN=TestSnapshot_
+RUST_IT_BINARY = $(if $(filter environment command line,$(origin SSE_IT_BINARY)),$(SSE_IT_BINARY),$(REPO_ROOT)/target/release/swarm-scheduler-exporter)
+
+.PHONY: rust-test-integration
+rust-test-integration: ## Run the Rust DinD Swarm integration suite against the release binary (requires Docker with privileged containers)
+	$(RUST_VERSION_ENV) $(CARGO) build --locked --release --bin swarm-scheduler-exporter
+	SSE_IT_BINARY="$(RUST_IT_BINARY)" $(if $(filter 1,$(UPDATE)),SSE_IT_UPDATE=1,) \
+	  $(CARGO) test --locked -p testenv --features integration --test integration -- --run '$(RUN)'
+
+# Both suites label what they create the same way, so this removes the leaks of either.
 .PHONY: sweep-test-leaks
 sweep-test-leaks: ## Remove every labelled integration-test container and network, whatever its age
 	docker ps -aq --filter "label=swarm-scheduler-exporter.it.envid" | xargs -r docker rm -fv

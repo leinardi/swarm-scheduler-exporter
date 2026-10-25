@@ -369,8 +369,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      # --all-features: the harness code behind testenv's integration feature is linted too.
       - name: Lint with clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run the tests
         env:
