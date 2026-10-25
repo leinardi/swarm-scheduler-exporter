@@ -270,7 +270,7 @@ intent was. If one exists, is the diff removing exactly what that line retires a
 
 ### (c) A new suppression has to show its work
 
-Any new `//nolint:`, `# shellcheck disable=` or `# hadolint ignore=` is a standing decision to
+Any new `//nolint:`, `# shellcheck disable=` or `# droast ignore=` is a standing decision to
 let a linter stay silent. `scripts/check-suppressions.sh` makes the count visible -- the commit
 has to change `.suppressions-baseline` -- but it cannot judge the reason. So demand the attempt:
 for a complexity or length rule, was the obvious extraction tried and what broke? For
@@ -313,7 +313,7 @@ caused as a confirmed finding with the output attached:
 | `internal/collector/**`, `internal/testenv/**`, `cmd/**`, `test/integration/**` | also `make go-vet-integration` and `make go-test-integration` (a DinD Swarm; needs Docker with privileged containers) |
 | `go.mod` / `go.sum` | `make go-tidy` and `make audit-deps` (govulncheck; network required) |
 | `test/**`, `scripts/check-*.sh`, `.golangci.yaml`, `.pre-commit-config.yaml`, `.github/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...` (the CI `repo-gates` job), then `make check` |
-| `deployments/docker/Dockerfile` | hadolint via `make check`, plus `make docker-build` |
+| `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, plus `make docker-build` |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 

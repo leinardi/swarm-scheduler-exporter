@@ -89,7 +89,7 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      # Every //nolint, shellcheck disable and hadolint ignore is counted per rule against
+      # Every //nolint, shellcheck disable and droast ignore is counted per rule against
       # .suppressions-baseline, and a commit that adds one must change the baseline too
       # (scripts/check-suppressions.sh). Always runs: the ratchet reads the whole tree and the
       # staged diff, and a commit that touches no source can still delete the baseline.
@@ -131,11 +131,13 @@ repos:
         language_version: 22.15.0
         files: ^(?:.*/)?(?:docker-)?compose(?:\.[\w-]+)?\.ya?ml$
         args: [--fix]
-  - repo: https://github.com/hadolint/hadolint
-    rev: v2.15.1
+  # Dockerfile Roast, built from source at this rev (language: rust), so every machine runs the
+  # same release. Policy in droast.toml; its ShellCheck bridge is required and runs the
+  # `shellcheck` on PATH, which CI pins with .github/actions/setup-shellcheck.
+  - repo: https://github.com/immanuwell/dockerfile-roast
+    rev: 1.7.0
     hooks:
-      - id: hadolint
-        exclude: \.dockerignore$
+      - id: droast
   - repo: https://github.com/golangci/golangci-lint
     rev: v2.14.0
     hooks:

@@ -47,8 +47,9 @@ jobs:
       - name: Install pre-commit
         run: pip install --no-cache-dir pre-commit==4.6.2
 
-      - name: Set up hadolint
-        uses: ./.github/actions/setup-hadolint
+      # droast's ShellCheck bridge runs the shellcheck on PATH: the pinned one, not the runner's.
+      - name: Set up ShellCheck
+        uses: ./.github/actions/setup-shellcheck
 
       # Restore only: pre-commit-warmup.yaml saves the entry on master under the same key.
       - name: Restore the pre-commit cache
@@ -113,9 +114,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The hadolint hook runs the system binary (language: system), which the runner lacks.
-      - name: Set up hadolint
-        uses: ./.github/actions/setup-hadolint
+      # droast's ShellCheck bridge runs the shellcheck on PATH: the pinned one, not the runner's.
+      - name: Set up ShellCheck
+        uses: ./.github/actions/setup-shellcheck
 
       - name: Run pre-commit hooks + reviewdog diff
         uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
@@ -132,7 +133,7 @@ jobs:
             check-toml
             check-added-large-files
             dclint
-            hadolint
+            droast
             golangci-lint-config-verify
             golangci-lint-fmt
             golangci-lint-full

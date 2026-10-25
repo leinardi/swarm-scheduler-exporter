@@ -111,7 +111,7 @@ The ones to keep in mind while writing code:
 - Every Go file carries the MIT license header, after the `//go:build` line where there is one.
 - Fixtures under `testdata/` are byte-for-byte captures (Engine API wire captures, golden files);
   the whitespace pre-commit hooks skip them, so do not tidy them by hand.
-- A new `//nolint`, `# shellcheck disable=` or `# hadolint ignore=` explains why the fix does not
+- A new `//nolint`, `# shellcheck disable=` or `# droast ignore=` explains why the fix does not
   apply here, not which rule fired.
 
 ## Licence headers and suppressions
@@ -122,8 +122,8 @@ with the year of the file's first commit (`scripts/check-license-headers.sh`, th
 
 Every in-file suppression is counted per rule against `.suppressions-baseline` by the
 `check-suppressions` hook (`scripts/check-suppressions.sh`): `//nolint:<linter>`,
-`# shellcheck disable=` and `# hadolint ignore=`. A commit that adds one, swaps one or moves one
-must change the baseline too, and so must one whose count fell below it: run
+`# shellcheck disable=` and `# droast [global ]ignore=`. A commit that adds one, swaps one or moves
+one must change the baseline too, and so must one whose count fell below it: run
 `scripts/check-suppressions.sh --update` and commit the baseline with the change.
 
 ## Validation matrix
@@ -134,7 +134,7 @@ Run before considering an edit done. `make check` applies to every row.
 | --- | --- |
 | `**/*.go` | `make verify-go`; after integration-tagged code (`internal/testenv`, `test/integration`, or anything they exercise), `make go-test-integration` (Docker) |
 | `go.mod`, `go.sum` | `make go-tidy`, `make audit-deps` (network) |
-| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `go test ./test/dockerfiles/ ./test/toolchain/`, `make docker-build` |
+| `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `go test ./test/dockerfiles/ ./test/toolchain/`, `make docker-build` |
 | `.golangci.yaml` | `go test ./test/boundary/`, `make go-lint` |
 | `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `go test ./test/toolchain/` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
