@@ -239,6 +239,12 @@ impl ExporterMetrics {
     pub fn events_dropped(&self) -> &Arc<Counter> {
         &self.events_dropped
     }
+
+    /// `swarm_exporter_poll_rejections_total`.
+    #[must_use]
+    pub fn poll_rejections(&self) -> &Arc<Counter> {
+        &self.poll_rejections
+    }
 }
 
 #[cfg(test)]

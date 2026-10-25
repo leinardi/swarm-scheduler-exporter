@@ -35,6 +35,7 @@
 //! cache's key set rides in the generation entries ([`Generation::cached`]), so the two locks
 //! become the one [`Shared`] lock, never held across an await.
 
+mod poll;
 mod recover;
 
 use std::collections::{HashMap, HashSet};
@@ -56,11 +57,14 @@ use super::error::CallError;
 use super::exporter_metrics::{ExporterMetrics, ResyncResult};
 use super::must;
 use super::nodes::NodesByState;
-use super::replicas_state::ReplicasState;
+use super::replicas_state::{ReplicasState, ServiceCounter};
 use super::service_update::ServiceUpdateMetrics;
 use super::types::{CustomLabels, MetadataCache, NodeCache, ServiceMetadata, build_metadata};
 
+use self::poll::{PollReceivers, PollSenders, poll_channels};
 use self::recover::{PanicReport, recover};
+
+pub use self::poll::{MAX_CARRIED_POLLS, PollError, poll_and_publish_replicas_state};
 
 /// The dirty service keys kept at most. Past it the set is dropped and a resync requested
 /// instead: a resync costs one service list, whatever the number of changes.
@@ -230,6 +234,11 @@ struct Shared {
     clock: Arc<dyn Clock>,
     logger: Logger,
     metrics: Arc<ExporterMetrics>,
+    // The poller's ends of the poll protocol.
+    polls: PollSenders,
+    // Runs when a poll request is accepted, before it is answered; none outside tests.
+    #[cfg(test)]
+    poll_request_hook: Mutex<Option<poll::PollRequestHook>>,
 }
 
 impl Shared {
@@ -411,6 +420,13 @@ pub struct Reconciler<D> {
     next_periodic_resync: Option<Instant>,
     nodes_not_before: Option<Instant>,
     nodes_backoff: Duration,
+
+    // The reconciler's ends of the poll protocol, and the state of the polls it published: what
+    // the last poll published per service, and how many polls in a row each service was
+    // rejected. Both are replaced wholesale by every publish.
+    poll_receivers: PollReceivers,
+    last_published: ServiceCounter,
+    poll_rejections: HashMap<String, usize>,
 }
 
 impl<D> std::fmt::Debug for Reconciler<D> {
@@ -452,6 +468,7 @@ impl<D: DockerApi> Reconciler<D> {
         policy: &ReconcilerPolicy,
     ) -> Self {
         let now = clock.now();
+        let (poll_senders, poll_receivers) = poll_channels();
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 pending_cap: policy.pending_cap,
@@ -471,6 +488,9 @@ impl<D: DockerApi> Reconciler<D> {
             clock,
             logger,
             metrics: Arc::clone(&collectors.metrics),
+            polls: poll_senders,
+            #[cfg(test)]
+            poll_request_hook: Mutex::new(None),
         });
         Self {
             docker,
@@ -487,6 +507,9 @@ impl<D: DockerApi> Reconciler<D> {
             next_periodic_resync: None,
             nodes_not_before: None,
             nodes_backoff: policy.backoff_initial,
+            poll_receivers,
+            last_published: ServiceCounter::new(),
+            poll_rejections: HashMap::new(),
         }
     }
 
@@ -515,7 +538,8 @@ impl<D: DockerApi> Reconciler<D> {
     }
 
     /// Reconciles until `cancel` is cancelled, then returns itself. It never sleeps: it waits on
-    /// one timer armed for the earliest scheduled work, on new events, and on the cancellation.
+    /// one timer armed for the earliest scheduled work, on new events, on poll requests, and on
+    /// the cancellation.
     pub async fn run(mut self, cancel: CancellationToken) -> Self {
         while !cancel.is_cancelled() {
             self.cycle(&cancel).await;
@@ -529,19 +553,23 @@ impl<D: DockerApi> Reconciler<D> {
                     None => std::future::pending().await,
                 }
             };
-            tokio::select! {
+            let request = tokio::select! {
                 () = cancel.cancelled() => break,
-                () = self.shared.wake.notified() => {}
-                () = timer => {}
+                () = self.shared.wake.notified() => None,
+                () = timer => None,
+                Some(request) = self.poll_receivers.recv() => Some(request),
+            };
+            if let Some(request) = request {
+                self.serve_poll_request(request, &cancel);
             }
         }
         self
     }
 
-    /// One round of due work, in fairness order: a periodic resync if one is due, the nodes, a
-    /// resync, then at most [`SERVICE_KEYS_PER_CYCLE`] service keys. (Serving the polls waiting
-    /// for a snapshot comes first; it arrives with the poll protocol, in plan phase 14.)
+    /// One round of due work, in fairness order: the waiting poll requests, a periodic resync if
+    /// one is due, the nodes, a resync, then at most [`SERVICE_KEYS_PER_CYCLE`] service keys.
     async fn cycle(&mut self, cancel: &CancellationToken) {
+        self.serve_pending_poll_requests(cancel);
         let now = Instant::now();
         if self.periodic_resync_due(now) {
             self.handle().request_resync("periodic");

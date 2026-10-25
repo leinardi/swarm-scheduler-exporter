@@ -23,8 +23,8 @@
  */
 
 //! Six of the Go health tests. The other three (`TestPollAndPublishReplicasState_*`: the poll
-//! timestamp moves on a full publish only) drive the poll protocol, so they are ported with it,
-//! in plan phase 14.
+//! timestamp moves on a full publish only) drive the poll protocol through a running reconciler,
+//! so they live with the reconciler's poll tests.
 
 use jiff::SignedDuration;
 

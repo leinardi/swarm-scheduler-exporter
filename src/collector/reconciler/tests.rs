@@ -24,7 +24,7 @@
 
 //! The Go reconciler tests: of its 35 (the plan counted 36), the 3 on the event listener are
 //! ported with it in plan phase 15, and 2 health and 2 exporter-metrics ones live with those
-//! modules, which leaves the 28 here.
+//! modules, which leaves the 28 here. The poll protocol's tests are in [`poll`].
 
 use std::collections::BTreeMap;
 use std::future::pending;
@@ -52,6 +52,8 @@ use crate::docker::types::{
 use crate::docker::{DOCKER_REQUEST_TIMEOUT, Error, Filters};
 use crate::logger::{Level, MemorySink};
 use crate::test_support::{FakeEvents, capture_logs, eventually, schedulable_node};
+
+mod poll;
 
 /// A Docker call the test docker can hold forever, so only the caller's deadline or
 /// cancellation ends it.
@@ -90,6 +92,7 @@ struct TestDocker {
     state: Mutex<DockerState>,
     service_list_calls: AtomicUsize,
     node_list_calls: AtomicUsize,
+    task_list_calls: AtomicUsize,
     // Signalled on every service list, as Go's blockingListDocker reports each call.
     service_list_called: Notify,
 }
@@ -115,6 +118,14 @@ impl TestDocker {
 
     fn set_nodes(&self, nodes: Vec<Node>) {
         self.lock().nodes = nodes;
+    }
+
+    fn set_tasks(&self, tasks: Vec<Task>) {
+        self.lock().tasks = tasks;
+    }
+
+    fn task_list_count(&self) -> usize {
+        self.task_list_calls.load(Ordering::SeqCst)
     }
 
     fn set_list_errors(&self, service_list: Option<Error>, node_list: Option<Error>) {
@@ -238,6 +249,7 @@ impl DockerApi for TestDocker {
     }
 
     fn task_list(&self) -> impl Future<Output = Result<Vec<Task>, Error>> + Send {
+        self.task_list_calls.fetch_add(1, Ordering::SeqCst);
         let state = self.lock();
         let tasks = state.tasks.clone();
         let blocked = state.blocked.contains(&Call::TaskList);
