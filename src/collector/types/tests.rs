@@ -276,7 +276,7 @@ fn build_metadata_custom_labels() {
 /// Go: `TestSetServiceMetadata_PreservesDesiredReplicas`
 #[test]
 fn set_service_metadata_preserves_desired_replicas() {
-    let cache = MetadataCache::new();
+    let mut cache = MetadataCache::new();
     let metadata = || ServiceMetadata {
         stack: "stack".to_owned(),
         service: "svc".to_owned(),
@@ -292,7 +292,7 @@ fn set_service_metadata_preserves_desired_replicas() {
 
 #[test]
 fn metadata_cache_replaces_deletes_and_copies() {
-    let cache = MetadataCache::new();
+    let mut cache = MetadataCache::new();
     cache.set_desired_replicas("unknown", 3.0);
     assert!(
         cache.get("unknown").is_none(),
@@ -309,14 +309,16 @@ fn metadata_cache_replaces_deletes_and_copies() {
     );
     assert!(cache.get("svc1").unwrap().desired_replicas.eq(&2.0));
     let copy = cache.all();
+    assert_eq!((cache.ids(), cache.len()), (vec!["svc1".to_owned()], 1));
     cache.delete("svc1");
     assert!(cache.get("svc1").is_none());
+    assert!(cache.is_empty());
     assert_eq!(copy.len(), 1, "the copy is a snapshot");
 }
 
 #[test]
 fn node_cache_holds_a_copy() {
-    let cache = NodeCache::new();
+    let mut cache = NodeCache::new();
     assert!(cache.get().is_empty());
     let nodes = vec![Node {
         id: "n1".to_owned(),
@@ -324,6 +326,7 @@ fn node_cache_holds_a_copy() {
     }];
     cache.set(&nodes);
     assert_eq!(cache.get(), nodes);
+    assert_eq!(&*cache.shared(), nodes);
 }
 
 /// Go dereferences the missing pointer; the daemon always sets it.

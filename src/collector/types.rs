@@ -26,7 +26,7 @@
 //! the node snapshot, and the naming rules for stacks and services.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{PoisonError, RwLock};
+use std::sync::Arc;
 
 use crate::docker::types::{Node, Platform, ReplicatedJob, Service};
 use crate::gofmt_compat::float::from_int;
@@ -216,11 +216,11 @@ pub fn display_name(stack: &str, service: &str) -> String {
     }
 }
 
-/// The service metadata, keyed by service ID: the Go exporter's `metadataCache` and
-/// `metadataMu`.
+/// The service metadata, keyed by service ID: the Go exporter's `metadataCache`. The reconciler
+/// owns it and is its only writer, so it needs no lock (Go's `metadataMu`).
 #[derive(Debug, Default)]
 pub struct MetadataCache {
-    entries: RwLock<HashMap<String, ServiceMetadata>>,
+    entries: HashMap<String, ServiceMetadata>,
 }
 
 impl MetadataCache {
@@ -230,42 +230,33 @@ impl MetadataCache {
         Self::default()
     }
 
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, ServiceMetadata>> {
-        self.entries.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, ServiceMetadata>> {
-        self.entries.write().unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// Stores `metadata`, keeping the desired replicas of an entry already there.
-    pub fn set(&self, service_id: &str, mut metadata: ServiceMetadata) {
-        let mut entries = self.write();
-        if let Some(previous) = entries.get(service_id) {
+    pub fn set(&mut self, service_id: &str, mut metadata: ServiceMetadata) {
+        if let Some(previous) = self.entries.get(service_id) {
             metadata.desired_replicas = previous.desired_replicas;
         }
-        entries.insert(service_id.to_owned(), metadata);
+        self.entries.insert(service_id.to_owned(), metadata);
     }
 
     /// Stores `metadata` as it is, desired replicas included.
-    pub fn replace(&self, service_id: &str, metadata: ServiceMetadata) {
-        self.write().insert(service_id.to_owned(), metadata);
+    pub fn replace(&mut self, service_id: &str, metadata: ServiceMetadata) {
+        self.entries.insert(service_id.to_owned(), metadata);
     }
 
     /// The metadata of `service_id`.
     #[must_use]
-    pub fn get(&self, service_id: &str) -> Option<ServiceMetadata> {
-        self.read().get(service_id).cloned()
+    pub fn get(&self, service_id: &str) -> Option<&ServiceMetadata> {
+        self.entries.get(service_id)
     }
 
     /// Forgets `service_id`.
-    pub fn delete(&self, service_id: &str) {
-        self.write().remove(service_id);
+    pub fn delete(&mut self, service_id: &str) {
+        self.entries.remove(service_id);
     }
 
     /// Updates the desired replicas of a known service; an unknown one is left alone.
-    pub fn set_desired_replicas(&self, service_id: &str, desired: f64) {
-        if let Some(metadata) = self.write().get_mut(service_id) {
+    pub fn set_desired_replicas(&mut self, service_id: &str, desired: f64) {
+        if let Some(metadata) = self.entries.get_mut(service_id) {
             metadata.desired_replicas = desired;
         }
     }
@@ -273,14 +264,34 @@ impl MetadataCache {
     /// A point-in-time copy of every entry.
     #[must_use]
     pub fn all(&self) -> HashMap<String, ServiceMetadata> {
-        self.read().clone()
+        self.entries.clone()
+    }
+
+    /// The cached service IDs.
+    #[must_use]
+    pub fn ids(&self) -> Vec<String> {
+        self.entries.keys().cloned().collect()
+    }
+
+    /// How many services are cached.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no service is cached.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
-/// The latest node snapshot: the Go exporter's `cachedNodes` and `nodesMu`.
+/// The latest node snapshot: the Go exporter's `cachedNodes`. Owned by the reconciler, like the
+/// metadata, so it needs no lock (Go's `nodesMu`); shared as an `Arc`, so a step reading it
+/// while it writes the caches takes no copy.
 #[derive(Debug, Default)]
 pub struct NodeCache {
-    nodes: RwLock<Vec<Node>>,
+    nodes: Arc<[Node]>,
 }
 
 impl NodeCache {
@@ -291,17 +302,20 @@ impl NodeCache {
     }
 
     /// Replaces the snapshot with a copy of `nodes`.
-    pub fn set(&self, nodes: &[Node]) {
-        *self.nodes.write().unwrap_or_else(PoisonError::into_inner) = nodes.to_vec();
+    pub fn set(&mut self, nodes: &[Node]) {
+        self.nodes = nodes.into();
     }
 
-    /// A copy of the snapshot.
+    /// The snapshot.
     #[must_use]
-    pub fn get(&self) -> Vec<Node> {
-        self.nodes
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    pub fn get(&self) -> &[Node] {
+        &self.nodes
+    }
+
+    /// The snapshot, shared.
+    #[must_use]
+    pub fn shared(&self) -> Arc<[Node]> {
+        Arc::clone(&self.nodes)
     }
 }
 

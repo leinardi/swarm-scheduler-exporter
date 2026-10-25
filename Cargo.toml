@@ -69,14 +69,18 @@ clap = { version = "4.6.7", default-features = false, features = [
     "error-context",
     "suggestions",
 ] }
-# The timer (TokioClock), and the sockets, tasks and lock of the Docker client.
+# The timer (TokioClock), the sockets, tasks and lock of the Docker client, and select! for the
+# cancellable awaits of the reconciler.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",
     "net",
     "rt",
     "sync",
     "io-util",
+    "macros",
 ] }
+# CancellationToken, Go's context cancellation for the long-lived tasks.
+tokio-util = { version = "0.7.20", default-features = false }
 # gzip for /metrics, as promhttp offers it, and the Docker client's transparent gunzip on TCP;
 # the pure-Rust backend, so no C zlib.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }

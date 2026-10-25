@@ -279,6 +279,13 @@ Rust tutorial. Seen in: awtrix-controller.
   (`set_reuse_address(true)`), so a quick restart cannot rebind. (server restart test)
 - Give shutdown one overall deadline and hand each step only what remains; never a fresh grace
   period per step, never sequential per-session waits. (plan review)
+- Go's `recover()` around a step maps to `catch_unwind`, but futures' `CatchUnwind` cannot
+  silence the default hook, which prints the panic to stderr, or keep the backtrace for the log
+  record: the stack is gone once the panic has unwound → poll the step's future inside
+  `std::panic::catch_unwind` yourself, mark the thread (a thread-local depth) around each poll,
+  and install once a chaining hook that, on a marked thread, stores
+  `Backtrace::force_capture()` instead of printing. Keep `panic = "unwind"` in the release
+  profile, or there is nothing to catch. (reconciler port; recover tests)
 - `sync.Map.LoadOrStore` never overwrites: a "log only when it changed" cache built on it keeps
   the first key, so every later, different value logs on each recurrence. A port to
   `HashMap::insert` quietly logs less → use `entry().or_insert()` and pin it with a test, or
