@@ -35,6 +35,7 @@
 //! cache's key set rides in the generation entries ([`Generation::cached`]), so the two locks
 //! become the one [`Shared`] lock, never held across an await.
 
+mod listener;
 mod poll;
 mod recover;
 
@@ -64,6 +65,10 @@ use super::types::{CustomLabels, MetadataCache, NodeCache, ServiceMetadata, buil
 use self::poll::{PollReceivers, PollSenders, poll_channels};
 use self::recover::{PanicReport, recover};
 
+pub use self::listener::{
+    EVENTS_SINCE_MARGIN, ListenerStopped, StreamEnd, StreamOutcome, dispatch_events,
+    follow_event_stream, listen_swarm_events,
+};
 pub use self::poll::{MAX_CARRIED_POLLS, PollError, poll_and_publish_replicas_state};
 
 /// The dirty service keys kept at most. Past it the set is dropped and a resync requested

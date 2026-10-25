@@ -242,6 +242,12 @@ impl Logger {
         }
     }
 
+    /// The zone record times are written in, Go's `time.Local`.
+    #[must_use]
+    pub fn zone(&self) -> &TimeZone {
+        &self.shared.zone
+    }
+
     /// Whether a record at `level` is written.
     #[must_use]
     pub fn enabled(&self, level: Level) -> bool {

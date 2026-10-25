@@ -33,7 +33,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
-pub(crate) use fake_docker::{FakeDocker, FakeEvents};
+pub(crate) use fake_docker::{FakeDocker, FakeEvent};
 
 use crate::docker::types::{Node, NodeDescription, NodeSpec, NodeStatus, Platform};
 use crate::logger::{Config, Format, Level, Logger, MemorySink};

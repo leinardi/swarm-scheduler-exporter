@@ -240,6 +240,12 @@ impl ExporterMetrics {
         &self.events_dropped
     }
 
+    /// `swarm_exporter_events_reconnects_total`.
+    #[must_use]
+    pub fn events_reconnects(&self) -> &Arc<Counter> {
+        &self.events_reconnects
+    }
+
     /// `swarm_exporter_poll_rejections_total`.
     #[must_use]
     pub fn poll_rejections(&self) -> &Arc<Counter> {

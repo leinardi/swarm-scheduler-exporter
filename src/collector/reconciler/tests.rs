@@ -22,16 +22,17 @@
  * SOFTWARE.
  */
 
-//! The Go reconciler tests: of its 35 (the plan counted 36), the 3 on the event listener are
-//! ported with it in plan phase 15, and 2 health and 2 exporter-metrics ones live with those
-//! modules, which leaves the 28 here. The poll protocol's tests are in [`poll`].
+//! The Go reconciler tests: of its 35 (the plan counted 36), the 3 on the event listener are in
+//! [`listener`] with the listener's other tests, and 2 health and 2 exporter-metrics ones live
+//! with those modules, which leaves the 28 here. The poll protocol's tests are in [`poll`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::pending;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use hyper::StatusCode;
 use jiff::Timestamp;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::*;
@@ -49,10 +50,13 @@ use crate::docker::types::{
     ContainerInspect, ContainerSummary, JobStatus, Present, ReplicatedJob, ReplicatedService,
     ServiceMode, ServiceSpec, Task, Version,
 };
-use crate::docker::{DOCKER_REQUEST_TIMEOUT, Error, Filters};
+use crate::docker::{
+    DOCKER_REQUEST_TIMEOUT, Error, EventStream, Filters, StreamError, StreamErrorKind,
+};
 use crate::logger::{Level, MemorySink};
-use crate::test_support::{FakeEvents, capture_logs, eventually, schedulable_node};
+use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
 
+mod listener;
 mod poll;
 
 /// A Docker call the test docker can hold forever, so only the caller's deadline or
@@ -82,6 +86,42 @@ struct DockerState {
     panic_on_inspect: bool,
     panic_on_service_list: bool,
     inspect_calls: HashMap<String, usize>,
+    // The streams opened, in order, and the connect failures the next events calls return.
+    streams: Vec<StreamRecord>,
+    connect_errors: VecDeque<Error>,
+}
+
+/// One event stream [`TestDocker`] opened: the `since` it was asked for, the sender of its
+/// events, and whether the stream is still held by its reader. Go's `streamDocker` records the
+/// stream's context; dropping the stream is what cancelling that context is here.
+struct StreamRecord {
+    since: Timestamp,
+    sender: mpsc::UnboundedSender<FakeEvent>,
+    live: Arc<AtomicBool>,
+}
+
+/// A stream of [`TestDocker`]: it yields what the test sends, and ends as a closed channel once
+/// the test drops the sender.
+struct TestStream {
+    receiver: mpsc::UnboundedReceiver<FakeEvent>,
+    live: Arc<AtomicBool>,
+}
+
+impl Drop for TestStream {
+    fn drop(&mut self) {
+        self.live.store(false, Ordering::SeqCst);
+    }
+}
+
+impl EventStream for TestStream {
+    async fn next(&mut self) -> Result<Event, StreamError> {
+        self.receiver.recv().await.unwrap_or_else(|| {
+            Err(StreamError::new(
+                StreamErrorKind::Closed,
+                "events stream closed",
+            ))
+        })
+    }
 }
 
 /// Go's `reconcilerDocker`: a service in `services` is also what an inspect returns for its ID;
@@ -93,6 +133,7 @@ struct TestDocker {
     service_list_calls: AtomicUsize,
     node_list_calls: AtomicUsize,
     task_list_calls: AtomicUsize,
+    events_calls: AtomicUsize,
     // Signalled on every service list, as Go's blockingListDocker reports each call.
     service_list_called: Notify,
 }
@@ -166,6 +207,34 @@ impl TestDocker {
     fn blocked(&self, call: Call) -> bool {
         self.lock().blocked.contains(&call)
     }
+
+    /// Makes the next events call fail to connect with `error`.
+    fn push_connect_error(&self, error: Error) {
+        self.lock().connect_errors.push_back(error);
+    }
+
+    fn events_calls(&self) -> usize {
+        self.events_calls.load(Ordering::SeqCst)
+    }
+
+    fn streams_opened(&self) -> usize {
+        self.lock().streams.len()
+    }
+
+    fn since(&self, index: usize) -> Timestamp {
+        self.lock().streams[index].since
+    }
+
+    fn stream_live(&self, index: usize) -> bool {
+        self.lock().streams[index].live.load(Ordering::SeqCst)
+    }
+
+    /// Sends `event` on stream `index`; an error ends the stream.
+    fn send(&self, index: usize, event: FakeEvent) {
+        // A stream already dropped has nobody to read the event; the test then fails on what
+        // it waits for.
+        let _ = self.lock().streams[index].sender.send(event);
+    }
 }
 
 async fn hold_if(blocked: bool) {
@@ -175,7 +244,7 @@ async fn hold_if(blocked: bool) {
 }
 
 impl DockerApi for TestDocker {
-    type Events = FakeEvents;
+    type Events = TestStream;
 
     fn service_list(&self) -> impl Future<Output = Result<Vec<Service>, Error>> + Send {
         self.service_list_calls.fetch_add(1, Ordering::SeqCst);
@@ -273,10 +342,26 @@ impl DockerApi for TestDocker {
 
     fn events(
         &self,
-        _since: Timestamp,
+        since: Timestamp,
         _filters: &Filters,
-    ) -> impl Future<Output = Result<FakeEvents, Error>> + Send {
-        std::future::ready(Ok(FakeEvents { events: None }))
+    ) -> impl Future<Output = Result<TestStream, Error>> + Send {
+        self.events_calls.fetch_add(1, Ordering::SeqCst);
+        let mut state = self.lock();
+        let result = state.connect_errors.pop_front().map_or_else(
+            || {
+                let (sender, receiver) = mpsc::unbounded_channel();
+                let live = Arc::new(AtomicBool::new(true));
+                state.streams.push(StreamRecord {
+                    since,
+                    sender,
+                    live: Arc::clone(&live),
+                });
+                Ok(TestStream { receiver, live })
+            },
+            Err,
+        );
+        drop(state);
+        std::future::ready(result)
     }
 }
 
