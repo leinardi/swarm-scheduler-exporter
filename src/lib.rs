@@ -30,9 +30,11 @@ pub mod clock;
 pub mod collector;
 pub mod docker;
 pub mod gofmt_compat;
+pub mod healthcheck;
 pub mod labels;
 pub mod logger;
 pub mod metrics;
+pub mod server;
 pub mod version;
 
 #[cfg(test)]

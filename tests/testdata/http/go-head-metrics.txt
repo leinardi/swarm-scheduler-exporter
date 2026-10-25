@@ -1,0 +1,9 @@
+### head-metrics  (port 18080)
+### request: HEAD /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 200 OK
+Content-Type: text/plain; version=0.0.4; charset=utf-8; escaping=underscores
+Date: Sun, 25 Oct 2026 08:44:07 GMT
+Connection: close
+
+[end: <nil>]
+

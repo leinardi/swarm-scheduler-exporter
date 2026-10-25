@@ -38,11 +38,13 @@
 //! - [`http_status`] ports `net/http.StatusText`;
 //! - [`strings`] ports `strings.EqualFold`, `strings.ToLower` and `strings.TrimSpace`, with Go's
 //!   Unicode 15 case tables;
-//! - [`net_ip`] ports `net.ParseIP`, `net.ParseCIDR`, `IP.Equal` and `IPNet.Contains`.
+//! - [`net_ip`] ports `net.ParseIP`, `net.ParseCIDR`, `IP.Equal` and `IPNet.Contains`;
+//! - [`host_port`] ports `net.SplitHostPort` and `net.JoinHostPort`.
 
 pub mod duration;
 pub mod errno;
 pub mod float;
+pub mod host_port;
 pub mod http_status;
 pub mod local_zone;
 pub mod net_ip;

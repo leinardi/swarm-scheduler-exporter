@@ -1,0 +1,3 @@
+# Byte-for-byte HTTP wire captures: their CRLF line ends are the bytes under test, so no
+# line-end conversion (a core.autocrlf of input or true would rewrite them).
+tests/testdata/http/*.txt -text

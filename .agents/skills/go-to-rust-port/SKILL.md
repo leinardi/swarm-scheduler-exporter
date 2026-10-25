@@ -223,6 +223,37 @@ Rust tutorial. Seen in: awtrix-controller.
   decode with serde_json's `StreamDeserializer` over a growing buffer (an `is_eof()` error means
   "read more"), and port moby's RS (0x1E) filter for `application/json-seq`, which bollard lacks.
   (S1: fake Engine clean, mid-object and cut endings; HAProxy `timeout server 3s`)
+- **HTTP server (net/http):** hyper 1.12 + hyper-util reproduce Go's wire (31 of 37 Go 1.26
+  captures, 32 with the framing below), axum 0.8 none of them (lowercase headers, `//metrics` a
+  404, no timeouts). The traps: Go 1.22+ `ServeMux` answers an unclean path (`//x`, `/a/../x`)
+  with **307**, not 301, keeping the query and re-escaping the cleaned *escaped* path
+  (`//%68ealthz` → `Location: /%2568ealthz`), with `Redirect`'s body only for a case-sensitive
+  `GET`; Go writes the handler's headers sorted, then `Date`, `Content-Length`, `Connection`,
+  while hyper appends the last three itself → `title_case_headers(true)`,
+  `auto_date_header(false)`, set all three by hand, and give the body `is_end_stream() == false`,
+  or hyper 1.12 drops a hand-set `Content-Length: 0` and re-appends it last. Go frames by size: a
+  body of at most 2048 bytes (`bufferBeforeChunkingSize`) gets a `Content-Length`, a larger one is
+  chunked, a HEAD of a large one gets neither, and a HEAD that wrote nothing has no
+  `Content-Length` → an unknown `size_hint` makes hyper chunk, and hyper sends neither header for
+  that HEAD. (S3 captures; replay test)
+- hyper's `http1::Builder::header_read_timeout` cannot express Go's `ReadHeaderTimeout`: hyper
+  arms it as soon as a connection goes idle, so it closes an idle keep-alive at 5s where Go waits
+  `IdleTimeout`, and set without `.timer(...)` it panics on the connection's first poll → leave
+  it off and enforce Go's deadlines in an I/O wrapper under `TokioIo`, fed by the service (head
+  read) and the body's `Drop` (response done). (hyper 1.12 `conn.rs`, `common/time.rs:84`;
+  paused-clock tests)
+- `TcpListener::bind` is not Go's `net.Listen`: `:8888` is a DNS error (Go: `[::]` dual stack)
+  and the backlog is 128 (Go: `somaxconn`); mio does set `SO_REUSEADDR` → bind through socket2:
+  `[::]` with `set_only_v6(false)` for an empty host, `listen(65535)`, which the kernel caps.
+  (S3 listener tests)
+- **HTTP client (`-healthcheck`):** ureq 3.5's defaults are not Go's `http.Client` with a
+  proxy-less transport: it reads `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY`, follows 10 redirects and
+  has no reason phrase → hyper-util's legacy client on `HttpConnector`, which reads no proxy
+  variable and follows nothing. Go's `resp.Status` is the wire text, but hyper keeps
+  `hyper::ext::ReasonPhrase` **only for a non-canonical reason** → rebuild it from
+  `ReasonPhrase`, else `canonical_reason()`, else the bare code; and hyper-util's error
+  `Display` is one level (`client error (Connect)`), so walk `source()`. (ureq 3.5.0
+  `config.rs:1068`; hyper 1.12 `role.rs:1074`; tests with a recording proxy)
 - **Logging (slog):** tracing's `Visit` has no duration, time, list or group type (`valuable`
   needs `--cfg tracing_unstable`), `None` fields vanish and `INFO+1` has no `Level`, so a
   slog-compatible format cannot be a tracing formatter → for byte parity, an in-tree logger with
@@ -279,6 +310,11 @@ Rust tutorial. Seen in: awtrix-controller.
   (`set_reuse_address(true)`), so a quick restart cannot rebind. (server restart test)
 - Give shutdown one overall deadline and hand each step only what remains; never a fresh grace
   period per step, never sequential per-session waits. (plan review)
+- A deadline I/O wrapper whose `poll_read` returns `Pending` past the deadline (Go's read
+  deadline during a handler only cancels the request context) must keep `cx.waker()` and wake it
+  when the state changes; without it hyper never polls the read side again and the connection
+  hangs for good, idle timeout included. (S3: a probe hung 90s; fixed by waking on "response
+  done")
 - Go's `recover()` around a step maps to `catch_unwind`, but futures' `CatchUnwind` cannot
   silence the default hook, which prints the panic to stderr, or keep the backtrace for the log
   record: the stack is gone once the panic has unwound → poll the step's future inside

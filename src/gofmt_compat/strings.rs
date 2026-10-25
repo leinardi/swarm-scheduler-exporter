@@ -109,11 +109,60 @@ pub fn trim_space(text: &str) -> &str {
     text.trim_matches(is_space)
 }
 
+/// Go's `strings.TrimSpace` over bytes that need not be UTF-8, as a Go string holds: leading and
+/// trailing Unicode white space removed, stopping at the first byte that does not decode, which
+/// Go reads as `utf8.RuneError` and keeps.
+#[must_use]
+pub fn trim_space_bytes(mut bytes: &[u8]) -> &[u8] {
+    while let Some((character, width)) = first_char(bytes) {
+        if !is_space(character) {
+            break;
+        }
+        bytes = &bytes[width..];
+    }
+    while let Some((character, width)) = last_char(bytes) {
+        if !is_space(character) {
+            break;
+        }
+        bytes = &bytes[..bytes.len() - width];
+    }
+    bytes
+}
+
+/// The character `bytes` starts with, and its width; none when they do not start with one.
+fn first_char(bytes: &[u8]) -> Option<(char, usize)> {
+    (1..=bytes.len().min(4)).find_map(|width| {
+        std::str::from_utf8(&bytes[..width])
+            .ok()
+            .and_then(|text| text.chars().next())
+            .map(|character| (character, width))
+    })
+}
+
+/// The character `bytes` ends with, and its width; none when they do not end with one.
+fn last_char(bytes: &[u8]) -> Option<(char, usize)> {
+    (1..=bytes.len().min(4)).find_map(|width| {
+        std::str::from_utf8(&bytes[bytes.len() - width..])
+            .ok()
+            .and_then(|text| text.chars().next())
+            .map(|character| (character, width))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// The Unicode 16 and 17 case pairs Rust knows and Go's Unicode 15 does not.
+    /// Go's `TrimSpace` on bytes: Unicode spaces go, an undecodable byte stops the trim.
+    #[test]
+    fn trim_space_bytes_is_go_s() {
+        assert_eq!(trim_space_bytes("\u{85} x \u{3000}".as_bytes()), b"x");
+        assert_eq!(trim_space_bytes(b"\xff x \xff"), b"\xff x \xff");
+        assert_eq!(trim_space_bytes(b" \t\r\n"), b"");
+        assert_eq!(trim_space_bytes(b"  partial reason  "), b"partial reason");
+    }
+
     #[test]
     fn folding_uses_unicode_15() {
         assert!(!equal_fold("\u{1C89}", "\u{1C8A}"));

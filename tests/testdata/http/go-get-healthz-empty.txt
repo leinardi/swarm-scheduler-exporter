@@ -1,0 +1,11 @@
+### get-healthz-empty  (port 18082)
+### request: GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 503 Service Unavailable
+Content-Type: text/plain; charset=utf-8
+Date: Sun, 25 Oct 2026 08:44:07 GMT
+Content-Length: 10
+Connection: close
+
+unhealthy
+[end: <nil>]
+
