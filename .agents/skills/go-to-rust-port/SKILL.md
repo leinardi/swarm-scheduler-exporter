@@ -128,13 +128,13 @@ Prometheus exporter).
   `canonical_reason()` and walk `source()` for the error text. (ureq 3.5, hyper 1.12 source)
 - **Docker (moby client):** bollard 0.21 drops the `/v1.xx` prefix (`Url::join`), negotiates via
   `GET /version` (403 behind a read-only socket proxy), sends no User-Agent, times out only the
-  headers and fails a list on one unknown enum; its models rename `Healthcheck` to `HealthCheck`,
-  so inspect → update drops a service's healthcheck → for an exporter, an in-tree client on hyper
+  headers and fails a list on one unknown enum; its models rename `Healthcheck` to `HealthCheck`, so
+  inspect → update drops a service's healthcheck → for an exporter, an in-tree client on hyper
   `client::conn::http1`: moby's `HEAD /_ping` then `GET /_ping`, the discarded negotiation error,
   go-connections' transport (10s dial, 15s keep-alive, two idle for 30s, retry on a reused
-  connection, gzip on TCP only). go-connections also sets `ProxyFromEnvironment` for TCP hosts:
-  decide. Keep bollard for a test harness, re-setting the healthcheck before every update. (8 of
-  8 ping cases, moby v0.6.0)
+  connection, gzip on TCP only). go-connections also sends TCP hosts through `ProxyFromEnvironment`:
+  a client without it is a breaking change to list. Keep bollard for a test harness, re-setting the
+  healthcheck before every update. (8 of 8 ping cases, moby v0.6.0)
 - **Event streams:** every real close of Docker's chunked stream is a cut without the
   terminating chunk (HAProxy timeout, stopped daemon), surfaced by hyper as a body `Err` with
   `is_incomplete_message() == false` → classify "the body returned Err" vs "ended", decode with

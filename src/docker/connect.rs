@@ -24,6 +24,10 @@
 
 //! Dialing the daemon: a unix socket or TCP, optionally under TLS, each step bounded as Go's
 //! transport bounds it.
+//!
+//! Always directly (Q14): Go's transport sent a TCP host through `HTTP_PROXY`, `HTTPS_PROXY` and
+//! `NO_PROXY` (`http.ProxyFromEnvironment`), while this one reads no proxy variable. A proxy in
+//! front of the daemon is named as the `DOCKER_HOST` instead.
 
 use std::fmt;
 use std::io;

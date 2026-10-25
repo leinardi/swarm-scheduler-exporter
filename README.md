@@ -457,6 +457,9 @@ Options:
 - `DOCKER_API_VERSION` — Pin the Engine API version instead of negotiating it (must be within
   1.40–1.56)
 
+The client connects to `DOCKER_HOST` directly: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are not
+read. To go through a proxy (a socket proxy, say), point `DOCKER_HOST` at it.
+
 ### Custom label guardrails
 
 - Names are validated & **sanitized** to Prometheus label rules: ASCII `[a-zA-Z0-9_]` only, every
@@ -653,6 +656,9 @@ What to change when upgrading:
 - **Dashboards or alerts on `go_*` metrics** have nothing to read: use `process_*` instead.
 - **`DOCKER_CERT_PATH` without `DOCKER_TLS_VERIFY`** no longer connects without verifying the
   daemon's certificate: set `DOCKER_TLS_VERIFY=1`.
+- **A TCP `DOCKER_HOST` reached through `HTTP_PROXY` or `HTTPS_PROXY`** is now dialled directly.
+  If the daemon is reachable only through that proxy, point `DOCKER_HOST` at a proxy that forwards
+  to it (a socket proxy). A unix socket was never proxied.
 
 Every intended difference, 1.x (Go) against 2.0 (Rust):
 
@@ -671,6 +677,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q11 | Docker wire | User-Agent `moby-client/…`; one version ping per concurrent first request | User-Agent `swarm-scheduler-exporter/<version>`; concurrent first requests share one ping; every other request detail unchanged |
 | Q12 | Go runtime environment | `GOMAXPROCS`, `GOMEMLIMIT`, `GOGC` and `GODEBUG` tuned the process | No effect; the worker count follows the CPUs available to the container |
 | Q13 | HTTP edge cases | net/http's answers to malformed requests (a bad version, a missing `Host`), its header-count and size limits, and its silent close on a header timeout | hyper's equivalents (for example 431 above 100 headers); paths, status codes, bodies, header order, the 307 for unclean paths, HEAD and the server timeouts are unchanged |
+| Q14 | Docker proxy variables | A TCP `DOCKER_HOST` went through `HTTP_PROXY` / `HTTPS_PROXY` (honouring `NO_PROXY` and skipping loopback), as Go's `http.ProxyFromEnvironment` decides | The client dials `DOCKER_HOST` directly and reads no proxy variable; unix sockets are unaffected |
 
 ## 🤝 Contributing
 
