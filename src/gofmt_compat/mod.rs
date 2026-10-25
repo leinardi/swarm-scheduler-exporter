@@ -22,20 +22,24 @@
  * SOFTWARE.
  */
 
-//! Ports of the Go standard library's formatting that the exporter's output depends on byte for
-//! byte: the logs and the metrics exposition. Each one is a port rather than a Rust equivalent,
-//! because the Rust equivalents differ in the details (float ties, `+00:00` for UTC, Unicode
-//! versions, POSIX `TZ` strings).
+//! Ports of the Go standard library's formatting and parsing that the exporter's behaviour depends
+//! on byte for byte: the logs, the flags and the metrics exposition. Each one is a port rather
+//! than a Rust equivalent, because the Rust equivalents differ in the details (float ties,
+//! `+00:00` for UTC, Unicode versions, POSIX `TZ` strings, sort stability).
 //!
 //! - [`float`] ports `strconv.FormatFloat(f, 'g', -1, 64)` and encoding/json's float layout;
-//! - [`duration`] ports `time.Duration.String`;
+//! - [`duration`] ports `time.Duration.String` and `time.ParseDuration`;
 //! - [`quote`] ports `strconv.Quote`, with Go's Unicode 15 `IsPrint` and `IsSpace`;
 //! - [`time_layout`] ports the `time.RFC3339Nano` and `2006-01-02T15:04:05.000Z07:00` layouts;
-//! - [`local_zone`] ports how Go's `time.Local` is resolved from `TZ` and the zoneinfo files.
+//! - [`local_zone`] ports how Go's `time.Local` is resolved from `TZ` and the zoneinfo files;
+//! - [`parse_float`] ports `strconv.ParseFloat(s, 32)`, which reads `Accept` q-values;
+//! - [`sort`] ports `sort.Sort`, whose order matters when the comparison is not a total order.
 
 pub mod duration;
 pub mod float;
 pub mod local_zone;
+pub mod parse_float;
 pub mod quote;
+pub mod sort;
 pub mod time_layout;
 mod unicode_tables;

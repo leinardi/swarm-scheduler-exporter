@@ -71,6 +71,8 @@ clap = { version = "4.6.7", default-features = false, features = [
 ] }
 # Only the timer here (TokioClock); the runtime features arrive with the code that runs on it.
 tokio = { version = "1.54.1", default-features = false, features = ["time"] }
+# gzip for /metrics, as promhttp offers it; the pure-Rust backend, so no C zlib.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 # The paused clock (start_paused) needs the test runtime.

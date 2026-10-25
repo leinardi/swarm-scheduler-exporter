@@ -3,6 +3,9 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 
+# Go module and format names the metrics docs cite; ".." keeps clippy's default list.
+doc-valid-idents = ["client_golang", "OpenMetrics", ".."]
+
 # The exporter reads the wall clock through the injected Clock, so the tests can drive it with
 # tokio's paused clock. Only the clock module reads it directly, through an
 # #[expect(clippy::disallowed_methods, reason = "...")]. tokio::time::Instant::now stays allowed:

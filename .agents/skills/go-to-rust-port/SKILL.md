@@ -80,6 +80,17 @@ Rust tutorial. Seen in: awtrix-controller.
   in Go, `…213e15` in Rust; 577 of 100,000 random values) → take only the digit count from
   `{:e}` and recompute the digits with `{:.N$e}`, then lay them out as Go's `'g'` (`%e` when the
   exponent is below -4 or at least 6). (250,034 values from Go)
+- `strconv.ParseFloat(s, 32)` reads hex floats (`0x1p-1`) and Go-literal underscores (`1_0` is
+  10), refuses a sign before `nan`, rounds to `float32`, and on overflow returns ±Inf **with** a
+  range error that callers often discard (`q, _ = ParseFloat(...)`); `str::parse::<f32>` rejects
+  hex and `_` and accepts `+nan` → port `readFloat` and the hex path, and parse the decimal case
+  with Rust once the underscores are checked and stripped. (53 Go inputs, go1.26)
+- `sort.Sort` with a comparison that is not a strict weak order (goautoneg's `Accept` sort: q,
+  then `*` type, then `*` subtype, each tested alone) has one defined result, Go's pdqsort's;
+  Rust's `sort_by` orders it differently and since 1.81 may panic with "user-provided comparison
+  function does not correctly implement a total order" → port `sort.Sort` (insertion sort up to
+  12 elements, then pdqsort with its seeded `breakPatterns`). (237 Go inputs; a plain insertion
+  sort differs on 204)
 - `strconv.Quote` and slog's `needsQuoting` use Go's Unicode tables (15.0 in go1.26); Rust 1.98's
   `char` methods and `escape_debug` follow Unicode 17, so code points assigned since print raw in
   Rust and escaped in Go (`\u0897`, `\U0001cc00`) → generate `IsPrint`/`IsSpace` range tables
@@ -194,6 +205,23 @@ Rust tutorial. Seen in: awtrix-controller.
 - slog's `ReplaceAttr` runs on **every** non-group attribute, so a time stripper keyed `time`
   also drops user attributes named `time`, at any depth; a group it empties is erased without
   restoring the separator (JSON `"msg":"x""k":1`) or the text key prefix (`g.k=1`). (Go 1.26)
+- **Prometheus (client_golang, expfmt):** no Rust crate writes Go's text: prometheus 0.14 formats
+  floats with `f64::to_string` (`1729771234.123456`, `inf`, `-0`) and sends no `charset` or
+  `escaping=`; prometheus-client 0.25.1 is OpenMetrics only, appends `.` to HELP, strips `_total`
+  and does not escape HELP or label values; metrics-exporter-prometheus 0.18.3 leaves label pairs
+  unsorted and groups families by kind → an in-tree registry and encoder: expfmt's `writeFloat`
+  (1, 0 with `-0` as `0`, -1, NaN and ±Inf by hand, else `'g'` with threshold 6, `le` too) and
+  `Gather`'s normalisation (label pairs by name, series by label count then values, families by
+  name, empty families dropped). (S2 family-set golden, client_golang v1.24.1)
+- promhttp's `escaping=` comes from the `Accept` clauses up to the first that matches **any**
+  offered format, protobuf included, so a protobuf clause ahead of a text one keeps `underscores`
+  → port `NegotiateAccept` with all four Go formats even when only text is written. goautoneg
+  reads the first `Accept` header only and `q` untrimmed (`q= 0.5` is 0); gddo's
+  `NegotiateContentEncoding` reads every `Accept-Encoding` header, offers identity then gzip with
+  a strict `>` (a tie, `gzip, identity`, is identity), compares case-sensitively (`GZIP` is
+  identity), turns a best q of 0 into identity, and takes q as `0` or `1` plus decimals (`q=2`
+  drops the element, `q=1.5` counts). flate2 (`rust_backend`) writes Go's gzip header bytes but
+  other deflate bytes → compare bodies decompressed. (95 Go answers, common v0.71.0)
 - **YAML (yaml.v3):** serde_yaml_ng, see §2.
 
 ## 4. Concurrency and shutdown
@@ -245,5 +273,5 @@ Rust tutorial. Seen in: awtrix-controller.
   static binaries and about 5 MB RSS. Clean release builds take 36–110 s. (spike)
 
 Verified against (2026-10): Rust 1.98.0, tokio 1.54, jiff 0.2.38, serde_json 1.0, serde_yaml_ng
-0.10.0, ureq 3.5.0, sunrise 3.0.0, tracing-subscriber 0.3.23, clap 4.6.7, cargo-deny 0.20.2,
-cargo-zigbuild 0.24.0, zig 0.17.0; Go baselines from go1.25.
+0.10.0, ureq 3.5.0, sunrise 3.0.0, tracing-subscriber 0.3.23, clap 4.6.7, flate2 1.1.10,
+cargo-deny 0.20.2, cargo-zigbuild 0.24.0, zig 0.17.0; Go baselines from go1.25.
