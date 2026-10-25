@@ -146,14 +146,29 @@ Rust tutorial. Seen in: awtrix-controller.
 ### CLI
 
 - Go's `flag` accepts `-long` as well as `--long`; clap 4 does not, and worse, reads `-config` as
-  the short cluster `-c onfig` when `-c` exists (`-log-level=debug` silently keeps the default) →
-  scan the arguments for `-<long name>` before parsing and fail with the `--` spelling, and list
-  it as a breaking change. (spike; seen in awtrix-controller)
+  the short cluster `-c onfig` when `-c` exists (`-log-level=debug` silently keeps the default),
+  reports `-unknown` as `unexpected argument '-u'`, and prints the help and exits 0 for `-hx` →
+  before parsing, refuse **every** single-dash argument longer than one character up to `--`,
+  naming the `--` spelling for a known flag, and skip the argument after a value flag given
+  without `=` (`--label -x` is a value); list it as a breaking change. (spike; seen in
+  awtrix-controller; clap 4.6.7)
 - Other `flag` semantics clap lacks by default: last repeated value wins
   (`args_override_self`); a value may start with `-` (`allow_hyphen_values`); a bool takes no
   separate value but accepts `=false` and `ParseBool` spellings (`num_args = 0..=1`,
   `require_equals`, `default_missing_value = "true"`, a custom parser); ints are base-0 Go
-  literals (`0x10`, `017`, `1_000`); `-h` exits 1 where clap exits 0. (flag source; port tests)
+  literals (`0x10`, `017`, `1_000`); positional arguments are ignored. `-h` exits 0 under
+  `flag.ExitOnError`, as clap's does; only a `ContinueOnError` caller picks another code. (flag
+  source; port tests; go1.26)
+- Go reads `-boolflag false` as **true** plus an ignored positional `false` → a `require_equals`
+  bool refuses the `false` as an unexpected argument, which fixes a silent misconfiguration; list
+  it as a breaking change. (go1.26 probe)
+- clap derive drops a doc comment's trailing period from the help (`Minimum 1s.` → `Minimum
+  1s`), and turns the struct's doc comment into the help's about line → `help = "…"` for
+  Go-verbatim texts, `about = None, long_about = None`, and `value_name = "BOOL"` with
+  `hide_default_value` for bools. (clap 4.6.7 help snapshot)
+- No crate parses Go durations (`1h2m3.5s`, `.5s`, `1µs`, `-0`, Go's error texts) → port
+  `time.ParseDuration` (about 150 lines, with the `time` package's own byte-wise `quote`, not
+  `strconv.Quote`) and table-test it against Go's results. (go1.26: 49 inputs identical)
 
 ## 3. Ecosystem map
 

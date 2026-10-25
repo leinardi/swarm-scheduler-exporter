@@ -60,6 +60,26 @@ workspace = true
 # Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
 # in-tree, the way Go does (src/gofmt_compat), so none of jiff's tzdb or system features is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# The flags (Q3, Q4). No color: help and errors are plain text, as Go's were.
+clap = { version = "4.6.7", default-features = false, features = [
+    "std",
+    "derive",
+    "help",
+    "usage",
+    "error-context",
+    "suggestions",
+] }
+# Only the timer here (TokioClock); the runtime features arrive with the code that runs on it.
+tokio = { version = "1.54.1", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+# The paused clock (start_paused) needs the test runtime.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "time",
+    "rt",
+    "macros",
+    "test-util",
+] }
 
 [profile.release]
 lto = true

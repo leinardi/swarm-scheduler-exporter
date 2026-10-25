@@ -22,6 +22,8 @@
  * SOFTWARE.
  */
 
+use jiff::Timestamp;
+
 use super::plain_handler::{level_to_upper, qualify};
 use super::*;
 use crate::gofmt_compat::quote;

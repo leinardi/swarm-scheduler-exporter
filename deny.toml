@@ -24,9 +24,8 @@ version = 2
 # user's ca.pem.
 allow = [
     "MIT",
-    # unicode-ident, (MIT OR Apache-2.0) AND Unicode-3.0, under meta's toml dev-dependency.
-    # cargo-deny 0.20.2 reports this allowance as not encountered, because it leaves the members'
-    # dev-dependencies out of the graph here; it is allowed anyway rather than relying on that.
+    # unicode-ident, (MIT OR Apache-2.0) AND Unicode-3.0: through proc-macro2 under clap_derive
+    # in the exporter's own graph, and under meta's toml dev-dependency.
     "Unicode-3.0",
 ]
 confidence-threshold = 0.9

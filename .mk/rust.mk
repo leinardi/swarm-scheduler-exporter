@@ -36,9 +36,21 @@ MK_LOCAL_RUST_INCLUDED := 1
 
 CARGO ?= cargo
 
+# The version stamps (src/version.rs reads them at compile time), from the same git and clock
+# values as Go's -ldflags -X; the defaults below apply only where go.mk has not set them. Only
+# rust-build stamps, so the tests see the defaults. Cargo tracks the variables: going from a
+# stamped build to an unstamped one recompiles the exporter crate, nothing else.
+GIT_COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo "none")
+GIT_VERSION ?= $(shell git describe --tags --dirty --always 2>/dev/null || echo "v0.0.0")
+BUILD_DATE  ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+RUST_VERSION_ENV = \
+  SWARM_SCHEDULER_EXPORTER_VERSION="$(GIT_VERSION)" \
+  SWARM_SCHEDULER_EXPORTER_COMMIT="$(GIT_COMMIT)" \
+  SWARM_SCHEDULER_EXPORTER_DATE="$(BUILD_DATE)"
+
 .PHONY: rust-build
-rust-build: ## Build the Rust workspace
-	$(CARGO) build --workspace --all-targets --locked
+rust-build: ## Build the Rust workspace, with the version stamps
+	$(RUST_VERSION_ENV) $(CARGO) build --workspace --all-targets --locked
 
 .PHONY: rust-test
 rust-test: ## Run the Rust tests, meta-tests included

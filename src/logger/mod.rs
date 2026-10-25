@@ -40,9 +40,9 @@ use std::fmt;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use jiff::Timestamp;
 use jiff::tz::TimeZone;
 
+use crate::clock::{Clock, SystemClock};
 use crate::gofmt_compat::{local_zone, time_layout};
 
 use plain_handler::PlainHandler;
@@ -171,7 +171,7 @@ fn go_to_lower(value: &str) -> String {
 }
 
 /// Where the record time comes from.
-pub type Now = Arc<dyn Fn() -> Timestamp + Send + Sync>;
+pub type Now = Arc<dyn Clock>;
 
 /// A sink every record is written to, whole, under one lock.
 pub type Sink = Box<dyn Write + Send>;
@@ -310,7 +310,7 @@ impl Logger {
         if !self.enabled(level) {
             return;
         }
-        let timestamp = (self.shared.now)();
+        let timestamp = self.shared.now.now();
         let time = (!time_layout::is_go_zero_time(timestamp)).then(|| Time {
             timestamp,
             offset: self.shared.zone.to_offset(timestamp),
@@ -372,7 +372,7 @@ impl Write for MemorySink {
 static GLOBAL: RwLock<Option<Logger>> = RwLock::new(None);
 
 /// The process-wide logger. Before [`configure`] it is Go's default: text at info, with the
-/// time, to stdout. No clock is wired yet, so until then a record carries no time.
+/// system clock's time in the local zone, to stdout.
 #[must_use]
 pub fn global() -> Logger {
     if let Some(logger) = GLOBAL
@@ -392,8 +392,8 @@ pub fn global() -> Logger {
                     include_time: true,
                 },
                 Box::new(io::stdout()),
-                TimeZone::UTC,
-                Arc::new(time_layout::go_zero_time),
+                local_zone::local_zone(|key| std::env::var(key).ok()),
+                Arc::new(SystemClock),
             )
         })
         .clone()
