@@ -25,7 +25,7 @@
 //! A [`DockerApi`] answering from fields a test sets: the port of the Go tests' fake docker.
 
 use std::collections::HashMap;
-use std::future::{Future, ready};
+use std::future::{Future, pending, ready};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -55,6 +55,8 @@ pub(crate) struct FakeDocker {
     pub(crate) container_list_err: Option<Error>,
     /// Returned by `container_inspect` for an ID not in `inspects`.
     pub(crate) inspect_err: Option<Error>,
+    /// `container_inspect` never answers, as a hung daemon: only the caller's deadline ends it.
+    pub(crate) inspect_blocks: bool,
     /// Returned by `service_inspect` for an ID not in `service_by_id`.
     pub(crate) service_inspect_err: Option<Error>,
     /// Returned by `events` instead of a stream: a connect that fails (Q6), which the Go fake
@@ -135,14 +137,21 @@ impl DockerApi for FakeDocker {
         id: &str,
     ) -> impl Future<Output = Result<ContainerInspect, Error>> + Send {
         self.inspect_calls.fetch_add(1, Ordering::SeqCst);
-        ready(self.inspects.get(id).map_or_else(
+        let reply = self.inspects.get(id).map_or_else(
             || {
                 self.inspect_err
                     .clone()
                     .map_or_else(|| Ok(ContainerInspect::default()), Err)
             },
             |inspect| Ok(inspect.clone()),
-        ))
+        );
+        let blocks = self.inspect_blocks;
+        async move {
+            if blocks {
+                pending::<()>().await;
+            }
+            reply
+        }
     }
 
     fn events(

@@ -26,6 +26,7 @@
 //! reconciler that owns the caches and writes the gauges arrives in plan phase 13; until then the
 //! modules here are the pieces it composes.
 
+pub mod containers;
 pub mod desired;
 pub mod error;
 pub mod metrics_ids;
