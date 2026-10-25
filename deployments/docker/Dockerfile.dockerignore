@@ -3,7 +3,9 @@
 .gitignore
 .gitattributes
 
-# CI, docs, tests and agent tooling: none of it is an input of the image
+# CI, docs, tests and agent tooling: none of it is an input of the image. The meta and testenv
+# crates stay: they are workspace members, and cargo reads every member's manifest before it builds
+# the one binary. tests is only the root package's test targets, which cargo build does not need.
 .github
 .claude
 .agents
@@ -12,14 +14,13 @@
 .cache
 docs
 examples
-test
 tests
 *.md
 
-# Local artifacts
+# Local artifacts: a host target directory would be copied in and then hidden by the build's
+# target cache mount
+target
 dist
-coverage.out
-coverage.html
 
 # Editor/IDE
 .idea

@@ -22,10 +22,10 @@
  * SOFTWARE.
  */
 
-//! The text exposition format 0.0.4, a port of expfmt's `MetricFamilyToText` (common v0.71.0
-//! `text_create.go`) for counters, gauges and histograms.
+//! The text exposition format 0.0.4, a port of expfmt's `MetricFamilyToText` (common v0.71.0)
+//! for counters, gauges and histograms.
 
-use crate::gofmt_compat::float;
+use crate::go_compat::float;
 
 use super::{Gathered, Kind, Value};
 

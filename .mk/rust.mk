@@ -34,14 +34,14 @@ MK_LOCAL_RUST_INCLUDED := 1
 # --workspace for the same reason: the root is a package too, and cargo-deny would otherwise check
 # its graph alone. Build and clippy take --all-features, so the harness code behind testenv's
 # integration feature is compiled and linted like the rest; the tests do not, since that
-# feature's suite needs Docker (rust-test-integration).
+# feature's suite needs Docker (test-integration).
 
 CARGO ?= cargo
 
-# The version stamps (src/version.rs reads them at compile time), from the same git and clock
-# values as Go's -ldflags -X; the defaults below apply only where go.mk has not set them. Only
-# rust-build stamps, so the tests see the defaults. Cargo tracks the variables: going from a
-# stamped build to an unstamped one recompiles the exporter crate, nothing else.
+# The version stamps (src/version.rs reads them at compile time), from git and the clock, as the
+# image's build arguments are (docker.mk). Only the builds stamp, so the tests see the defaults.
+# Cargo tracks the variables: going from a stamped build to an unstamped one recompiles the
+# exporter crate, nothing else.
 GIT_COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo "none")
 GIT_VERSION ?= $(shell git describe --tags --dirty --always 2>/dev/null || echo "v0.0.0")
 BUILD_DATE  ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -58,12 +58,9 @@ rust-build: ## Build the Rust workspace, with the version stamps
 rust-test: ## Run the Rust tests, meta-tests included
 	$(CARGO) test --workspace --locked
 
-# Flags for rust-run, e.g. RUST_RUN_ARGS="--containers --log-level debug".
-RUST_RUN_ARGS ?=
-
 .PHONY: rust-run
-rust-run: ## Run the Rust exporter against the local Docker daemon, with the version stamps (flags in RUST_RUN_ARGS)
-	$(RUST_VERSION_ENV) $(CARGO) run --locked --bin swarm-scheduler-exporter -- $(RUST_RUN_ARGS)
+rust-run: ## Run the exporter against the local Docker daemon, with the version stamps (ARGS="...")
+	$(RUST_VERSION_ENV) $(CARGO) run --locked --bin swarm-scheduler-exporter -- $(ARGS)
 
 .PHONY: rust-clippy
 rust-clippy: ## Lint the Rust workspace with clippy, warnings as errors

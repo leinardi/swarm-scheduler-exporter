@@ -10,9 +10,9 @@ repos:
     hooks:
       - id: check-merge-conflict
       # Fixtures are byte-for-byte captures of another tool's output (the files
-      # under internal/collector/testdata are Engine API wire captures and a
-      # golden file), and a formatter that tidies them makes them prove
-      # something other than what was captured.
+      # under tests/testdata are Engine API wire captures and golden files), and
+      # a formatter that tidies them makes them prove something other than what
+      # was captured.
       - id: end-of-file-fixer
         exclude: (^|/)testdata/
       - id: trailing-whitespace
@@ -89,7 +89,7 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      # Every //nolint, shellcheck disable and hadolint ignore is counted per rule against
+      # Every #[expect], shellcheck disable and hadolint ignore is counted per rule against
       # .suppressions-baseline, and a commit that adds one must change the baseline too
       # (scripts/check-suppressions.sh). Always runs: the ratchet reads the whole tree and the
       # staged diff, and a commit that touches no source can still delete the baseline.
@@ -100,21 +100,6 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      # Dependency-change check, and nothing more. It runs the same make target `make audit-deps`
-      # runs -- the full source-aware govulncheck scan over every package -- but only when the
-      # dependency files themselves change, which is what limits it: it catches a bad upgrade at
-      # the moment it is made, and nothing else. It does not catch a CVE disclosed against a
-      # dependency nobody touched since, and it never fires on a .go change, so new code reaching
-      # an already-vulnerable API goes unseen here. Widening the trigger is not the fix: it would
-      # put a network scan on every Go commit. `make audit-deps` is the deliberate run, and the
-      # go-vulncheck CI job runs it on every pull request.
-      - id: audit-deps-go
-        name: go dependency audit
-        entry: make audit-deps-go
-        language: system
-        pass_filenames: false
-        require_serial: true
-        files: ^go\.(mod|sum)$
   # The Rust workspace. Every command is workspace-wide, so the meta and testenv crates are held to
   # the same lints as the exporter, and --locked, so Cargo.lock is what gets tested. clippy takes
   # --all-features, so the harness code behind testenv's integration feature is linted too; the
@@ -142,9 +127,10 @@ repos:
         pass_filenames: false
         require_serial: true
         files: '(\.rs$|(^|/)Cargo\.(toml|lock)$|^rust-toolchain\.toml$)'
-      # Like audit-deps-go: it fires when the dependency graph changes, needs the network for the
-      # advisory database, and catches a bad upgrade at the moment it is made. The rust CI job runs
-      # the same check on every pull request.
+      # Dependency-change check, and nothing more: it fires when the dependency graph changes,
+      # needs the network for the advisory database, and catches a bad upgrade at the moment it is
+      # made. It does not catch an advisory published against a crate nobody touched since: the
+      # rust CI job runs the same check on every pull request, and scheduled-scan every week.
       - id: cargo-deny
         name: cargo deny
         entry: cargo deny --workspace check
@@ -181,18 +167,6 @@ repos:
     hooks:
       - id: hadolint
         exclude: \.dockerignore$
-  - repo: https://github.com/golangci/golangci-lint
-    rev: v2.14.0
-    hooks:
-      - id: golangci-lint-config-verify
-      - id: golangci-lint-fmt
-      - id: golangci-lint-full
-        types: [file]
-        files: '(\.go$|^go\.(mod|sum)$|^\.golangci\.(yml|yaml|toml|json)$)'
-  - repo: https://github.com/tekwizely/pre-commit-golang
-    rev: v1.0.0-rc.4
-    hooks:
-      - id: go-test-repo-mod
   # The release version is derived from the commit types since the last tag, so
   # a message nobody can classify is a release nobody can version. With
   # --force-scope: every commit from now on names a scope, and CONTRIBUTING.md

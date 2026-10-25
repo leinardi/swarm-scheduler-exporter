@@ -27,7 +27,7 @@
 //! With docker-socket-proxy v0.5.0 (`HAProxy` 3.4.2) an idle event stream is never closed
 //! cleanly: a server timeout, a proxy restart and a daemon SIGTERM all cut the body without a
 //! terminating chunk, which the exporter logs at warn. Nothing here expects the info line of a
-//! clean close; the restart below takes the warn path, as the Go test's does.
+//! clean close; the restart below takes the warn path, as Go's did.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

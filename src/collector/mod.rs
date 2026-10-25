@@ -40,8 +40,8 @@ pub mod types;
 
 use crate::metrics::LabelsMismatch;
 
-/// client_golang's `With` and `WithLabelValues` panic on label values that do not fit the
-/// family; so does this, which the reconciler's step recovery then catches as Go's does.
+/// The Prometheus Go client's `With` and `WithLabelValues` panic on label values that do not fit
+/// the family; so does this, which the reconciler's step recovery then catches as Go's does.
 pub(crate) fn must(result: Result<(), LabelsMismatch>) {
     if let Err(error) = result {
         panic!("{error}");

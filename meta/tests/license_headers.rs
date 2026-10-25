@@ -34,8 +34,8 @@ use meta::{gitenv, repo};
 
 const SCRIPT_PATH: &str = "scripts/check-license-headers.sh";
 
-/// A Go file carrying the lines the check looks for; the last one is its eighth line.
-const GO_HEADER: &str = r#"/*
+/// A Rust file carrying the lines the check looks for; the last one is its eighth line.
+const RUST_HEADER: &str = r#"/*
  * MIT License
  *
  * Copyright (c) 2026 Roberto Leinardi
@@ -45,7 +45,7 @@ const GO_HEADER: &str = r#"/*
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  */
 
-package x
+fn x() {}
 "#;
 
 /// Another licence's notice with the right copyright line.
@@ -55,7 +55,7 @@ const APACHE_HEADER: &str = r#"/*
  * Licensed under the Apache License, Version 2.0 (the "License");
  */
 
-package x
+fn x() {}
 "#;
 
 const SHELL_HEADER: &str = r#"#!/usr/bin/env bash
@@ -189,52 +189,33 @@ fn run_cases(cases: Vec<HeaderCase>) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Go: `TestHeaderCases`, the notice on Go and Rust files: present, after a build constraint,
-/// missing, another licence, another holder, a testdata fixture, and the edges of the window it
-/// must sit in. `GO_HEADER`'s last required line is its eighth: 22 lines before it put it on
-/// line 30, the last line of the window, and one more pushes it out.
+/// Go: `TestHeaderCases`, the notice on Rust files: present, missing, another licence, another
+/// holder, a testdata fixture, and the edges of the window it must sit in. `RUST_HEADER`'s last
+/// required line is its eighth: 22 lines before it put it on line 30, the last line of the window,
+/// and one more pushes it out.
 #[test]
 fn header_cases_for_the_notice() {
-    let other_holder = GO_HEADER.replace("Roberto Leinardi", "Someone Else");
-    let rust = GO_HEADER.replacen("package x\n", "fn x() {}\n", 1);
-    let constrained = format!("//go:build integration\n\n{GO_HEADER}");
-    let at_the_edge = format!("{}{GO_HEADER}", "// filler\n".repeat(22));
-    let past_the_edge = format!("{}{GO_HEADER}", "// filler\n".repeat(23));
+    let other_holder = RUST_HEADER.replace("Roberto Leinardi", "Someone Else");
+    let at_the_edge = format!("{}{RUST_HEADER}", "// filler\n".repeat(22));
+    let past_the_edge = format!("{}{RUST_HEADER}", "// filler\n".repeat(23));
     run_cases(vec![
         case(
-            "go file with the header",
-            &[("internal/x/x.go", GO_HEADER)],
+            "rust file with the header",
+            &[("src/x.rs", RUST_HEADER)],
             true,
         ),
-        case(
-            "go file after a build constraint",
-            &[("internal/x/x.go", &constrained)],
-            true,
-        ),
-        case(
-            "go file without a header",
-            &[("internal/x/x.go", "package x\n")],
-            false,
-        ),
-        case(
-            "another licence's header",
-            &[("internal/x/x.go", APACHE_HEADER)],
-            false,
-        ),
-        case(
-            "another copyright holder",
-            &[("internal/x/x.go", &other_holder)],
-            false,
-        ),
-        // Rust carries the same /* */ block as Go.
-        case("rust file with the header", &[("src/x.rs", &rust)], true),
         case(
             "rust file without a header",
             &[("src/x.rs", "fn x() {}\n")],
             false,
         ),
         case(
-            "rust file with another copyright holder",
+            "another licence's header",
+            &[("src/x.rs", APACHE_HEADER)],
+            false,
+        ),
+        case(
+            "another copyright holder",
             &[("meta/src/x.rs", &other_holder)],
             false,
         ),
@@ -245,12 +226,12 @@ fn header_cases_for_the_notice() {
         ),
         case(
             "header ending on the last line of the window",
-            &[("internal/x/x.go", &at_the_edge)],
+            &[("src/x.rs", &at_the_edge)],
             true,
         ),
         case(
             "header ending one line past the window",
-            &[("internal/x/x.go", &past_the_edge)],
+            &[("src/x.rs", &past_the_edge)],
             false,
         ),
     ]);
@@ -306,7 +287,7 @@ fn header_cases_for_the_exemptions() {
     run_cases(vec![
         case(
             "untracked file without a header",
-            &[("untracked/scratch.go", "package x\n")],
+            &[("untracked/scratch.rs", "fn x() {}\n")],
             true,
         ),
         case(
@@ -321,7 +302,7 @@ fn header_cases_for_the_exemptions() {
         ),
         case(
             "testdata fixture",
-            &[("internal/x/testdata/fixture.go", "package fixture\n")],
+            &[("testenv/x/testdata/fixture.rs", "fn x() {}\n")],
             true,
         ),
         case(

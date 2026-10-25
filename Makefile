@@ -31,7 +31,7 @@ MK_COMMON_VERSION     ?= v1
 MK_COMMON_DIR         := $(REPO_ROOT)/.mk
 
 # Shared snippets coming from make-common
-MK_COMMON_FILES       := docker.mk help.mk go.mk password.mk pre-commit.mk
+MK_COMMON_FILES       := docker.mk help.mk password.mk pre-commit.mk
 
 # Repo-local snippets that are NOT in make-common
 MK_LOCAL_FILES        := docker-socket-run.mk audit-deps.mk integration-test.mk verify.mk rust.mk
@@ -49,9 +49,6 @@ MK_COMMON_BOOTSTRAP := $(shell "$(MK_COMMON_BOOTSTRAP_SCRIPT)" \
 # Project-specific config
 # -----------------------------------------------------------------------------
 BIN_NAME     ?= swarm-scheduler-exporter
-GO_CMD       ?= ./cmd/swarm-scheduler-exporter
-GO_PKG       ?= ./...
-DIST_DIR     ?= dist
 
 # Docker build settings
 DOCKERFILE     ?= deployments/docker/Dockerfile
@@ -61,9 +58,9 @@ IMAGE_NAME   ?= $(BIN_NAME)
 IMAGE_REPO   ?= $(IMAGE_NAME)
 IMAGE_TAG    ?= $(GIT_VERSION)
 
-# Drop-in runtime defaults (matches old `run`/`docker-run`)
-ARGS ?= -containers -log-level debug
-DOCKER_RUN_ARGS ?= -listen-addr 0.0.0.0:8888
+# Drop-in runtime defaults for rust-run and docker-run
+ARGS ?= --containers --log-level debug
+DOCKER_RUN_ARGS ?= --listen-addr 0.0.0.0:8888
 
 # -----------------------------------------------------------------------------
 # Include shared make logic (fetched from make-common)

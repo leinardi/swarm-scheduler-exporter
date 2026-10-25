@@ -503,7 +503,7 @@ fn assert_engine_requests(engine: &FakeEngine) {
     assert_eq!((go_pings.len(), pings), (2, 1), "pings: Go, Rust");
 }
 
-/// Go: the S2 capture of v1.3.2's `/metrics` (no Go test). Cases 1 and 2 (text, and Prometheus
+/// Go: the S2 capture of v1.3.2's `/metrics` (no Go counterpart). Cases 1 and 2 (text, and Prometheus
 /// 3.15.1's `Accept` with gzip) are byte-exact after the masks with `go_*` removed, headers
 /// included; case 3 (protobuf) differs only in Go's protobuf `Content-Type` (Q2), the body equal
 /// to Go's protobuf decoded to text; and the `escaping` echo and `*/*` answer Go's.

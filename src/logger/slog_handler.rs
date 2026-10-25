@@ -36,7 +36,7 @@
 //!   encoding/json's (`\b`). Floats are `'g'` in text and encoding/json's layout in JSON, where
 //!   NaN and the infinities become the string `!ERROR:json: unsupported value: NaN`.
 
-use crate::gofmt_compat::{duration, float, quote, time_layout};
+use crate::go_compat::{duration, float, quote, time_layout};
 
 use super::Level;
 use super::value::{Attr, Time, Value};

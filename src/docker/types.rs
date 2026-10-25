@@ -37,7 +37,7 @@ use std::fmt;
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 
-use crate::gofmt_compat::time_layout::{go_zero_time, is_go_zero_time};
+use crate::go_compat::time_layout::{go_zero_time, is_go_zero_time};
 
 /// Labels, as the daemon sends them.
 pub type Labels = BTreeMap<String, String>;

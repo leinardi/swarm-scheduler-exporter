@@ -69,9 +69,9 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::clock::Clock;
-use crate::gofmt_compat::duration;
-use crate::gofmt_compat::errno::io_error_text;
-use crate::gofmt_compat::host_port::split_host_port;
+use crate::go_compat::duration;
+use crate::go_compat::errno::io_error_text;
+use crate::go_compat::host_port::split_host_port;
 use crate::logger::{Attr, Logger};
 use crate::metrics::exposition::Exposition;
 

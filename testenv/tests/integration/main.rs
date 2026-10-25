@@ -60,7 +60,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use futures_util::future::LocalBoxFuture;
-use swarm_scheduler_exporter::gofmt_compat::duration;
+use swarm_scheduler_exporter::go_compat::duration;
 use testenv::context::Context;
 use testenv::run_filter::RunFilter;
 use testenv::{ENV_BINARY, cleanup_command, spec_from_env, up};
@@ -268,7 +268,7 @@ async fn run_suite(filter: RunFilter, tests: &[&Test]) -> ExitCode {
     let binary = PathBuf::from(&spec.binary);
     if spec.binary.is_empty() || !binary.exists() {
         say(&format!(
-            "[it] {ENV_BINARY} must name the built exporter binary (make rust-test-integration \
+            "[it] {ENV_BINARY} must name the built exporter binary (make test-integration \
              sets it): {:?}",
             spec.binary
         ));

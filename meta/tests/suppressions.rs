@@ -27,8 +27,7 @@
 //!
 //! Each case builds a scratch git repository and runs the script inside it, rather than against
 //! this repository: what is under test is the rule, not today's counts, and a case has to be able
-//! to add a suppression without that being a suppression anybody has to review. The Go fixtures
-//! stay while the script still counts Go directives.
+//! to add a suppression without that being a suppression anybody has to review.
 
 use std::fs;
 use std::path::Path;
@@ -39,64 +38,82 @@ use meta::{gitenv, repo};
 /// The name the script looks for, relative to the repository it is run in.
 const BASELINE_FILE: &str = ".suppressions-baseline";
 
-/// The scratch Go file most cases edit.
-const SCRATCH: &str = "scratch.go";
+/// The scratch Rust file every case edits.
+const SCRATCH: &str = "scratch.rs";
 
-/// A Go file carrying exactly one `//nolint:gosec` directive.
-const GO_WITH_GOSEC: &str = "package scratch
+/// One `#[expect(clippy::too_many_lines)]`.
+const RUST_WITH_ONE: &str = r#"#[expect(clippy::too_many_lines, reason = "scratch fixture")]
+fn run() {}
+"#;
 
-// Run does nothing in particular.
-func Run() string {
-\treturn \"ok\" //nolint:gosec // scratch fixture
-}
-";
-
-/// The same single directive on a different line: the count is unchanged, which is the case the
+/// The same single attribute on a different line: the count is unchanged, which is the case the
 /// per-rule counting alone cannot see.
-const GO_WITH_GOSEC_MOVED: &str = "package scratch
+const RUST_WITH_ONE_MOVED: &str = r#"fn first() {}
 
-//nolint:gosec // scratch fixture, moved
-func Run() string {
-\treturn \"ok\"
-}
-";
+#[expect(clippy::too_many_lines, reason = "scratch fixture, moved")]
+fn run() {}
+"#;
 
-/// Two directives for the same linter.
-const GO_WITH_TWO_GOSEC: &str = "package scratch
+/// Two attributes for the same lint.
+const RUST_WITH_TWO: &str = r#"#[expect(clippy::too_many_lines, reason = "scratch fixture")]
+fn run() {}
 
-// Run does nothing in particular.
-func Run() string {
-\tvalue := \"ok\" //nolint:gosec // scratch fixture
-\treturn value  //nolint:gosec // scratch fixture too
-}
-";
+#[expect(clippy::too_many_lines, reason = "scratch fixture too")]
+fn walk() {}
+"#;
 
-/// A string containing `//` before the directive. golangci-lint reads the directive; a detector
-/// that stops at the first `//` on the line does not.
-const GO_WITH_DIRECTIVE_AFTER_URL: &str = "package scratch
+/// An attribute after a string holding a comment opener on the same line. A detector that stops
+/// at the first "//" on the line would miss it.
+const RUST_AFTER_URL: &str = r#"const URL: &str = "https://example.com/x"; #[expect(clippy::too_many_lines, reason = "behind a URL")]
+fn run() {}
+"#;
 
-// Run does nothing in particular.
-func Run() string {
-\treturn \"https://example.com/x\" //nolint:gosec // scratch fixture behind a URL
-}
-";
-
-/// A directive mentioned inside a sentence. It is not a suppression, and counting it as one would
+/// A sentence that mentions an attribute. It is not a suppression, and counting it as one would
 /// make every comment about the ratchet fail the ratchet.
-const GO_WITH_PROSE_MENTION: &str = "package scratch
-
-// Run is written so that it needs no //nolint:gosec directive at all.
-func Run() string {
-\treturn \"ok\"
-}
+const RUST_PROSE_MENTION: &str =
+    "// run is written so that it needs no #[expect(clippy::too_many_lines)] at all.
+fn run() {}
 ";
+
+/// An attribute mentioned inside a block comment, which is not code either.
+const RUST_BLOCK_COMMENT: &str = "/*
+ * run needs no #[expect(clippy::too_many_lines)], and this line is not one.
+ */
+fn run() {}
+";
+
+/// Attribute text held in a raw string spanning lines. None of it is a suppression.
+const RUST_RAW_STRING_FIXTURE: &str = r##"const FIXTURE: &str = r#"
+#[expect(clippy::too_many_lines, reason = "inside a raw string")]
+fn run() {}
+"#;
+"##;
+
+/// One more line added inside that raw string -- the ordinary way a new case gets written, and a
+/// line the staged-diff rule must not read as an attribute.
+const RUST_RAW_STRING_FIXTURE_EXTENDED: &str = r##"const FIXTURE: &str = r#"
+#[expect(clippy::cast_possible_truncation, reason = "inside a raw string too")]
+#[expect(clippy::too_many_lines, reason = "inside a raw string")]
+fn run() {}
+"#;
+"##;
+
+/// A real attribute added after the raw string closes, which the same rule must still catch.
+const RUST_RAW_STRING_FIXTURE_AND_ATTRIBUTE: &str = r##"const FIXTURE: &str = r#"
+#[expect(clippy::too_many_lines, reason = "inside a raw string")]
+fn run() {}
+"#;
+
+#[expect(clippy::too_many_lines, reason = "in code this time")]
+fn real() {}
+"##;
 
 /// Both hadolint forms: the per-line one and the global one, which silences a rule for the whole
 /// file and is therefore counted as its own family.
 const DOCKERFILE_WITH_IGNORES: &str = "FROM scratch
 
-# hadolint global ignore=DL3008
-# hadolint ignore=DL3018
+# hadolint global ignore=DL3006
+# hadolint ignore=DL3007,DL3008
 COPY x /x
 ";
 
@@ -104,23 +121,6 @@ COPY x /x
 const SHELL_WITH_DISABLE: &str = "#!/usr/bin/env bash
 # shellcheck disable=SC2086
 echo $NAMES
-";
-
-/// Two linters silenced with a space after the comma, which golangci-lint and nolintlint both
-/// accept; stopping at the space would leave errcheck uncounted.
-const GO_WITH_SPACED_LIST: &str = "package scratch
-
-// Run does nothing in particular.
-func Run() error {
-\treturn nil //nolint:gosec, ErrCheck // scratch fixture
-}
-";
-
-/// The broadest Go suppression there is: no linter named, so every one of them is silenced.
-const GO_WITH_BARE_NOLINT: &str = "package scratch
-
-//nolint // deliberately unspecific
-func Run() {}
 ";
 
 /// Another shellcheck directive, for the exclusion cases.
@@ -147,8 +147,8 @@ fn unused() {}
 #![allow(missing_docs)]
 "#;
 
-/// Lint attributes only as data: in a raw string spanning lines, in a string, in a line comment
-/// and in a nested block comment, around character literals holding a quote. None of it is a
+/// Lint attributes only as data: in a raw string spanning lines, in a string, in a line comment and
+/// in a nested block comment, around character literals holding a quote. None of it is a
 /// suppression.
 const RUST_WITH_ATTRIBUTE_TEXT: &str = r##"const FIXTURE: &str = r#"
 #[allow(clippy::unwrap_used)]
@@ -176,60 +176,6 @@ const RUST_WITH_MULTI_LINE_EXPECT_EXTENDED: &str = r#"#[expect(
 )]
 fn long() {}
 "#;
-
-/// Directive text inside a Go raw string. None of it is a suppression.
-const GO_WITH_RAW_STRING_FIXTURE: &str = "package scratch
-
-// fixture is Go source held as data.
-const fixture = `package other
-
-func Run() string {
-\treturn \"ok\" //nolint:gosec // inside a raw string
-}
-`
-";
-
-/// One more line added to that raw string -- the ordinary way a new case gets written, and a line
-/// the staged-diff rule must not read as a directive.
-const GO_WITH_RAW_STRING_FIXTURE_EXTENDED: &str = "package scratch
-
-// fixture is Go source held as data.
-const fixture = `package other
-
-func Run() string {
-\tvalue := \"ok\" //nolint:gosec // inside a raw string too
-\treturn value //nolint:gosec // inside a raw string
-}
-`
-";
-
-/// A real directive after the raw string closes, which the same rule must still catch.
-const GO_WITH_RAW_STRING_FIXTURE_AND_DIRECTIVE: &str = "package scratch
-
-// fixture is Go source held as data.
-const fixture = `package other
-
-func Run() string {
-\treturn \"ok\" //nolint:gosec // inside a raw string
-}
-`
-
-func Run() string {
-\treturn \"ok\" //nolint:gosec // a directive in code this time
-}
-";
-
-/// A directive mentioned on a continuation line of a block comment. golangci-lint honors no
-/// directive there, so neither does the ratchet.
-const GO_WITH_BLOCK_COMMENT: &str = "package scratch
-
-/*
- * Run needs no //nolint:gosec directive, and this line is not one.
- */
-func Run() string {
-\treturn \"ok\"
-}
-";
 
 /// A scratch repository, removed when dropped.
 struct Scratch(tempfile::TempDir);
@@ -275,7 +221,7 @@ impl Scratch {
         self.write(BASELINE_FILE, &content);
     }
 
-    /// Writes the scratch Go file and a baseline, and commits both, leaving a clean index.
+    /// Writes the scratch Rust file and a baseline, and commits both, leaving a clean index.
     fn commit_initial(&self, source: &str, baseline: &str) {
         self.write(SCRATCH, source);
         self.write_baseline(baseline);
@@ -359,14 +305,14 @@ fn check_suppressions() {
     run_cases(&[
         (
             "a tree that matches its baseline passes",
-            |scratch| scratch.commit_initial(GO_WITH_GOSEC, "nolint/gosec\t1"),
+            |scratch| scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::too_many_lines\t1"),
             None,
         ),
         (
             "an added suppression with an untouched baseline is refused",
             |scratch| {
-                scratch.commit_initial(GO_WITH_GOSEC, "nolint/gosec\t1");
-                scratch.write(SCRATCH, GO_WITH_TWO_GOSEC);
+                scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::too_many_lines\t1");
+                scratch.write(SCRATCH, RUST_WITH_TWO);
                 scratch.git(&["add", SCRATCH]);
             },
             Some("without touching .suppressions-baseline"),
@@ -374,9 +320,9 @@ fn check_suppressions() {
         (
             "the same addition passes once the baseline is staged with it",
             |scratch| {
-                scratch.commit_initial(GO_WITH_GOSEC, "nolint/gosec\t1");
-                scratch.write(SCRATCH, GO_WITH_TWO_GOSEC);
-                scratch.write_baseline("nolint/gosec\t2");
+                scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::too_many_lines\t1");
+                scratch.write(SCRATCH, RUST_WITH_TWO);
+                scratch.write_baseline("expect/clippy::too_many_lines\t2");
                 scratch.git(&["add", SCRATCH, BASELINE_FILE]);
             },
             None,
@@ -384,46 +330,54 @@ fn check_suppressions() {
         (
             "a suppression swapped one for one is refused even though the count holds",
             |scratch| {
-                scratch.commit_initial(GO_WITH_GOSEC, "nolint/gosec\t1");
-                scratch.write(SCRATCH, GO_WITH_GOSEC_MOVED);
+                scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::too_many_lines\t1");
+                scratch.write(SCRATCH, RUST_WITH_ONE_MOVED);
                 scratch.git(&["add", SCRATCH]);
             },
             Some("without touching .suppressions-baseline"),
         ),
         (
             "a count above the baseline is refused with nothing staged",
-            |scratch| scratch.commit_initial(GO_WITH_TWO_GOSEC, "nolint/gosec\t1"),
+            |scratch| scratch.commit_initial(RUST_WITH_TWO, "expect/clippy::too_many_lines\t1"),
             Some("baseline allows 1"),
         ),
         (
             "a count below the baseline is refused too",
-            |scratch| scratch.commit_initial(GO_WITH_GOSEC, "nolint/gosec\t3"),
+            |scratch| scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::too_many_lines\t3"),
             Some("baseline still claims 3"),
         ),
         (
             "a rule the baseline has never heard of is refused",
-            |scratch| scratch.commit_initial(GO_WITH_GOSEC, "nolint/dupl\t1"),
+            |scratch| scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::float_cmp\t1"),
             Some("does not list this rule"),
         ),
+    ]);
+}
+
+/// Go: `TestCheckSuppressions`, the detector's boundaries and the missing baseline: what counts
+/// as a suppression, and that no baseline is never read as no suppressions.
+#[test]
+fn check_suppressions_detector_and_missing_baseline() {
+    run_cases(&[
         (
-            "a directive behind a string containing a comment opener still counts",
-            |scratch| scratch.commit_initial(GO_WITH_DIRECTIVE_AFTER_URL, "nolint/dupl\t1"),
-            Some("nolint/gosec"),
+            "an attribute behind a string containing a comment opener still counts",
+            |scratch| scratch.commit_initial(RUST_AFTER_URL, "expect/clippy::float_cmp\t1"),
+            Some("expect/clippy::too_many_lines"),
         ),
         (
-            "a directive mentioned in prose is not a suppression",
-            |scratch| scratch.commit_initial(GO_WITH_PROSE_MENTION, ""),
+            "an attribute mentioned in prose is not a suppression",
+            |scratch| scratch.commit_initial(RUST_PROSE_MENTION, ""),
             None,
         ),
         (
-            "a directive inside a block comment is not a suppression either",
-            |scratch| scratch.commit_initial(GO_WITH_BLOCK_COMMENT, ""),
+            "an attribute inside a block comment is not a suppression either",
+            |scratch| scratch.commit_initial(RUST_BLOCK_COMMENT, ""),
             None,
         ),
         (
             "a deleted baseline is refused rather than treated as no suppressions",
             |scratch| {
-                scratch.commit_initial(GO_WITH_GOSEC, "nolint/gosec\t1");
+                scratch.commit_initial(RUST_WITH_ONE, "expect/clippy::too_many_lines\t1");
                 scratch.git(&["rm", "-q", BASELINE_FILE]);
             },
             Some("is missing"),
@@ -431,7 +385,7 @@ fn check_suppressions() {
         (
             "a deleted baseline is refused in a tree with no suppressions at all",
             |scratch| {
-                scratch.commit_initial(GO_WITH_PROSE_MENTION, "");
+                scratch.commit_initial(RUST_PROSE_MENTION, "");
                 scratch.git(&["rm", "-q", BASELINE_FILE]);
             },
             Some("is missing"),
@@ -439,25 +393,27 @@ fn check_suppressions() {
     ]);
 }
 
-/// Go: `TestCheckSuppressionsUpdate`. `--update` writes a baseline the checker then accepts: the
-/// script's own instruction for a refusal is to run it, so a broken `--update` would leave no way
+/// Go: `TestCheckSuppressionsUpdate`. --update writes a baseline the checker then accepts: the
+/// script's own instruction for a refusal is to run it, so a broken --update would leave no way
 /// out.
 #[test]
 fn update_writes_an_accepted_baseline() {
     let scratch = Scratch::new();
-    scratch.commit_initial(GO_WITH_TWO_GOSEC, "nolint/gosec\t1");
+    scratch.commit_initial(RUST_WITH_TWO, "expect/clippy::too_many_lines\t1");
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
         !accepted,
         "the ratchet accepted a count above its baseline:\n{output}"
     );
+
     let (updated, output) = scratch.ratchet(&["--update"]);
     assert!(updated, "--update failed:\n{output}");
     let written = scratch.read(BASELINE_FILE);
     assert!(
-        written.contains("nolint/gosec\t2"),
-        "the rewritten baseline does not record the two directives:\n{written}"
+        written.contains("expect/clippy::too_many_lines\t2"),
+        "the rewritten baseline does not record the two attributes:\n{written}"
     );
+
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
         accepted,
@@ -473,8 +429,6 @@ fn counts_every_family() {
     let scratch = Scratch::new();
     scratch.write("Dockerfile", DOCKERFILE_WITH_IGNORES);
     scratch.write("run.sh", SHELL_WITH_DISABLE);
-    scratch.write("bare.go", GO_WITH_BARE_NOLINT);
-    scratch.write("spaced.go", GO_WITH_SPACED_LIST);
     scratch.write("src/attributes.rs", RUST_WITH_ATTRIBUTES);
     scratch.write("src/text.rs", RUST_WITH_ATTRIBUTE_TEXT);
     scratch.write_baseline("");
@@ -485,15 +439,13 @@ fn counts_every_family() {
     assert!(updated, "--update failed:\n{output}");
     let written = scratch.read(BASELINE_FILE);
 
-    // Each linter of a two-linter nolint counts separately, the global hadolint form is its own
-    // family, and a bare //nolint is recorded as the everything-suppression it is.
+    // The global hadolint form is its own family, and each code of a multi-code directive and each
+    // lint of a multi-lint attribute counts separately.
     for line in [
-        "hadolint-global-ignore/DL3008\t1",
-        "hadolint-ignore/DL3018\t1",
+        "hadolint-global-ignore/DL3006\t1",
+        "hadolint-ignore/DL3007\t1",
+        "hadolint-ignore/DL3008\t1",
         "shellcheck-disable/SC2086\t1",
-        "nolint/*\t1",
-        "nolint/gosec\t1",
-        "nolint/errcheck\t1",
         "expect/clippy::pedantic\t1",
         "expect/clippy::too_many_lines\t1",
         "expect/clippy::cast_possible_truncation\t1",
@@ -505,8 +457,8 @@ fn counts_every_family() {
             "the baseline does not record {line:?}:\n{written}"
         );
     }
-    // The Rust text fixture names clippy::unwrap_used and expect/dead_code only as data; the one
-    // real allow(dead_code) is in the attributes fixture.
+    // The text fixture names clippy::unwrap_used and expect/dead_code only as data; the one real
+    // allow(dead_code) is in the attributes fixture.
     for unwanted in ["allow/clippy::unwrap_used", "expect/dead_code", "reason"] {
         assert!(
             !written.contains(unwanted),
@@ -515,18 +467,18 @@ fn counts_every_family() {
     }
 }
 
-/// Go: `TestCheckSuppressionsSeesALintAddedToAMultiLineExpect`. A Rust lint is located on the line
-/// that names it, not on the line that opens the attribute: rustfmt puts each lint of a long
-/// attribute on its own line, and adding one there leaves the opening line untouched.
+/// Go: `TestCheckSuppressionsSeesALintAddedToAMultiLineExpect`. A lint is located on the line that
+/// names it, not on the line that opens the attribute: rustfmt puts each lint of a long attribute
+/// on its own line, and adding one there leaves the opening line untouched.
 #[test]
 fn sees_a_lint_added_to_a_multi_line_expect() {
     let scratch = Scratch::new();
-    scratch.write("scratch.rs", RUST_WITH_MULTI_LINE_EXPECT);
-    scratch.write_baseline("expect/clippy::too_many_lines\t1");
-    scratch.git(&["add", "-A"]);
-    scratch.git(&["commit", "-q", "-m", "scratch fixture"]);
-    scratch.write("scratch.rs", RUST_WITH_MULTI_LINE_EXPECT_EXTENDED);
-    scratch.git(&["add", "scratch.rs"]);
+    scratch.commit_initial(
+        RUST_WITH_MULTI_LINE_EXPECT,
+        "expect/clippy::too_many_lines\t1",
+    );
+    scratch.write(SCRATCH, RUST_WITH_MULTI_LINE_EXPECT_EXTENDED);
+    scratch.git(&["add", SCRATCH]);
 
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
@@ -547,7 +499,7 @@ fn skips_upstream_and_fixtures() {
     let scratch = Scratch::new();
     scratch.commit_empty_baseline();
     scratch.write("scripts/bootstrap-mk-common.sh", SHELL_WITH_DISABLE_SC2034);
-    scratch.write("internal/collector/testdata/fixture.go", GO_WITH_GOSEC);
+    scratch.write("tests/testdata/fixture.rs", RUST_WITH_ONE);
     scratch.git(&["add", "-A"]);
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
@@ -573,7 +525,11 @@ fn counts_neighbors_of_excluded_paths() {
             SHELL_WITH_DISABLE_SC2034,
             "shellcheck-disable/SC2034",
         ),
-        ("internal/testdatax/x.go", GO_WITH_GOSEC, "nolint/gosec"),
+        (
+            "tests/testdatax/x.rs",
+            RUST_WITH_ONE,
+            "expect/clippy::too_many_lines",
+        ),
     ] {
         let scratch = Scratch::new();
         scratch.commit_empty_baseline();
@@ -588,59 +544,49 @@ fn counts_neighbors_of_excluded_paths() {
 }
 
 /// Go: `TestCheckSuppressionsReadsTheStagedFileNotTheHunk`. The staged-diff rule sees whole files.
-/// The detector carries raw-string and block-comment state across lines, so judging added lines
-/// on their own would both invent suppressions inside a fixture and miss real ones after a
-/// closing backquote -- and an invented one cannot be resolved, because the whole-tree count
-/// agrees with the baseline and `--update` would rewrite it unchanged.
+/// The detector carries raw-string and block-comment state across lines, so judging added lines on
+/// their own would both invent suppressions inside a fixture and miss real ones after it closes --
+/// and an invented one cannot be resolved, because the whole-tree count agrees with the baseline
+/// and --update would rewrite it unchanged.
 #[test]
 fn reads_the_staged_file_not_the_hunk() {
-    for (name, edited, refusal) in [
-        (
-            "a line added inside a raw string is not a suppression",
-            GO_WITH_RAW_STRING_FIXTURE_EXTENDED,
-            None,
-        ),
-        // The staged-diff rule's own message: the count rule refuses this edit too, and
-        // asserting on the refusal alone would let a detector that found nothing pass.
-        (
-            "a real directive added after the raw string still is",
-            GO_WITH_RAW_STRING_FIXTURE_AND_DIRECTIVE,
-            Some("without touching .suppressions-baseline"),
-        ),
-    ] {
-        let scratch = Scratch::new();
-        scratch.commit_initial(GO_WITH_RAW_STRING_FIXTURE, "");
-        scratch.write(SCRATCH, edited);
-        scratch.git(&["add", SCRATCH]);
-        let (accepted, output) = scratch.ratchet(&[]);
-        match refusal {
-            None => assert!(
-                accepted,
-                "{name}: the ratchet read a raw-string line as a directive:\n{output}"
-            ),
-            Some(message) => {
-                assert!(
-                    !accepted,
-                    "{name}: the ratchet accepted an added directive:\n{output}"
-                );
-                assert!(
-                    output.contains(message),
-                    "{name}: the output does not mention {message:?}, so the staged-diff rule \
-                     did not see the directive:\n{output}"
-                );
-            }
-        }
-    }
+    // A line added inside a raw string is not a suppression.
+    let scratch = Scratch::new();
+    scratch.commit_initial(RUST_RAW_STRING_FIXTURE, "");
+    scratch.write(SCRATCH, RUST_RAW_STRING_FIXTURE_EXTENDED);
+    scratch.git(&["add", SCRATCH]);
+    let (accepted, output) = scratch.ratchet(&[]);
+    assert!(
+        accepted,
+        "the ratchet read a raw-string line as an attribute:\n{output}"
+    );
+
+    // A real attribute added after the raw string still is. The staged-diff rule's own message is
+    // asserted: the count rule refuses this edit too, and asserting on the refusal alone would let
+    // a detector that found nothing pass.
+    let scratch = Scratch::new();
+    scratch.commit_initial(RUST_RAW_STRING_FIXTURE, "");
+    scratch.write(SCRATCH, RUST_RAW_STRING_FIXTURE_AND_ATTRIBUTE);
+    scratch.git(&["add", SCRATCH]);
+    let (accepted, output) = scratch.ratchet(&[]);
+    assert!(
+        !accepted,
+        "the ratchet accepted an added attribute:\n{output}"
+    );
+    assert!(
+        output.contains("without touching .suppressions-baseline"),
+        "the staged-diff rule did not see the attribute:\n{output}"
+    );
 }
 
 /// Go: `TestCheckSuppressionsUpdateDischargesASwap`. The way out of the one refusal the counts
-/// cannot explain: a swap leaves every count where it was, so `--update` has to produce a
-/// baseline that differs anyway -- otherwise there is nothing to stage, the hook refuses again,
-/// and the only remaining exits are a cosmetic edit or skipping the hook.
+/// cannot explain. A swap leaves every count where it was, so --update has to produce a baseline
+/// that differs anyway -- otherwise there is nothing to stage, the hook refuses again, and the
+/// only remaining exits are a cosmetic edit or skipping the hook.
 #[test]
 fn update_discharges_a_swap() {
     let scratch = Scratch::new();
-    scratch.write(SCRATCH, GO_WITH_GOSEC);
+    scratch.write(SCRATCH, RUST_WITH_ONE);
     scratch.write_baseline("");
     scratch.git(&["add", "-A"]);
     scratch.git(&["commit", "-q", "-m", "scratch fixture"]);
@@ -653,7 +599,7 @@ fn update_discharges_a_swap() {
     scratch.git(&["commit", "-q", "-m", "record the baseline"]);
     let before = scratch.read(BASELINE_FILE);
 
-    scratch.write(SCRATCH, GO_WITH_GOSEC_MOVED);
+    scratch.write(SCRATCH, RUST_WITH_ONE_MOVED);
     scratch.git(&["add", SCRATCH]);
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
@@ -668,6 +614,7 @@ fn update_discharges_a_swap() {
         after, before,
         "--update left the baseline byte-identical, so there is nothing to stage"
     );
+
     scratch.git(&["add", BASELINE_FILE]);
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
@@ -678,16 +625,17 @@ fn update_discharges_a_swap() {
 
 /// Go: `TestCheckSuppressionsAllowsARename`. Moving a file is not adding its suppressions. The
 /// staged-diff rule works from the new name, so without rename detection a moved file would look
-/// wholly new and every directive it already carried would be reported as freshly added -- with
+/// wholly new and every attribute it already carried would be reported as freshly added -- with
 /// counts unchanged, and therefore with nothing the baseline could say about it.
 #[test]
 fn allows_a_rename() {
     let scratch = Scratch::new();
-    scratch.write("old.go", GO_WITH_TWO_GOSEC);
-    scratch.write_baseline("nolint/gosec\t2");
+    scratch.write("old.rs", RUST_WITH_TWO);
+    scratch.write_baseline("expect/clippy::too_many_lines\t2");
     scratch.git(&["add", "-A"]);
     scratch.git(&["commit", "-q", "-m", "a file with suppressions"]);
-    scratch.git(&["mv", "old.go", "new.go"]);
+    scratch.git(&["mv", "old.rs", "renamed.rs"]);
+
     let (accepted, output) = scratch.ratchet(&[]);
     assert!(
         accepted,

@@ -29,9 +29,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::docker::types::{Node, Placement, Platform};
-use crate::gofmt_compat::float::from_int;
-use crate::gofmt_compat::net_ip::{ip_equal, parse_cidr, parse_ip};
-use crate::gofmt_compat::strings::{equal_fold, to_lower, trim_space};
+use crate::go_compat::float::from_int;
+use crate::go_compat::net_ip::{ip_equal, parse_cidr, parse_ip};
+use crate::go_compat::strings::{equal_fold, to_lower, trim_space};
 use crate::labels::{maybe_warn_high_cardinality, sanitize_label_names, sanitize_metric_labels};
 use crate::metrics::{Collector, Kind, RegisterError, Registry, constant_desc};
 use crate::metrics::{GaugeVec, LabelsMismatch};

@@ -31,7 +31,7 @@
 //! expectations (all five applied) and relaxes them only through [`ALLOWANCES`], R1…, each a
 //! difference of the Rust client within Q11. The collectors are driven as `run` drives them, one
 //! phase at a time, and the families the Docker answers feed are compared against the golden
-//! file the Go test pins.
+//! file Go's test pins.
 
 mod support;
 
@@ -275,8 +275,8 @@ async fn open_events(client: &Client, since: Timestamp) -> ClientEventStream {
 /// per-service family: Go's `engineWireCustomLabel`.
 const CUSTOM_LABEL: &str = "com.example.team";
 
-/// The golden metrics, shared with the Go test until the cutover.
-const GOLDEN_FILE: &str = "internal/collector/testdata/engine_wire/metrics.golden";
+/// The golden metrics, captured from the Go exporter against the same fixtures.
+const GOLDEN_FILE: &str = "tests/testdata/engine_wire/metrics.golden";
 
 /// How long a reconnect gets to show up on the happy path, after the listener's first backoff.
 const RECONNECT_MARGIN: Duration = Duration::from_millis(250);
@@ -735,7 +735,7 @@ async fn engine_wire_pins_requests_and_metrics_api_1_56() {
 /// 8 KB leaves room for the headers that share it.
 const MAX_TASK_LIST_REQUEST_URI: usize = 8 << 10;
 
-/// Go: `TestEngineWire_TaskListHasNoFilter`. The Go test fills the service cache with 10001
+/// Go: `TestEngineWire_TaskListHasNoFilter`. Go's test fills the service cache with 10001
 /// services first, to show that none of them reaches the request; here `task_list` takes no
 /// filter at all, so the request cannot grow with the cache, and this pins its wire form.
 #[tokio::test(flavor = "multi_thread")]

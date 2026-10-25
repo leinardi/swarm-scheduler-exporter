@@ -38,7 +38,7 @@ use std::fmt;
 
 use clap::{ArgAction, Parser};
 
-use crate::gofmt_compat::{duration, quote};
+use crate::go_compat::{duration, quote};
 use crate::labels::{self, CountError, LabelError};
 use crate::logger::{self, Format, Level};
 

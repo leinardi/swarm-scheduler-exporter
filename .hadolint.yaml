@@ -5,7 +5,10 @@ override:
   error:
     - DL3049
 ignored:
-  - DL3018 # Pin versions in apk add. Instead of `apk add <package>` use `apk add <package>=<version>`
+  # Pin versions in apt-get install. The build stage's dhi.io/rust tag is republished with a
+  # refreshed package index, which breaks any pin, and nothing it installs ships: each download
+  # it makes is checked by its own sha256.
+  - DL3008
 # The seven OCI labels every image carries, each required (DL3049 when missing) and validated;
 # strict-labels rejects any label not listed here.
 label-schema:

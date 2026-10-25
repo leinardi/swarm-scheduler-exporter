@@ -26,7 +26,7 @@ use jiff::Timestamp;
 
 use super::plain_handler::{level_to_upper, qualify};
 use super::*;
-use crate::gofmt_compat::quote;
+use crate::go_compat::quote;
 
 /// A logger writing to a memory sink, with a fixed record time of 2025-01-15T10:00:00Z.
 fn logger(format: Format, level: Level, include_time: bool) -> (Logger, MemorySink) {

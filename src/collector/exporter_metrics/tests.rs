@@ -72,7 +72,7 @@ fn last_poll_success_follows_mark_poll_ok() {
     assert!(family(&exposition(&metrics), name).contains(&format!("{name} 0").as_str()));
     timestamps.mark_poll_ok(Timestamp::new(1_700_000_000, 123_456_789).unwrap());
     let polled_at = 1_700_000_000_123_456_789_f64 / 1e9;
-    let value = format!("{name} {}", crate::gofmt_compat::float::format_g(polled_at));
+    let value = format!("{name} {}", crate::go_compat::float::format_g(polled_at));
     assert!(
         family(&exposition(&metrics), name).contains(&value.as_str()),
         "{value}"

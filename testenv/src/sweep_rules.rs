@@ -29,7 +29,7 @@ use std::fs;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use swarm_scheduler_exporter::gofmt_compat::{duration, quote};
+use swarm_scheduler_exporter::go_compat::{duration, quote};
 
 use crate::Error;
 

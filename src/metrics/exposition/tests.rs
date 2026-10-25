@@ -66,12 +66,12 @@ fn go_answers(data: &str) -> Vec<GoAnswer<'_>> {
         .collect()
 }
 
-/// promhttp's answers, client_golang v1.24.1 and common v0.71.0, for 95 header pairs from a
-/// throwaway Go program serving a `promhttp.HandlerFor` handler: the first 24 rows are S2's
+/// promhttp's answers, the Prometheus Go client v1.24.1 and common v0.71.0, for 95 header pairs
+/// from a throwaway Go program serving a `promhttp.HandlerFor` handler: the first 24 rows are S2's
 /// `negotiation.tsv`, the rest probe the parsers (q values `ParseFloat` reads, more than 12
-/// clauses, so goautoneg's sort leaves insertion sort, repeated headers, and the gzip rules).
-/// Each row asserts Go's `Content-Type` for the negotiation itself, the Q2 text `Content-Type`
-/// with Go's escaping where Go picks protobuf, and the `Content-Encoding`.
+/// clauses, so goautoneg's sort leaves insertion sort, repeated headers, and the gzip rules). Each
+/// row asserts Go's `Content-Type` for the negotiation itself, the Q2 text `Content-Type` with Go's
+/// escaping where Go picks protobuf, and the `Content-Encoding`.
 #[test]
 fn negotiation_matches_go_on_95_header_pairs() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

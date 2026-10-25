@@ -378,6 +378,13 @@ Rust tutorial. Seen in: awtrix-controller.
   unpacking `rust-std-<exact version>-<triple>.tar.xz` from static.rust-lang.org and running its
   `install.sh --prefix=/usr/local` (apt-get curl and xz-utils first), and bump the image patch,
   `rust-std` version and digests together by hand. (amd64 and arm64 image builds)
+- The `dhi.io/rust` tag carries its own patch (1.98.1) while a `rust-toolchain.toml` copied from
+  elsewhere says 1.98.0, so the release binaries and the image's binary come from different
+  compilers, and a pin test comparing major.minor misses it → pin one exact release in
+  `rust-toolchain.toml`, every CI toolchain step and the image tag, and test the full version.
+  cargo-zigbuild 0.24.0 publishes no aarch64 musl asset: an arm64 build platform takes the
+  `aarch64-unknown-linux-gnu` one, which a glibc build stage runs. (review of the cutover; release
+  asset list)
 - Go's `t.Skip` has no libtest equivalent: a test gated on an external tool returns early with a
   note on stderr → add an environment variable that turns the missing tool into a panic and set
   it in CI, or the check passes silently exactly where it is meant to guard. (ported meta-tests)

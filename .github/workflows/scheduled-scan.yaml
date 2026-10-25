@@ -66,11 +66,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # cargo-deny over master's dependencies, as the release's audit job runs it: a new
+      # advisory against a crate nobody touched shows up here.
+      - name: Check the Rust dependencies with cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          go-version-file: go.mod
-
-      # govulncheck over master's dependencies, as the release's audit job runs it.
-      - name: Audit Go dependencies
-        run: make audit-deps
+          arguments: --workspace
+          command: check

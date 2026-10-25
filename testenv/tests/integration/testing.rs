@@ -22,12 +22,13 @@
  * SOFTWARE.
  */
 
-//! What the Go suite took from the testing package, for an async runner: a test handle ([`TestHandle`])
-//! with Go's `Errorf` (record and go on), `Fatalf` (record and return [`Fatal`]), `Logf`,
-//! `Cleanup` (last registered, first run, after the test's context is cancelled), `Failed` and
-//! `Run` for subtests, and the suite's shared state: the cluster, the manager's client, the
-//! exporter binary and the run filter. Output follows `go test -v`: `=== RUN`, the test's log
-//! lines, then `--- PASS:` or `--- FAIL:` with the seconds, subtests indented under their parent.
+//! What the Go suite took from the testing package, for an async runner: a test handle
+//! ([`TestHandle`]) with Go's `Errorf` (record and go on), `Fatalf` (record and return [`Fatal`]),
+//! `Logf`, `Cleanup` (last registered, first run, after the test's context is cancelled), `Failed`
+//! and `Run` for subtests, and the suite's shared state: the cluster, the manager's client, the
+//! exporter binary and the run filter. Output follows Go's verbose test output: `=== RUN`, the
+//! test's log lines, then `--- PASS:` or `--- FAIL:` with the seconds, subtests indented under
+//! their parent.
 
 use std::cell::{Cell, RefCell};
 use std::fmt::Display;

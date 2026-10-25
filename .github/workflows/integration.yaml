@@ -14,32 +14,11 @@ permissions:
   contents: read
 
 jobs:
-  # Runs the built exporter against a throwaway multi-node Swarm of privileged docker:dind containers
-  # on the runner's Docker daemon (see internal/testenv and CONTRIBUTING.md).
+  # Runs the exporter's release binary against a throwaway multi-node Swarm of privileged
+  # docker:dind containers on the runner's Docker daemon (the testenv crate and its integration
+  # suite; see CONTRIBUTING.md). The make target builds the release binary first and fails if RUN
+  # selects no test. The job keeps its name: it is the required check.
   integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: Vet the integration-tagged packages
-        run: make go-vet-integration
-
-      # go-test-integration builds the binary first (it depends on go-build).
-      - name: Run integration tests
-        run: make go-test-integration
-
-  # The Rust suite (testenv) against the same kind of Swarm and the Rust release binary, beside
-  # the Go job: the harness's own smoke test and every Go integration test, under the same names.
-  # The make target builds the release binary first and fails if RUN selects no test.
-  integration-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -50,7 +29,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: 1.98.0
+          toolchain: 1.98.1
 
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -58,4 +37,4 @@ jobs:
           save-if: ${{ github.event_name == 'pull_request' }}
 
       - name: Run the integration suite
-        run: make rust-test-integration
+        run: make test-integration

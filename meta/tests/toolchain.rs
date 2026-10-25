@@ -22,16 +22,383 @@
  * SOFTWARE.
  */
 
-//! The repository's tooling, the language-independent part: the always-run hooks running once,
-//! and no flag that makes a gate pass on nothing. The Go version pins and the untagged-tests rule
-//! stay Go tests until the cutover.
+//! The repository's tooling pins: one Rust line across rust-toolchain.toml, Cargo.toml, the image
+//! and every CI toolchain step; the image's toolchain patch and its musl standard libraries; one
+//! zig and one cargo-zigbuild between the image and CI; one hadolint between the hook and CI; one
+//! Trivy between the release and the scheduled scan; the always-run hooks running once; no flag
+//! that makes a gate pass on nothing; and the closed list of tools a meta-test may skip on.
+
+use std::collections::BTreeMap;
 
 use meta::repo;
 use regex::Regex;
 use serde_yaml_ng::Value;
 
+const RUST_TOOLCHAIN_ACTION: &str = "dtolnay/rust-toolchain";
+const DOCKERFILE: &str = "deployments/docker/Dockerfile";
+const SETUP_ZIGBUILD: &str = ".github/actions/setup-zigbuild/action.yaml";
+
 fn re(pattern: &str) -> Regex {
     Regex::new(pattern).unwrap_or_else(|error| panic!("invalid pattern {pattern}: {error}"))
+}
+
+/// One place a version is written: a file and the pattern whose first group is the version there.
+struct PinSource {
+    file: String,
+    pattern: Regex,
+}
+
+fn source(file: &str, pattern: &str) -> PinSource {
+    PinSource {
+        file: file.to_owned(),
+        pattern: re(pattern),
+    }
+}
+
+/// Fails unless every source writes the pin and all of them agree.
+fn expect_one_value(what: &str, sources: &[PinSource]) {
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut problems = Vec::new();
+    for pin in sources {
+        let content = repo::read(&pin.file);
+        let mut matched = false;
+        for captures in pin.pattern.captures_iter(&content) {
+            matched = true;
+            found
+                .entry(captures[1].to_owned())
+                .or_default()
+                .push(pin.file.clone());
+        }
+        if !matched {
+            problems.push(format!(
+                "{what}: {} does not write it ({})",
+                pin.file, pin.pattern
+            ));
+        }
+    }
+    if found.len() > 1 {
+        let values: Vec<String> = found
+            .iter()
+            .map(|(value, files)| {
+                let mut files = files.clone();
+                files.dedup();
+                format!("{value} in {}", files.join(", "))
+            })
+            .collect();
+        problems.push(format!("{what} is not one value: {}", values.join("; ")));
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// One step, in a workflow or a composite action, that uses an action.
+#[derive(Debug)]
+struct ActionStep {
+    file: String,
+    /// The `uses:` value without its `@ref`.
+    action: String,
+    with: BTreeMap<String, String>,
+}
+
+/// Every mapping with a `uses:` key anywhere in the document: job steps and composite action
+/// steps alike.
+fn parse_action_steps(file: &str, content: &str) -> Vec<ActionStep> {
+    fn walk(file: &str, node: &Value, steps: &mut Vec<ActionStep>) {
+        match node {
+            Value::Mapping(mapping) => {
+                if let Some(Value::String(uses)) = mapping.get("uses") {
+                    let action = uses
+                        .split_once('@')
+                        .map_or(uses.as_str(), |(action, _)| action);
+                    let with = mapping
+                        .get("with")
+                        .and_then(Value::as_mapping)
+                        .map(|inputs| {
+                            inputs
+                                .iter()
+                                .filter_map(|(key, value)| {
+                                    let value = match value {
+                                        Value::String(text) => text.clone(),
+                                        Value::Number(number) => number.to_string(),
+                                        Value::Bool(flag) => flag.to_string(),
+                                        Value::Null
+                                        | Value::Sequence(_)
+                                        | Value::Mapping(_)
+                                        | Value::Tagged(_) => return None,
+                                    };
+                                    Some((key.as_str()?.to_owned(), value))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    steps.push(ActionStep {
+                        file: file.to_owned(),
+                        action: action.to_owned(),
+                        with,
+                    });
+                }
+                for value in mapping.values() {
+                    walk(file, value, steps);
+                }
+            }
+            Value::Sequence(sequence) => {
+                for value in sequence {
+                    walk(file, value, steps);
+                }
+            }
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Tagged(_) => {}
+        }
+    }
+
+    let document: Value =
+        serde_yaml_ng::from_str(content).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+    let mut steps = Vec::new();
+    walk(file, &document, &mut steps);
+    steps
+}
+
+/// The Rust step rules: a toolchain step names an exact version, never a channel like stable,
+/// which the Rust line test would not see move.
+fn rust_pin_problems(steps: &[ActionStep]) -> Vec<String> {
+    let exact = re(r"^\d+\.\d+\.\d+$");
+    steps
+        .iter()
+        .filter(|step| step.action == RUST_TOOLCHAIN_ACTION)
+        .filter_map(|step| match step.with.get("toolchain") {
+            Some(toolchain) if exact.is_match(toolchain) => None,
+            Some(toolchain) => Some(format!(
+                "{}: {} installs {toolchain:?}; name the exact version of rust-toolchain.toml",
+                step.file, step.action
+            )),
+            None => Some(format!(
+                "{}: {} names no toolchain; name the exact version of rust-toolchain.toml",
+                step.file, step.action
+            )),
+        })
+        .collect()
+}
+
+fn github_yaml() -> Vec<String> {
+    let files = repo::files_under(".github", &[".yaml", ".yml"]);
+    assert!(
+        !files.is_empty(),
+        "no YAML files under .github; the scan would check nothing"
+    );
+    files
+}
+
+fn github_steps() -> Vec<ActionStep> {
+    github_yaml()
+        .iter()
+        .flat_map(|file| parse_action_steps(file, &repo::read(file)))
+        .collect()
+}
+
+/// Go: `TestGoLineIsOneValue` and `TestRustToolchainIsOneValue`. The Rust line (major.minor) is
+/// one value across rust-toolchain.toml, the MSRV in Cargo.toml, the build stage's image tag and
+/// every CI toolchain step. The MSRV names no patch, so the exact release is checked by
+/// `rust_toolchain_is_one_release` below.
+#[test]
+fn rust_line_is_one_value() {
+    let mut sources = vec![
+        source(
+            "rust-toolchain.toml",
+            r#"(?m)^channel = "(\d+\.\d+)(?:\.\d+)?"$"#,
+        ),
+        source(
+            "Cargo.toml",
+            r#"(?m)^rust-version = "(\d+\.\d+)(?:\.\d+)?"$"#,
+        ),
+        source(DOCKERFILE, r"dhi\.io/rust:(\d+\.\d+)[.-]"),
+    ];
+    let mut steps = 0;
+    for file in github_yaml() {
+        if parse_action_steps(&file, &repo::read(&file))
+            .iter()
+            .any(|step| step.action == RUST_TOOLCHAIN_ACTION)
+        {
+            steps += 1;
+            sources.push(source(
+                &file,
+                r"(?m)^\s*toolchain:\s*(\d+\.\d+)(?:\.\d+)?\s*$",
+            ));
+        }
+    }
+    assert!(
+        steps > 0,
+        "no {RUST_TOOLCHAIN_ACTION} step found under .github"
+    );
+    expect_one_value("Rust line", &sources);
+}
+
+/// The exact Rust release, patch included, is one value across rust-toolchain.toml, the build
+/// stage's image tag and every CI toolchain step, so the release binaries, the image's binary and
+/// the tested build come from the same compiler.
+#[test]
+fn rust_toolchain_is_one_release() {
+    let mut sources = vec![
+        source(
+            "rust-toolchain.toml",
+            r#"(?m)^channel = "(\d+\.\d+\.\d+)"$"#,
+        ),
+        source(DOCKERFILE, r"dhi\.io/rust:(\d+\.\d+\.\d+)-"),
+    ];
+    for file in github_yaml() {
+        if parse_action_steps(&file, &repo::read(&file))
+            .iter()
+            .any(|step| step.action == RUST_TOOLCHAIN_ACTION)
+        {
+            sources.push(source(&file, r"(?m)^\s*toolchain:\s*(\d+\.\d+\.\d+)\s*$"));
+        }
+    }
+    expect_one_value("Rust release", &sources);
+}
+
+/// The build stage's standard libraries are written for the image's exact toolchain: the
+/// `RUST_VERSION` argument is the version in the image tag.
+#[test]
+fn image_toolchain_patch_is_the_standard_library_version() {
+    let dockerfile = repo::read(DOCKERFILE);
+    let tag = re(r"dhi\.io/rust:(\d+\.\d+\.\d+)-")
+        .captures(&dockerfile)
+        .map(|captures| captures[1].to_owned());
+    let argument = re(r"(?m)^ARG RUST_VERSION=(\S+)$")
+        .captures(&dockerfile)
+        .map(|captures| captures[1].to_owned());
+    assert!(
+        tag.is_some(),
+        "the build stage's tag names no exact Rust version"
+    );
+    assert_eq!(
+        tag, argument,
+        "the image's Rust and the RUST_VERSION of its musl standard libraries differ"
+    );
+}
+
+/// Go: `TestActionStepsArePinned`. Every Rust toolchain step under .github names an exact version.
+#[test]
+fn rust_toolchain_steps_are_pinned() {
+    let steps = github_steps();
+    let problems = rust_pin_problems(&steps);
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert!(
+        steps
+            .iter()
+            .any(|step| step.action == RUST_TOOLCHAIN_ACTION),
+        "no {RUST_TOOLCHAIN_ACTION} step found under .github; the rule would check nothing"
+    );
+}
+
+/// Go: `TestActionPinRules`, the negative control of the step rules: each unpinned form is a
+/// problem.
+#[test]
+fn rust_toolchain_pin_rules() {
+    let steps = parse_action_steps(
+        "sample.yaml",
+        r"jobs:
+  test:
+    steps:
+      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567 # master
+        with:
+          toolchain: 1.98.0
+      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
+        with:
+          toolchain: stable
+      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
+        with:
+          toolchain: 1.98
+      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
+      - uses: some/other-action@0123456789abcdef0123456789abcdef01234567
+        with:
+          toolchain: nightly
+",
+    );
+    assert_eq!(steps.len(), 5, "{steps:?}");
+    let problems = rust_pin_problems(&steps);
+    assert_eq!(problems.len(), 3, "{problems:#?}");
+}
+
+/// The release binaries and the image are built with the same zig, from the same archive.
+#[test]
+fn zig_is_one_version() {
+    expect_one_value(
+        "zig",
+        &[
+            source(DOCKERFILE, r"(?m)^ARG ZIG_VERSION=(\S+)$"),
+            source(SETUP_ZIGBUILD, r#"ZIG_VERSION:\s*"?([\d.]+)"#),
+        ],
+    );
+    // The x86_64 archive is downloaded in both places, so its digest is one value too: a bump
+    // that moves one copy fails here rather than in the first release that runs it.
+    expect_one_value(
+        "zig x86_64 sha256",
+        &[
+            source(
+                DOCKERFILE,
+                r"amd64\) zig_arch=x86_64; zig_sha256=([0-9a-f]{64}) ;;",
+            ),
+            source(SETUP_ZIGBUILD, r"ZIG_SHA256:\s*([0-9a-f]{64})"),
+        ],
+    );
+}
+
+/// The release binaries and the image are built with the same cargo-zigbuild, from the same
+/// archive.
+#[test]
+fn cargo_zigbuild_is_one_version() {
+    expect_one_value(
+        "cargo-zigbuild",
+        &[
+            source(DOCKERFILE, r"(?m)^ARG CARGO_ZIGBUILD_VERSION=(\S+)$"),
+            source(SETUP_ZIGBUILD, r#"CARGO_ZIGBUILD_VERSION:\s*"?([\d.]+)"#),
+        ],
+    );
+    expect_one_value(
+        "cargo-zigbuild x86_64 sha256",
+        &[
+            source(
+                DOCKERFILE,
+                r"amd64\) zigbuild_asset=x86_64-unknown-linux-musl; zigbuild_sha256=([0-9a-f]{64}) ;;",
+            ),
+            source(SETUP_ZIGBUILD, r"CARGO_ZIGBUILD_SHA256:\s*([0-9a-f]{64})"),
+        ],
+    );
+}
+
+/// Go: `TestHadolintIsOneVersion`. The hadolint hook runs the system binary, so the version CI
+/// installs is the one that lints; it must follow the hook's rev, which Dependabot moves.
+#[test]
+fn hadolint_is_one_version() {
+    expect_one_value(
+        "hadolint",
+        &[
+            source(
+                ".pre-commit-config.yaml",
+                r"repo: https://github\.com/hadolint/hadolint\s+rev:\s*(v[\d.]+)",
+            ),
+            source(
+                ".github/actions/setup-hadolint/action.yaml",
+                r#"HADOLINT_VERSION:\s*["']?(v[\d.]+)"#,
+            ),
+        ],
+    );
+}
+
+/// Go: `TestTrivyIsOneVersion`. The release scan and the scheduled scan of the published image
+/// use one Trivy, so a finding means the same in both (docs/release.md).
+#[test]
+fn trivy_is_one_version() {
+    let trivy = r#"(?m)^\s*TRIVY_VERSION:\s*["']?(v\d+\.\d+\.\d+)"#;
+    expect_one_value(
+        "Trivy",
+        &[
+            source(".github/workflows/release.yaml", trivy),
+            source(".github/workflows/scheduled-scan.yaml", trivy),
+        ],
+    );
 }
 
 /// The hooks of .pre-commit-config.yaml by id, as written; an id with aliases (the actionlint,
@@ -222,11 +589,11 @@ fn vacuous_flags_are_recognized() {
     let flags = vacuous_flags();
     let mut used = [false; ALLOWED_FRAGMENTS.len()];
     for sample in [
-        "\tgo vet ./... || true",
-        "\tgo vet ./... ||:",
-        "\tgo vet ./... || exit 0",
-        "\t-go vet ./...",
-        "\t@-go vet ./...",
+        "\tcargo test --workspace || true",
+        "\tcargo test --workspace ||:",
+        "\tcargo test --workspace || exit 0",
+        "\t-cargo test --workspace",
+        "\t@-cargo test --workspace",
         ".IGNORE: go-vet",
         "\t$(MAKE) -i go-test",
         "\t$(MAKE) --ignore-errors go-test",
@@ -264,4 +631,49 @@ fn vacuous_flags_are_recognized() {
             "{file}: {sample:?} passed through the allowlist"
         );
     }
+}
+
+/// Go: `TestToolGateListIsClosed`. The tools a meta-test may skip on are exactly toolgate's
+/// closed list, hadolint (the Go list held only the Go linter, removed with the Go code), every
+/// gated lookup names one of its constants, and no other source looks a tool up on `PATH` itself,
+/// which would be a skip CI cannot turn into a failure.
+#[test]
+fn tool_gate_list_is_closed() {
+    assert_eq!(meta::toolgate::TOOLS, [meta::toolgate::HADOLINT]);
+
+    let own_lookup =
+        re(r"\bsplit_paths\(|\bvar_os\(\s*\x22PATH\x22|Command::new\(\s*\x22which\x22");
+    let gated = re(r"toolgate::lookup\(\s*([^)]*)\)");
+    let sources = repo::files_under("meta", &[".rs"]);
+    assert!(
+        sources.iter().any(|path| path == "meta/src/toolgate.rs"),
+        "the walk did not reach toolgate.rs: {sources:?}"
+    );
+    for path in &sources {
+        let text = repo::read(path);
+        if path != "meta/src/toolgate.rs" {
+            assert!(
+                !own_lookup.is_match(&text),
+                "{path} looks a tool up itself; gate it through toolgate::lookup"
+            );
+        }
+        for call in gated.captures_iter(&text) {
+            let argument = call[1].trim();
+            assert!(
+                argument.starts_with("toolgate::") || argument.starts_with("meta::toolgate::"),
+                "{path} gates on {argument}, which is not a toolgate constant"
+            );
+        }
+    }
+
+    // The negative control: both checks fire on what they are meant to catch. The samples are split
+    // so this file does not match its own check.
+    assert!(own_lookup.is_match(concat!("let found = env::split", "_paths(&paths);")));
+    assert!(own_lookup.is_match(concat!("std::env::var", "_os(\x22PATH\x22)")));
+    let sample = concat!("let tool = toolgate::look", "up(\x22hadolint\x22);");
+    let argument = gated
+        .captures(sample)
+        .map(|call| call[1].trim().to_owned())
+        .unwrap_or_default();
+    assert_eq!(argument, "\x22hadolint\x22");
 }

@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::docker::types::{Node, Platform, ReplicatedJob, Service};
-use crate::gofmt_compat::float::from_int;
+use crate::go_compat::float::from_int;
 
 use super::metrics_ids::{
     SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB, SERVICE_MODE_REPLICATED,

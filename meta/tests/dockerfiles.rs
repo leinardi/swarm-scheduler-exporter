@@ -22,10 +22,9 @@
  * SOFTWARE.
  */
 
-//! The shipped image's invariants that docs/release.md and the Dockerfile's own comments state,
-//! the parts that hold whatever the binary is written in: one Dockerfile, a pinned frontend, two
-//! stages from tag-pinned bases, the runtime posture and labels, and the platforms. The build
-//! stage and the version stamps stay Go tests until the cutover.
+//! The shipped image's invariants that docs/release.md and the Dockerfile's own comments state:
+//! one Dockerfile, a pinned frontend, two stages from tag-pinned bases, the Rust build stage and
+//! its version stamps, the runtime posture and labels, and the platforms.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -45,7 +44,7 @@ const BINARY: &str = "/usr/local/bin/swarm-scheduler-exporter";
 /// explains them.
 fn healthcheck() -> String {
     format!(
-        r#"--interval=30s --timeout=5s --start-period=90s --retries=3 CMD ["{BINARY}", "-healthcheck"]"#
+        r#"--interval=30s --timeout=5s --start-period=90s --retries=3 CMD ["{BINARY}", "--healthcheck"]"#
     )
 }
 
@@ -167,11 +166,95 @@ fn shipped_stages_are_build_and_runtime() {
         );
     }
     let names: Vec<&str> = stages.iter().map(|stage| stage.name.as_str()).collect();
-    assert_eq!(
-        names,
-        ["build", ""],
-        "want build, then the unnamed runtime stage"
+    assert_eq!(names, ["build", "runtime"]);
+}
+
+/// The stage named `name`, which must be the only one.
+fn stage(name: &str) -> Stage {
+    let found: Vec<Stage> = shipped_stages()
+        .into_iter()
+        .filter(|candidate| candidate.name == name)
+        .collect();
+    match <[Stage; 1]>::try_from(found) {
+        Ok([stage]) => stage,
+        Err(found) => panic!(
+            "{SHIPPED_DOCKERFILE} has {} stages named {name}, want one",
+            found.len()
+        ),
+    }
+}
+
+/// Go: `TestBuildStage`, for the Rust build: on the build platform, cross-compiled by
+/// cargo-zigbuild to the target platform's static musl triple, from the locked dependency graph,
+/// with every toolchain download checked, and stamped with the version strings the binary reads.
+#[test]
+fn build_stage() {
+    let build = stage("build");
+    assert_eq!(build.platform, "$BUILDPLATFORM");
+    assert_eq!(dockerfile::repository(&build.image), "dhi.io/rust");
+
+    let instructions = build.joined();
+    let missing: Vec<&str> = [
+        "ARG VERSION",
+        "ARG COMMIT",
+        "ARG DATE",
+        "ARG RUST_VERSION=",
+        "ARG ZIG_VERSION=",
+        "ARG CARGO_ZIGBUILD_VERSION=",
+        "ARG BUILDARCH",
+        "ARG TARGETARCH",
+        "amd64) triple=x86_64-unknown-linux-musl;",
+        "arm64) triple=aarch64-unknown-linux-musl;",
+        "sha256sum -c -",
+        "/releases/download/v${CARGO_ZIGBUILD_VERSION}/cargo-zigbuild-${zigbuild_asset}.tar.xz",
+        r#"cargo zigbuild --release --locked --target "${triple}" --bin swarm-scheduler-exporter"#,
+        r#"cp "target/${triple}/release/swarm-scheduler-exporter" /out/swarm-scheduler-exporter"#,
+    ]
+    .into_iter()
+    .filter(|want| !instructions.contains(want))
+    .collect();
+    assert!(
+        missing.is_empty(),
+        "the build stage lacks {missing:?}:\n{instructions}"
     );
+
+    // Every download is checked against its own digest: each curl in the stage is followed by a
+    // sha256sum check of the file it wrote.
+    let downloads = instructions.matches("curl -fsSL").count();
+    let checks = instructions.matches("| sha256sum -c -").count();
+    assert!(downloads > 0, "the build stage downloads nothing");
+    assert_eq!(
+        downloads, checks,
+        "a download in the build stage is not checked"
+    );
+}
+
+/// Go: `TestVersionIsStamped`. The version, commit and date the binary reports come from the
+/// build: the image's build stage and the make targets set the three variables src/version.rs
+/// reads at compile time, from the same build arguments and git values. A path that stamped
+/// nothing would ship a binary reporting "dev".
+#[test]
+fn version_is_stamped() {
+    let fields = ["VERSION", "COMMIT", "DATE"];
+    let version_rs = repo::read("src/version.rs");
+    let build = stage("build").joined();
+    let make = repo::read(".mk/rust.mk");
+    let mut problems = Vec::new();
+    for field in fields {
+        let variable = format!("SWARM_SCHEDULER_EXPORTER_{field}");
+        if !version_rs.contains(&format!("option_env!(\x22{variable}\x22)")) {
+            problems.push(format!("src/version.rs does not read {variable}"));
+        }
+        if !build.contains(&format!("{variable}=\x22${{{field}}}\x22")) {
+            problems.push(format!(
+                "the build stage does not stamp {variable} from ${field}"
+            ));
+        }
+        if !make.contains(&format!("{variable}=")) {
+            problems.push(format!(".mk/rust.mk does not stamp {variable}"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
 /// Go: `TestRuntimeStage`. The posture of the image that ships: no shell to run anything in,
@@ -296,7 +379,7 @@ fn parse_rejects_what_the_assertions_must_not_miss() {
         ("a tag only", "dhi.io/static:20250419".to_owned()),
         (
             "a variable tag",
-            format!("dhi.io/golang:${{GO_LINE}}-alpine3.23-dev{digest}"),
+            format!("dhi.io/rust:${{RUST_LINE}}-debian13-dev{digest}"),
         ),
         ("a variable image", format!("$BASE{digest}")),
         (
@@ -321,7 +404,7 @@ fn parse_rejects_what_the_assertions_must_not_miss() {
         ("latest", "dhi.io/static:latest".to_owned()),
         (
             "a variable tag",
-            "dhi.io/golang:${GO_LINE}-alpine3.23-dev".to_owned(),
+            "dhi.io/rust:${RUST_LINE}-debian13-dev".to_owned(),
         ),
         ("a variable image", "$BASE".to_owned()),
         (
@@ -336,7 +419,7 @@ fn parse_rejects_what_the_assertions_must_not_miss() {
         );
     }
     assert!(
-        dockerfile::tag_pinned("dhi.io/golang:1.26.9-alpine3.23-dev"),
+        dockerfile::tag_pinned("dhi.io/rust:1.98.1-debian13-dev"),
         "a literal tag does not pass as pinned by tag"
     );
 

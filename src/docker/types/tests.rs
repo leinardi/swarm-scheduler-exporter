@@ -31,7 +31,7 @@ const FIXTURE_SETS: [&str; 2] = ["api-1.51", "api-1.56"];
 fn fixture(set: &str, name: &str) -> Vec<u8> {
     let path: PathBuf = [
         env!("CARGO_MANIFEST_DIR"),
-        "internal/collector/testdata/engine_wire",
+        "tests/testdata/engine_wire",
         set,
         name,
     ]

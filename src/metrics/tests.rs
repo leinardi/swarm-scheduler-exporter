@@ -258,7 +258,7 @@ fn snapshot_family_wraps_one_descriptor() {
 }
 
 /// The registration mechanism the Go tests `TestConfigure*_RegistersWithoutPanic` exercise
-/// (`metrics_register_test.go`); each named test lands with its collector. Go's `MustRegister`
+/// (the metrics registration tests); each named test lands with its collector. Go's `MustRegister`
 /// panics on a second registration of a name; `register` returns an error instead, which no
 /// caller can reach because each family is registered once at startup, so the difference is not
 /// observable.
@@ -292,9 +292,9 @@ fn registry_registers_each_name_once() {
         .expect("b_gauge was not registered by the refused collector");
 }
 
-/// client_golang's `NewDesc` and `NewHistogram` checks, as errors.
+/// The Prometheus Go client's `NewDesc` and `NewHistogram` checks, as errors.
 #[test]
-fn desc_refuses_what_client_golang_refuses() {
+fn desc_refuses_what_the_go_client_refuses() {
     let cases: [(&str, Kind, &[&str], &str); 6] = [
         (
             "1abc",
@@ -344,12 +344,12 @@ fn desc_refuses_what_client_golang_refuses() {
     assert!(Desc::new("a:b_c", "h", Kind::Gauge, &["le", "_x"]).is_ok());
 }
 
-/// The family types behave as client_golang's: a vec creates a child on first use and deletes
-/// it, a counter ignores a negative add (client_golang panics there; the exporter never adds a
-/// negative), a histogram counts an observation in the first bucket at or above it, and a gauge
-/// func is evaluated at every gather.
+/// The family types behave as the Prometheus Go client's: a vec creates a child on first use and
+/// deletes it, a counter ignores a negative add (the Prometheus Go client panics there; the
+/// exporter never adds a negative), a histogram counts an observation in the first bucket at or
+/// above it, and a gauge func is evaluated at every gather.
 #[test]
-fn families_behave_as_client_golang() {
+fn families_behave_as_the_go_client() {
     let vec = GaugeVec::new(Desc::new("v", "h", Kind::Gauge, &["a"]).expect("desc"));
     vec.set(&["x"], 2.0).expect("set");
     assert_eq!(vec.get(&["x"]), Some(2.0));
@@ -409,10 +409,10 @@ fn families_behave_as_client_golang() {
     assert_eq!(registry.gather()[0].series[0].value, Value::Scalar(1.0));
 }
 
-/// S2's family set (`gotools/cmd/families`), encoded byte for byte as client_golang v1.24.1 and
-/// expfmt (common v0.71.0) wrote it: families by name, the empty vec dropped, label pairs by
-/// name whatever their declared order, series by label values, help and label escaping, and the
-/// histogram with `le` written by the float formatter.
+/// S2's family set (`gotools/cmd/families`), encoded byte for byte as the Prometheus Go client
+/// v1.24.1 and expfmt (common v0.71.0) wrote it: families by name, the empty vec dropped, label
+/// pairs by name whatever their declared order, series by label values, help and label escaping,
+/// and the histogram with `le` written by the float formatter.
 #[test]
 fn encoding_matches_go_on_the_s2_family_set() {
     let registry = Registry::new();
@@ -519,9 +519,9 @@ zz_state{name="b",zone="z2"} 1
 zz_state{name="ä ünïcode",zone="z1"} 1e-05
 "#;
 
-/// Series of different label counts (only possible across a snapshot's families, never within
-/// one) sort shorter first, as client_golang's `metricSorter` does; a family with no series is
-/// dropped.
+/// Series of different label counts (only possible across a snapshot's families, never within one)
+/// sort shorter first, as the Prometheus Go client's `metricSorter` does; a family with no series
+/// is dropped.
 #[test]
 fn gather_sorts_series_by_label_values() {
     let desc = Desc::new("s", "h", Kind::Gauge, &["b", "a"]).expect("desc");
@@ -602,8 +602,8 @@ fn write_float_matches_go_on_the_s2_corpus() {
     }
 }
 
-/// client_golang's `With(prometheus.Labels)` and `Delete(labels)`: by label name, refusing a map
-/// that does not name exactly the family's labels.
+/// The Prometheus Go client's `With(prometheus.Labels)` and `Delete(labels)`: by label name,
+/// refusing a map that does not name exactly the family's labels.
 #[test]
 fn gauge_vec_by_label_map() {
     let vec = GaugeVec::new(Desc::new("by_name", "help", Kind::Gauge, &["b", "a"]).unwrap());

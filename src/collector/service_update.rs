@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::docker::types::{GoTime, Service};
-use crate::gofmt_compat::float::from_int;
+use crate::go_compat::float::from_int;
 use crate::logger::Logger;
 use crate::metrics::{
     Collector, GaugeVec, Kind, LabelsMismatch, RegisterError, Registry, constant_desc,

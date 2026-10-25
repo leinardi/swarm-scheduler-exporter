@@ -31,12 +31,13 @@
 # Two rules, and the second is the one that matters:
 #
 #   1. No count may exceed its baseline, and no rule may appear that the baseline does not know.
-#      Counts are per rule: one per nolint linter or Rust lint, and one per code for the hadolint
-#      and shellcheck directives. Deleting a suppression of one rule therefore cannot pay for
-#      adding a suppression of another.
+#      Counts are per rule: one per Rust lint, and one per code for the hadolint and shellcheck
+#      directives. Deleting a suppression of one rule therefore cannot pay for adding a
+#      suppression of another.
 #   2. A staged diff that adds a suppression line is refused unless the same commit also changes
 #      the baseline file. Rule 1 alone is blind to a swap within the same rule (delete one
-#      //nolint:gosec, add another), and the baseline file is the thing a reviewer reads.
+#      #[expect(clippy::expect_used)], add another), and the baseline file is the thing a reviewer
+#      reads.
 #
 # A count below its baseline is also refused: the baseline is meant to describe the repository, and
 # a stale one quietly buys room for a suppression nobody approved. Run with --update to rewrite it,
@@ -45,7 +46,7 @@
 # file -- has to stage: those leave every count where it was, so without the stamp rule 2 would
 # refuse with nothing to change.
 #
-# These six families (nolint, expect, allow, shellcheck-disable, hadolint-ignore,
+# These five families (expect, allow, shellcheck-disable, hadolint-ignore and
 # hadolint-global-ignore) are the mechanisms this repository's code linters read. The two Rust
 # families key on the lint path as written, so expect/clippy::unwrap_used and expect/unwrap_used
 # would be different rules; a cfg_attr-wrapped lint attribute is not counted. Others exist --
@@ -75,84 +76,13 @@ EXCLUDED_PREFIXES=(
 # throws them away again. It reads either a list of files, taking each path from FILENAME, or one
 # file on standard input whose name is given as -v override.
 #
-# A Go directive counts when it opens the first comment on the line, which is how golangci-lint
-# reads it too: a trailing directive after code, or a directive on a line of its own. The comment
-# opener is found by scanning past string and rune literals, so a "//" inside a URL neither hides a
-# real directive nor invents one. Prose that mentions a directive later inside a comment -- this
-# repository has such a sentence -- is not a suppression, because the comment it sits in opens with
-# something else.
-#
 # The program is read from a quoted heredoc, so its $0 and its regexes reach awk exactly as
 # written without a single-quoted string the shell would have to be told not to expand.
 read -r -d '' detect_program <<'AWK' || true
-BEGIN { quote_rune = sprintf("%c", 39) }
+BEGIN { quote_char = sprintf("%c", 39) }
 
 function emit(key) {
 	printf "%s:%d\t%s\n", path, FNR, key
-}
-
-# go_comment_start returns the index of the "//" that opens the first line comment outside any
-# string literal, rune literal or block comment, and 0 when the line has none.
-#
-# Two states outlive a line and are carried in globals: raw_open for a backquoted string, which is
-# the one Go literal that spans lines -- a fixture holding directive text inside one is exactly
-# what a test of this script looks like -- and block_open for a block comment, whose continuation
-# lines golangci-lint does not read directives out of either.
-function go_comment_start(s,   i, n, c, next_c, quote) {
-	n = length(s)
-	quote = raw_open ? "`" : ""
-	i = 1
-
-	while (i <= n) {
-		c = substr(s, i, 1)
-
-		if (block_open) {
-			if (c == "*" && substr(s, i + 1, 1) == "/") {
-				block_open = 0
-				i += 2
-			} else {
-				i++
-			}
-			continue
-		}
-
-		if (quote != "") {
-			if (c == "\\" && quote != "`") {
-				i += 2
-			} else {
-				if (c == quote) {
-					quote = ""
-				}
-				i++
-			}
-			continue
-		}
-
-		if (c == "\"" || c == "`" || c == quote_rune) {
-			quote = c
-			i++
-			continue
-		}
-
-		if (c == "/") {
-			next_c = substr(s, i + 1, 1)
-			if (next_c == "/") {
-				raw_open = 0
-				return i
-			}
-			if (next_c == "*") {
-				block_open = 1
-				i += 2
-				continue
-			}
-		}
-
-		i++
-	}
-
-	raw_open = (quote == "`")
-
-	return 0
 }
 
 # --- Rust ---
@@ -279,11 +209,11 @@ function rs_scan(s,   i, n, c, two, closing, token, prev) {
 			continue
 		}
 
-		if (c == quote_rune) {
+		if (c == quote_char) {
 			if (substr(s, i + 1, 1) == "\\") {
-				token = index(substr(s, i + 3), quote_rune)
+				token = index(substr(s, i + 3), quote_char)
 				i = (token > 0 ? i + 3 + token : n + 1)
-			} else if (substr(s, i + 2, 1) == quote_rune) {
+			} else if (substr(s, i + 2, 1) == quote_char) {
 				i += 3
 			} else {
 				# A lifetime or a label.
@@ -313,8 +243,6 @@ function rs_scan(s,   i, n, c, two, closing, token, prev) {
 }
 
 FNR == 1 {
-	raw_open = 0
-	block_open = 0
 	rs_block = 0
 	rs_raw = -1
 	rs_str = 0
@@ -324,42 +252,6 @@ FNR == 1 {
 {
 	line = $0
 	path = (override != "" ? override : FILENAME)
-
-	if (path ~ /\.go$/) {
-		pos = go_comment_start(line)
-		if (pos > 0) {
-			body = substr(line, pos + 2)
-
-			if (substr(body, 1, 7) == "nolint:") {
-				# Read the list as golangci-lint does: everything up to the explanation's "//",
-				# split on commas, each name trimmed and lower-cased, so "gosec, errcheck" counts
-				# both linters it silences rather than stopping at the first space.
-				rest = substr(body, 8)
-				explanation = index(rest, "//")
-				if (explanation > 0) {
-					rest = substr(rest, 1, explanation - 1)
-				}
-				stop = match(rest, /[^A-Za-z0-9_, \t-]/)
-				if (stop > 0) {
-					rest = substr(rest, 1, stop - 1)
-				}
-				count = split(rest, linters, ",")
-				for (i = 1; i <= count; i++) {
-					name = tolower(linters[i])
-					gsub(/^[ \t]+|[ \t]+$/, "", name)
-					if (name != "") {
-						emit("nolint/" name)
-					}
-				}
-			} else if (body ~ /^nolint([^A-Za-z0-9_:-]|$)/) {
-				# Bare //nolint silences every linter. golangci-lint rejects it through
-				# nolintlint.require-specific, so this is a second line of defence rather than
-				# the only one.
-				emit("nolint/*")
-			}
-		}
-		next
-	}
 
 	if (path ~ /\.rs$/) {
 		rs_scan(line)
@@ -431,7 +323,7 @@ is_excluded() {
 # is_scanned reports whether a path is one of the file kinds the detector understands.
 is_scanned() {
 	case "$1" in
-	*.go | *.rs | *.sh | *Dockerfile) return 0 ;;
+	*.rs | *.sh | *Dockerfile) return 0 ;;
 	*) return 1 ;;
 	esac
 }
@@ -449,7 +341,7 @@ scanned_files() {
 		if ! is_excluded "$path" && is_scanned "$path"; then
 			SCANNED+=("$path")
 		fi
-	done < <(git ls-files -z -- '*.go' '*.rs' '*.sh' '*Dockerfile')
+	done < <(git ls-files -z -- '*.rs' '*.sh' '*Dockerfile')
 }
 
 # current_counts prints the tree's suppression counts as "<key><TAB><count>", sorted by key.

@@ -251,8 +251,8 @@ fn collects_every_family_from_a_proc_tree() {
     assert_eq!(gather_series(fake.collector()), want);
 }
 
-/// A file that cannot be read or parsed drops only the families it feeds, as client_golang
-/// does without `ReportErrors`.
+/// A file that cannot be read or parsed drops only the families it feeds, as the Prometheus Go
+/// client does without `ReportErrors`.
 #[test]
 fn a_failed_read_drops_only_its_families() {
     let names = |fake: &FakeProc| -> Vec<String> {

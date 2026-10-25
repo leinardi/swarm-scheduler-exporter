@@ -643,7 +643,7 @@ fn tls_roots_are_the_system_pool_plus_ca_pem() {
 }
 
 /// Go: `TestNewDockerClient_TLSFromEnvMissingFiles`, with `DOCKER_TLS_VERIFY` set, since Q5
-/// refuses the Go test's unset one first: the missing `ca.pem` is reported with its path, and the
+/// refuses Go's unset one first: the missing `ca.pem` is reported with its path, and the
 /// `io::Error` is the source.
 #[test]
 fn tls_from_env_missing_files() {

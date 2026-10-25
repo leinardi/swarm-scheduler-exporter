@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use jiff::Timestamp;
 use jiff::tz::{Offset, TimeZone};
-use swarm_scheduler_exporter::gofmt_compat::time_layout;
+use swarm_scheduler_exporter::go_compat::time_layout;
 use swarm_scheduler_exporter::logger::{Attr, Config, Format, Level, Logger, MemorySink};
 
 /// The record time, 2026-10-25T14:03:04.567891234+01:00.

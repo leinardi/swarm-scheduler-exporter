@@ -106,8 +106,8 @@ pub struct Metrics {
     pub containers: Option<Arc<ContainersState>>,
 }
 
-/// client_golang's `MustRegister`: the exporter registers each family once, so a refusal is a
-/// programming error.
+/// The Prometheus Go client's `MustRegister`: the exporter registers each family once, so a refusal
+/// is a programming error.
 fn must_register(result: Result<(), RegisterError>) {
     if let Err(error) = result {
         panic!("{error}");

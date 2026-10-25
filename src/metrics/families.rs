@@ -32,19 +32,19 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::{Collector, Desc, Family, Series, Value};
 
-/// client_golang's `DefBuckets`: 5ms to 10s.
+/// The Prometheus Go client's `DefBuckets`: 5ms to 10s.
 pub const DEF_BUCKETS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
-/// Label values whose count is not the family's number of label names (client_golang's
+/// Label values whose count is not the family's number of label names (the Prometheus Go client's
 /// `WithLabelValues` panics there instead).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelsMismatch {
     family: String,
     want: usize,
     got: usize,
-    // A label name the label map lacks (client_golang's `With(prometheus.Labels)`).
+    // A label name the label map lacks (the Prometheus Go client's `With(prometheus.Labels)`).
     missing: Option<String>,
 }
 
@@ -67,7 +67,7 @@ impl fmt::Display for LabelsMismatch {
 
 impl std::error::Error for LabelsMismatch {}
 
-/// An `f64` updated atomically, as client_golang keeps gauge and counter values.
+/// An `f64` updated atomically, as the Prometheus Go client keeps gauge and counter values.
 #[derive(Debug, Default)]
 struct AtomicF64(AtomicU64);
 
@@ -106,8 +106,8 @@ fn owned_values(desc: &Desc, label_values: &[&str]) -> Result<Vec<String>, Label
     Ok(label_values.iter().map(|&value| value.to_owned()).collect())
 }
 
-/// client_golang's `With(prometheus.Labels)`: the values of `labels` in label-name order, which
-/// must name exactly the family's labels.
+/// The Prometheus Go client's `With(prometheus.Labels)`: the values of `labels` in label-name
+/// order, which must name exactly the family's labels.
 fn values_in_order<'labels>(
     desc: &Desc,
     labels: &'labels BTreeMap<String, String>,
@@ -242,7 +242,7 @@ impl GaugeVec {
         lock(&self.children).get(&key).copied()
     }
 
-    /// client_golang's `With(labels).Set(value)`: [`GaugeVec::set`] by label name.
+    /// The Prometheus Go client's `With(labels).Set(value)`: [`GaugeVec::set`] by label name.
     ///
     /// # Errors
     ///
@@ -255,8 +255,8 @@ impl GaugeVec {
         self.set(&values_in_order(&self.desc, labels)?, value)
     }
 
-    /// client_golang's `Delete(labels)`: whether the series existed; false as well when `labels`
-    /// does not name exactly the family's labels.
+    /// The Prometheus Go client's `Delete(labels)`: whether the series existed; false as well when
+    /// `labels` does not name exactly the family's labels.
     pub fn delete_with(&self, labels: &BTreeMap<String, String>) -> bool {
         values_in_order(&self.desc, labels).is_ok_and(|values| self.delete(&values))
     }
@@ -302,8 +302,8 @@ impl Counter {
         self.add(1.0);
     }
 
-    /// Adds `delta`. A counter cannot decrease: a negative `delta` is ignored (client_golang
-    /// panics; the exporter never passes one).
+    /// Adds `delta`. A counter cannot decrease: a negative `delta` is ignored (the Prometheus Go
+    /// client panics; the exporter never passes one).
     pub fn add(&self, delta: f64) {
         if delta >= 0.0 {
             self.value.add(delta);
@@ -406,7 +406,7 @@ pub struct Histogram {
 
 impl Histogram {
     /// A histogram with `upper_bounds` (increasing; a final `+Inf` is implied and dropped, as
-    /// client_golang does).
+    /// the Prometheus Go client does).
     #[must_use]
     pub fn new(desc: Arc<Desc>, upper_bounds: &[f64]) -> Self {
         let mut upper_bounds = upper_bounds.to_vec();

@@ -591,7 +591,7 @@ mod tests {
             },
             Box::new(sink.clone()),
             jiff::tz::TimeZone::UTC,
-            std::sync::Arc::new(crate::gofmt_compat::time_layout::go_zero_time),
+            std::sync::Arc::new(crate::go_compat::time_layout::go_zero_time),
         ));
         maybe_warn_high_cardinality("logged_key", "aabbccddeeff0011");
         let line = "level=WARN msg=\"label appears high-cardinality; consider avoiding IDs/hashes as \

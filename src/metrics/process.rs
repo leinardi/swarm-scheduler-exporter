@@ -22,8 +22,8 @@
  * SOFTWARE.
  */
 
-//! client_golang's process collector on Linux (v1.24.1, over procfs v0.21.1), read in-tree from
-//! `/proc`: the nine `process_*` families with Go's names, types and help texts (Q1).
+//! The Prometheus Go client's process collector on Linux (v1.24.1, over procfs v0.21.1), read
+//! in-tree from `/proc`: the nine `process_*` families with Go's names, types and help texts (Q1).
 //!
 //! Each value comes from where procfs reads it, with procfs's quirks:
 //!
@@ -39,15 +39,16 @@
 //! The page size is read once; without an `AT_PAGESZ` entry, which the kernel always provides
 //! and Go's runtime needs to start, RSS is left out rather than guessed.
 //!
-//! Errors are not reported, as with client_golang's default `ReportErrors: false`: a file that
-//! cannot be read or parsed drops the families it feeds from that scrape (`stat` the CPU, memory
-//! and start time; `/proc/stat` the start time only; `fd`, `limits` and `net/netstat` theirs).
+//! Errors are not reported, as with the Prometheus Go client's default `ReportErrors: false`: a
+//! file that cannot be read or parsed drops the families it feeds from that scrape (`stat` the CPU,
+//! memory and start time; `/proc/stat` the start time only; `fd`, `limits` and `net/netstat`
+//! theirs).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use crate::gofmt_compat::float;
+use crate::go_compat::float;
 
 use super::{Collector, Desc, Family, Kind, Series, Value, constant_desc};
 
@@ -57,7 +58,7 @@ const USER_HZ: f64 = 100.0;
 /// procfs's value for `unlimited` in `/proc/self/limits`.
 const UNLIMITED: u64 = u64::MAX;
 
-/// The process collector's descriptors, in client_golang's order.
+/// The process collector's descriptors, in the Prometheus Go client's order.
 #[derive(Debug)]
 struct Descs {
     cpu_total: Arc<Desc>,
@@ -71,7 +72,7 @@ struct Descs {
     out_bytes: Arc<Desc>,
 }
 
-/// client_golang's `NewProcessCollector` with no namespace.
+/// The Prometheus Go client's `NewProcessCollector` with no namespace.
 #[derive(Debug)]
 pub struct ProcessCollector {
     root: PathBuf,

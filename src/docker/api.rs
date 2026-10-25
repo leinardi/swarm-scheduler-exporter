@@ -47,7 +47,7 @@ use super::host::push_percent;
 use super::types::{
     ContainerInspect, ContainerSummary, Event, Node, Service, Task, decode_first, decode_list,
 };
-use crate::gofmt_compat::quote::push_hex_escape;
+use crate::go_compat::quote::push_hex_escape;
 
 /// The Go exporter's `dockerRequestTimeout`: the bound of one request and its response.
 pub const DOCKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);

@@ -168,7 +168,7 @@ impl FakeEngine {
     ) -> Self {
         let fixtures: PathBuf = [
             env!("CARGO_MANIFEST_DIR"),
-            "internal/collector/testdata/engine_wire",
+            "tests/testdata/engine_wire",
             set.dir,
         ]
         .iter()

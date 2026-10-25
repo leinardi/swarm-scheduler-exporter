@@ -28,9 +28,9 @@ use super::{HandlerMetrics, sanitize_code};
 use crate::metrics::process::ProcessCollector;
 use crate::metrics::{Registry, text};
 
-/// The `process_*` and `promhttp_*` lines of the Go exporter's `/metrics` (v1.3.2, client_golang
-/// v1.24.1), from S2's capture `run1/go-v1.3.2-prometheus3.0.body`: every HELP and TYPE line, and
-/// the handler's samples after four scrapes, during the fifth.
+/// The `process_*` and `promhttp_*` lines of the Go exporter's `/metrics` (v1.3.2, the Prometheus
+/// Go client v1.24.1), from S2's capture `run1/go-v1.3.2-prometheus3.0.body`: every HELP and TYPE
+/// line, and the handler's samples after four scrapes, during the fifth.
 const GO_RUNTIME_FAMILIES: &str = "\
 # HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
 # TYPE process_cpu_seconds_total counter

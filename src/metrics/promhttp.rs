@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-//! promhttp's `InstrumentMetricHandler` metrics (client_golang v1.24.1, Q1):
+//! promhttp's `InstrumentMetricHandler` metrics (the Prometheus Go client v1.24.1, Q1):
 //! `promhttp_metric_handler_requests_total` by status code, with 200, 500 and 503 created at 0,
 //! and `promhttp_metric_handler_requests_in_flight`.
 //!

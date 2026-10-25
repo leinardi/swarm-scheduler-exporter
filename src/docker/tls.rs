@@ -35,8 +35,8 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
 use super::error::ConfigError;
-use crate::gofmt_compat::errno::io_error_text;
-use crate::gofmt_compat::quote::quote;
+use crate::go_compat::errno::io_error_text;
+use crate::go_compat::quote::quote;
 
 /// A file that could not be read: Go's `*fs.PathError` text (`open <path>: <errno>`), with the
 /// `io::Error` as its source.

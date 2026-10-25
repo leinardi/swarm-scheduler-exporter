@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use super::{Collector, Desc, Family, Series, Value};
 
-/// A label set whose keys are not exactly its family's label names (client_golang's
+/// A label set whose keys are not exactly its family's label names (the Prometheus Go client's
 /// `GaugeVec.With` panics on the same input; a build fails instead).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildError(String);
@@ -187,7 +187,7 @@ impl SnapshotBuilder {
             let Some(&label_value) = labels.get(name.as_str()) else {
                 self.fail(BuildError(format!(
                     "missing {}, want {}",
-                    crate::gofmt_compat::quote::quote(name),
+                    crate::go_compat::quote::quote(name),
                     go_list(label_names)
                 )));
                 return;

@@ -1,15 +1,16 @@
 # Suggested commands
 
 - `make help` — lists every target (project targets live in `.mk/*.mk`, never as Makefile recipes).
-- `make go-build`, `make go-test` (`-race`), `make go-vet`, `make go-lint`; `make verify-go` runs
-  build, test, vet, integration vet and lint.
-- Single test: `go test ./internal/collector -run TestReconciler -v`.
-- Meta-tests: `go test ./test/...`; `SSE_REQUIRE_TOOLS=1 go test ./test/...` turns a missing
-  golangci-lint into a failure.
-- Integration (Docker, privileged): `make go-test-integration [RUN='^TestNode_']`, golden rewrite
-  `make go-test-integration UPDATE=1 RUN=TestSnapshot_`, cleanup `make sweep-test-leaks`.
+- `make verify` — build (stamped), fmt check, clippy (`-D warnings`, all features), tests.
+- `make rust-build`, `make rust-test`, `make rust-clippy`, `make rust-fmt`, `make rust-run ARGS=...`.
+- Single test: `cargo test --lib collector::reconciler -- --nocapture`, or
+  `cargo test --test engine_wire <name>`.
+- Meta-tests: `cargo test -p meta`; `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` turns a missing
+  hadolint into a failure.
+- Integration (Docker, privileged): `make test-integration [RUN='^TestNode_']`, golden rewrite
+  `make test-integration UPDATE=1 RUN=TestSnapshot_`, cleanup `make sweep-test-leaks`.
 - `make check` (pre-commit, all files; the CI gate) / `make check-stage` (staged only).
-- `make audit-deps` (govulncheck, network), `make go-tidy`.
+- `make audit-deps` (cargo-deny advisories, network), `make rust-deny` (every cargo-deny check).
 - `make docker-build` / `make docker-run` (dhi.io login required).
 - Suppression baseline refresh: `scripts/check-suppressions.sh --update`.
 - Workflow lint: `pre-commit run actionlint --all-files`.

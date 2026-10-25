@@ -319,7 +319,7 @@ fn newer_than_falls_back_to_the_status_time() {
 }
 
 /// Go: `TestNewerThan_CreatedAt_Equal_OneZeroStatusTS_FallsBackToVersion`, with both status
-/// times zero as the Go test builds them, plus the one-sided case its name describes.
+/// times zero as Go's test builds them, plus the one-sided case its name describes.
 #[test]
 fn newer_than_falls_back_to_the_version() {
     let higher = make_task(at(0), None, 10);

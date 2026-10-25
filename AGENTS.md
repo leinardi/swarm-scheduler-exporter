@@ -10,49 +10,46 @@ is the user-facing story; the metrics it lists are the public contract.
 
 ## Common commands
 
-Build / test / vet use Make wrappers around `go`:
+Build / test / lint use Make wrappers around `cargo`, workspace-wide and `--locked`:
 
 ```bash
-make go-build             # CGO_ENABLED=0 build into ./dist/
-make go-test              # go test -race ./...
-make go-vet
-make go-lint              # golangci-lint (all linters) through the pre-commit hook, at its pinned version; the hook runs with --fix, so review what it rewrites
-make verify-go            # go-build, go-test, go-vet, go-vet-integration and go-lint in one go
-make go-tidy              # go mod tidy + go mod verify
-make audit-deps           # govulncheck -test over every package, integration tag included (network required); also runs in CI and as a pre-commit hook on go.mod/go.sum changes
+make verify               # rust-build (stamped), rust-fmt-check, rust-clippy and rust-test in one go
+make rust-build           # cargo build --workspace --all-targets --all-features, with the version stamps
+make rust-test            # cargo test --workspace: every test but the integration suite, meta-tests included
+make rust-clippy          # clippy over every target and feature, warnings as errors
+make rust-fmt             # cargo fmt --all (rust-fmt-check only checks)
+make rust-run ARGS='--containers --log-level debug'  # run the exporter against the local daemon
+make rust-deny            # cargo-deny: advisories, licences, bans and sources (network required)
+make audit-deps           # cargo-deny advisories only (network required); CI and the cargo-deny hook (on Cargo.toml/Cargo.lock/deny.toml changes) run every check
 make check                # pre-commit on all files: the authoritative local gate, the same as CI's pre-commit-all
 make check-stage          # pre-commit on the staging area only
 make docker-build
 make docker-run           # runs the image locally (read-only, no capabilities), binding the Docker socket and the metrics port
 ```
 
-The meta-tests check the repository rather than the exporter, and need no Docker. The Go ones
-under `test/` (outside `test/integration`) cover the Go version pins and the integration tag
-(`test/toolchain`), the Go build stage and version stamps (`test/dockerfiles`) and the Docker SDK
-boundary rule (`test/boundary`); `go test ./...` runs them, and
-`SSE_REQUIRE_TOOLS=1 go test ./test/...` turns a missing golangci-lint into a failure instead of a
-skip, as CI's `repo-gates` job does. The meta crate's (`meta/tests/`, `cargo test -p meta`) cover
-the always-run hooks and the absence of `|| true`-style flags (`toolchain.rs`), the rest of the
-Dockerfile (`dockerfiles.rs`), the Markdown links (`docs.rs`) and the two scripts below
-(`license_headers.rs`, `suppressions.rs`); `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` is their
-missing-tool gate.
+The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the
+exporter, and need no Docker: the toolchain pins and the always-run hooks (`toolchain.rs`), the
+plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
+the Docker SDK boundary (`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the
+Markdown links (`docs.rs`) and the two scripts below (`license_headers.rs`, `suppressions.rs`).
+`SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` turns a missing hadolint into a failure instead of a
+skip, as CI's `rust` job does.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
 
 ```bash
-make go-test-integration                            # the whole suite
-make go-test-integration RUN='^TestNode_'           # a subset
-make go-test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden files
-make go-vet-integration                             # go vet including the integration-tagged code
-make rust-test-integration RUN='^TestNode_'         # the Rust suite (testenv), the same tests
-make sweep-test-leaks                               # remove every labelled test container and network
+make test-integration                            # the whole suite, against the release binary
+make test-integration RUN='^TestNode_'           # a subset (Go's -run semantics)
+make test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden file
+make sweep-test-leaks                            # remove every labelled test container and network
 ```
 
 Single test:
 
 ```bash
-go test ./internal/collector -run TestReconciler -v
+cargo test --lib collector::reconciler -- --nocapture
+cargo test --test engine_wire
 ```
 
 The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on first run. To
@@ -83,12 +80,12 @@ refresh: `make mk-common-update`. Project targets live in the local `.mk/*.mk` f
 
 ### Generated or vendored: never hand-edit
 
-- `.mk/{docker,help,go,password,pre-commit}.mk`, `.mk/.mk-common-version` and
+- `.mk/{docker,help,password,pre-commit}.mk`, `.mk/.mk-common-version` and
   `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
   `make mk-common-update` and port a change upstream.
-- `internal/collector/testdata/**` and `test/integration/testdata/**`: byte-for-byte Engine API
-  captures and golden files. The golden files are rewritten with
-  `make go-test-integration UPDATE=1 RUN=...`; the whitespace hooks skip them.
+- `tests/testdata/**` and `testenv/tests/integration/testdata/**`: byte-for-byte Engine API
+  captures and golden files. The integration golden file is rewritten with
+  `make test-integration UPDATE=1 RUN=TestSnapshot_`; the whitespace hooks skip them.
 
 ## Invariants
 
@@ -96,9 +93,9 @@ The full list, with what counts as a finding, is in `.agents/skills/adversarial-
 The ones to keep in mind while writing code:
 
 - **Read-only against Docker, enforced in code.** A `:ro` socket bind does not make the API
-  read-only. `DockerAPI` exposes list, inspect and events calls only, and the depguard rule
-  `docker-sdk-boundary` in `.golangci.yaml` keeps Docker SDK imports inside `internal/collector` and
-  `cmd/swarm-scheduler-exporter`.
+  read-only. The exporter's own Docker client (`src/docker`) exposes list, inspect and events
+  calls only, and `meta/tests/docker_boundary.rs` keeps it to `GET` (plus the ping's `HEAD`) and
+  keeps bollard, the harness's SDK, out of the exporter package.
 - **Metrics are the public contract.** A renamed metric or a changed label set updates the README's
   Metrics section (and any alert example) in the same change. No label fed by an unbounded value.
 - **Series lifecycle.** A removed resource's series are deleted, never set to 0; known state sets
@@ -139,17 +136,15 @@ Run before considering an edit done. `make check` applies to every row.
 
 | You edited | Run |
 | --- | --- |
-| `**/*.go` | `make verify-go`; after integration-tagged code (`internal/testenv`, `test/integration`, or anything they exercise), `make go-test-integration` (Docker) |
-| `go.mod`, `go.sum` | `make go-tidy`, `make audit-deps` (network) |
-| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `go test ./test/dockerfiles/ ./test/toolchain/`, `cargo test -p meta --test dockerfiles`, `make docker-build` |
-| `.golangci.yaml` | `go test ./test/boundary/`, `make go-lint` |
-| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `go test ./test/toolchain/`, `cargo test -p meta --test toolchain --test dockerfiles` |
+| `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (network) |
+| `deployments/docker/Dockerfile`, `.hadolint.yaml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
+| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
-| `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `go test ./test/toolchain/`, `cargo test -p meta --test toolchain`, `make help` |
+| `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
 | `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
-| `testenv/**` | `make verify`; `make rust-test-integration` (Docker) |
-| `test/**`, `meta/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...`, `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` |
+| `meta/**` | `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` |
 | `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
 
 ## Project skills

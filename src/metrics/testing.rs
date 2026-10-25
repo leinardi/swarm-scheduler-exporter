@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::gofmt_compat::quote::quote;
+use crate::go_compat::quote::quote;
 
 use super::{Collector, Registry, Value};
 

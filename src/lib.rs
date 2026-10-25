@@ -29,7 +29,7 @@ pub mod cli;
 pub mod clock;
 pub mod collector;
 pub mod docker;
-pub mod gofmt_compat;
+pub mod go_compat;
 pub mod healthcheck;
 pub mod labels;
 pub mod logger;

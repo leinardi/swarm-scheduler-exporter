@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-//! The steady-state snapshot against the golden file the Go suite shares.
+//! The steady-state snapshot against its golden file.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,15 +48,13 @@ const TEAM_LABEL: &str = "team";
 /// How many consecutive identical snapshots count as converged when rewriting the golden file.
 const SNAPSHOT_STABLE_POLLS: usize = 3;
 const TIMESTAMP_MASK: &str = "<timestamp>";
-/// The golden file's first line. The file is shared with the Go suite and must stay
-/// byte-identical, so a rewrite from here keeps the Go suite's header too.
-const GOLDEN_HEADER: &str = "# Rewrite with: make go-test-integration UPDATE=1 RUN=TestSnapshot_";
-/// Set by `make rust-test-integration UPDATE=1`: rewrite the golden file instead of comparing.
+/// The golden file's first line: how to rewrite it.
+const GOLDEN_HEADER: &str = "# Rewrite with: make test-integration UPDATE=1 RUN=TestSnapshot_";
+/// Set by `make test-integration UPDATE=1`: rewrite the golden file instead of comparing.
 const ENV_UPDATE: &str = "SSE_IT_UPDATE";
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../test/integration/testdata/steady_state.golden")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/integration/testdata/steady_state.golden")
 }
 
 /// Go: `TestSnapshot_SteadyState`. Deploys a fixed mix of service shapes and compares
@@ -246,8 +244,8 @@ fn read_golden(
 ) -> Result<Vec<String>, crate::testing::Fatal> {
     let content = std::fs::read_to_string(path).map_err(|error| {
         test.fatal(format!(
-            "read golden file (rewrite it with make rust-test-integration UPDATE=1 \
-             RUN=TestSnapshot_): {error}"
+            "read golden file (rewrite it with make test-integration UPDATE=1 RUN=TestSnapshot_): \
+             {error}"
         ))
     })?;
     Ok(content

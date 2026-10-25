@@ -45,7 +45,7 @@ use bollard::query_parameters::{
 use futures_util::StreamExt as _;
 use jiff::Timestamp;
 use swarm_scheduler_exporter::clock::{Clock as _, SystemClock};
-use swarm_scheduler_exporter::gofmt_compat::duration;
+use swarm_scheduler_exporter::go_compat::duration;
 use swarm_scheduler_exporter::logger::Attr;
 use tokio::time::{Instant, MissedTickBehavior};
 

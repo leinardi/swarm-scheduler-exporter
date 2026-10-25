@@ -199,8 +199,8 @@ pub fn digest_pinned(image: &str) -> bool {
     DIGEST_PINNED.is_match(image)
 }
 
-/// The reference without its tag and digest: `dhi.io/golang` for
-/// `dhi.io/golang:1.26.9-alpine3.23-dev@sha256:...`.
+/// The reference without its tag and digest: `dhi.io/rust` for
+/// `dhi.io/rust:1.98.1-debian13-dev@sha256:...`.
 #[must_use]
 pub fn repository(image: &str) -> &str {
     let name = image.split_once('@').map_or(image, |(name, _)| name);

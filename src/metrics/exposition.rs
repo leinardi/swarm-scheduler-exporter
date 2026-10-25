@@ -24,9 +24,9 @@
 
 //! The `/metrics` answer: promhttp's content negotiation, and the body.
 //!
-//! promhttp (client_golang v1.24.1, common v0.71.0) picks a format with expfmt's `Negotiate`
-//! among Go's four (protobuf delimited, text and compact-text, and text 0.0.4) from the first
-//! `Accept` header, which goautoneg parses and sorts, and appends `; escaping=` from the
+//! promhttp (the Prometheus Go client v1.24.1, common v0.71.0) picks a format with expfmt's
+//! `Negotiate` among Go's four (protobuf delimited, text and compact-text, and text 0.0.4) from the
+//! first `Accept` header, which goautoneg parses and sorts, and appends `; escaping=` from the
 //! `escaping` parameters it meets on the way. It picks a compression with gddo's
 //! `NegotiateContentEncoding` over every `Accept-Encoding` header, offering identity then gzip.
 //!
@@ -43,9 +43,9 @@ use std::io::Write as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use crate::gofmt_compat::float;
-use crate::gofmt_compat::parse_float::{ParseFloatError, parse_float32};
-use crate::gofmt_compat::sort;
+use crate::go_compat::float;
+use crate::go_compat::parse_float::{ParseFloatError, parse_float32};
+use crate::go_compat::sort;
 
 use super::Gathered;
 use super::text::{self, TEXT_CONTENT_TYPE};

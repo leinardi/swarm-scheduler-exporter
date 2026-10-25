@@ -1,21 +1,47 @@
 # Contributing
 
-## Setup
+## Prerequisites
 
-Install [`pre-commit`](https://pre-commit.com/), then install the hooks once with
-`make pre-commit-install`. It installs both the `pre-commit` and the `commit-msg` hooks, so commit
-messages are checked when you commit, not when the release runs.
+- Rust 1.98: [rustup](https://rustup.rs/) installs the `1.98.1` toolchain that
+  `rust-toolchain.toml` pins, with clippy and rustfmt, on the first `cargo` command
+- [cargo-deny](https://github.com/EmbarkStudios/cargo-deny), for `make audit-deps` and
+  `make rust-deny` (`cargo install --locked cargo-deny`)
+- [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and [zig](https://ziglang.org/),
+  only to build the static musl binaries the releases ship outside Docker (the versions
+  `.github/actions/setup-zigbuild` pins; `rust-toolchain.toml` adds both musl targets)
+- Docker, for building the container image and running the integration tests
+- [hadolint](https://github.com/hadolint/hadolint) on `PATH`, at the release
+  `.github/actions/setup-hadolint` pins: the hadolint hook and the Dockerfile meta-tests run it (the
+  meta-tests skip without it, unless `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`)
+- [`pre-commit`](https://pre-commit.com/): install the hooks once with `make pre-commit-install`. It
+  installs both the `pre-commit` and the `commit-msg` hooks, so commit messages are checked when you
+  commit, not when the release runs.
+
+## Building and testing
+
+```bash
+make rust-build      # cargo build of the whole workspace, every target and feature, version-stamped
+make rust-test       # cargo test --workspace, the meta-tests in meta/ included
+make rust-fmt        # format the code (rust-fmt-check only checks)
+make rust-clippy     # clippy over the workspace, warnings as errors
+make verify          # rust-build, rust-fmt-check, rust-clippy and rust-test in one go
+make rust-run ARGS="--containers --log-level debug"  # run against the local daemon, version-stamped
+make audit-deps      # cargo-deny against the RustSec advisories (network required)
+make rust-deny       # every cargo-deny check: advisories, licences, bans, sources (network required)
+make docker-build    # the container image, for the host's architecture
+```
 
 `make check` runs the full pre-commit suite on every file, and `make check-stage` runs it on the
 staged files only.
 
 ## Integration tests
 
-`make go-test-integration` builds the exporter and runs it against a throwaway Swarm: one manager
-and two workers, each a privileged `docker:dind` container on your Docker daemon, joined over a
-dedicated bridge network. The tests live in `test/integration` behind the `integration` build tag,
-the harness in `internal/testenv`. The same suite runs on every pull request
-(`.github/workflows/integration.yaml`).
+`make test-integration` builds the release binary and runs it against a throwaway Swarm: one
+manager and two workers, each a privileged `docker:dind` container on your Docker daemon, joined
+over a dedicated bridge network. The harness is the `testenv` crate, with the Docker SDK behind its
+`integration` feature, and the suite is its `integration` test target (`testenv/tests/integration`),
+a runner of its own: one cluster for the whole run, the tests one after another. The same suite runs
+on every pull request (`.github/workflows/integration.yaml`).
 
 Prerequisites: a Docker daemon that allows privileged containers. The host may itself be a Swarm
 node: the test Swarm lives entirely inside the DinD containers, and nothing on the host daemon is
@@ -23,18 +49,16 @@ touched except the labelled containers and network the run creates and removes. 
 from a registry: the workload image is pulled once on the host and loaded into each of them.
 
 ```sh
-make go-test-integration                            # the whole suite
-make go-test-integration RUN='^TestNode_'           # only the tests matching a regexp
-make go-test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden files under test/integration/testdata
-make go-vet-integration                             # go vet, including the integration-tagged code
+make test-integration                            # the whole suite
+make test-integration RUN='^TestNode_'           # only the tests matching a regexp
+make test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden file under testenv/tests/integration/testdata
 ```
 
-The harness is being ported to Rust (`testenv`, with the Docker SDK behind its `integration`
-feature). `make rust-test-integration` builds the release binary and runs the Rust suite against it:
-the harness's own smoke test and every test of the Go suite, under the same names. `RUN` takes go
-test's `-run` patterns (`'^TestNode_'`), and a pattern that selects no test fails the run instead of
-passing it. The same `SSE_IT_*` variables apply, and `UPDATE=1` rewrites the snapshot golden file
-the two suites share.
+`RUN` takes the patterns of Go's `-run` flag: a regular expression per `/`-separated level
+(`'^TestSocketProxy_ExampleAllowlist/denied'`), unanchored. A pattern that selects no test fails the
+run instead of passing it, and the run prints how many tests it selected. Each test and subtest
+prints a `--- PASS` or `--- FAIL` line with its duration, then the run prints the selected, passed
+and failed counts. `SSE_IT_BINARY` names another binary to test instead of the release build.
 
 - `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails, and prints
   the manager's address (`DOCKER_HOST=tcp://127.0.0.1:<port> docker node ls`) and the command that

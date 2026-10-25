@@ -584,8 +584,8 @@ fn labels_for_metadata_names_every_label() {
             ("team".to_owned(), "platform".to_owned()),
         ])
     );
-    // Custom labels the family does not carry are refused, as client_golang's With refuses
-    // them.
+    // Custom labels the family does not carry are refused, as the Prometheus Go client's With
+    // refuses them.
     let gauges = ReplicaGauges::new(&CustomLabels::default());
     let error = gauges.set_desired(&service, 1.0).unwrap_err();
     assert!(

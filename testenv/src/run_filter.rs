@@ -22,8 +22,9 @@
  * SOFTWARE.
  */
 
-//! Go's `go test -run` for the integration runner. libtest's filter is a substring, so
-//! `RUN='^TestNode_'` would select nothing and still pass; this keeps Go's semantics instead.
+//! The `-run` flag of Go's test runner, for the integration runner. libtest's filter is a
+//! substring, so `RUN='^TestNode_'` would select nothing and still pass; this keeps Go's semantics
+//! instead.
 //!
 //! The pattern is split, as Go's testing package splits it, on every `/` and `|` outside a
 //! bracket expression and outside parentheses (a backslash escapes the next byte): `/` separates

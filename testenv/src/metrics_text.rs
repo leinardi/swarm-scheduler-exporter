@@ -32,8 +32,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use swarm_scheduler_exporter::gofmt_compat::float::format_g;
-use swarm_scheduler_exporter::gofmt_compat::quote::quote;
+use swarm_scheduler_exporter::go_compat::float::format_g;
+use swarm_scheduler_exporter::go_compat::quote::quote;
 
 /// Labels by name, sorted.
 pub type Labels = BTreeMap<String, String>;

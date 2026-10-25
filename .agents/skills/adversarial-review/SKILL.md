@@ -73,7 +73,7 @@ Docker SDK boundary (`test/boundary`), the Markdown links (`meta/tests/docs.rs`)
 headers and the suppression ratchet (`meta/tests/license_headers.rs`, `meta/tests/suppressions.rs`).
 Try to make the guarded thing go wrong and see whether the test still notices. A test that passes
 because its input is empty, its rule never ran or its tool was skipped (`toolgate` skips a missing
-tool unless `SSE_REQUIRE_TOOLS=1`, or `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1` in the meta crate)
+tool unless `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`)
 is a false pass, and a change that loosens one -- a wider allowlist, a narrower walk, a dropped
 negative control -- is a finding unless it says why.
 
@@ -95,21 +95,21 @@ The exporter must only ever *read* from the Docker API. A `:ro` bind of
 from modifying the socket file, and a client can still POST creates, updates and removes
 through it. So the read-only property rests entirely on the code:
 
-- the `DockerAPI` interface (`internal/collector/docker_api.go`), which exposes only list,
-  inspect and events calls (`NodeList`, `ServiceList`, `ServiceInspect`, `TaskList`,
-  `ContainerList`, `ContainerInspect`, `Events`), and through which all collector code reaches
-  Docker;
-- the depguard rule `docker-sdk-boundary` in `.golangci.yaml`, which denies Docker SDK imports
-  (`github.com/docker/docker/…`, `github.com/moby/moby/…`) outside `internal/collector` and
-  `cmd/swarm-scheduler-exporter`. An SDK import anywhere else is a finding, and so is a diff
-  that widens the rule's allowed trees, removes a deny entry or drops a trailing slash.
+- the exporter's own Docker client (`src/docker`), which exposes only list, inspect and events
+  calls (nodes, services, a service inspect, tasks, containers, a container inspect, events),
+  and through which all collector code reaches Docker;
+- `meta/tests/docker_boundary.rs`, which keeps that client to `GET` (plus the ping's one
+  `HEAD`), builds requests in one place, asks only for paths the shipped socket-proxy allowlist
+  grants, and keeps bollard (the harness's SDK, which creates and removes things) declared only
+  by `testenv` behind its `integration` feature and named nowhere in the exporter package. A
+  diff that loosens any of those rules, or reaches Docker around the client, is a finding.
 
 Critical:
 
-- a new `DockerAPI` method that creates, updates, removes, kills, scales, restarts, prunes or
-  otherwise changes anything;
-- `main.go` (or any other code holding the concrete client) calling a mutating method on the
-  client directly, bypassing `DockerAPI`;
+- a new client method that creates, updates, removes, kills, scales, restarts, prunes or
+  otherwise changes anything, or a request with a method other than `GET` (the ping's `HEAD`
+  aside);
+- the exporter package depending on bollard or testenv in any dependency table;
 - docs claiming that `:ro` makes the socket read-only. The README's Security section says the
   exporter only *issues* read requests and that enforcing it needs a proxy; a diff that walks
   that back is a finding.
@@ -279,7 +279,7 @@ for a complexity or length rule, was the obvious extraction tried and what broke
 `wrapcheck`, why is wrapping wrong here? For `varnamelen`, why does the name have to be short?
 A suppression whose reason comment restates the rule instead of explaining why the fix does not
 apply is a finding, and so is a suppression with no reason comment at all. The same holds for a
-new exclusion in `.golangci.yaml` — and an exclusion, enable or setting there that matches nothing
+new `allow` in `[workspace.lints]` or `clippy.toml` — and a lint setting there that matches nothing
 in this repo (copied from another project) is a finding too.
 
 ### (d) Cross-file duplication
@@ -305,26 +305,26 @@ implements, and so is a default in the docs that differs from the code.
 
 ## 6. Verify before you trust (don't hand-wave the gates)
 
-Static reading misses things. Use focused tests while investigating (`go test
-./internal/collector -run <Name>`), then run the gates the change owes and treat a failure it
-caused as a confirmed finding with the output attached:
+Static reading misses things. Use focused tests while investigating (`cargo test --lib
+collector::reconciler`, `cargo test --test engine_wire`), then run the gates the change owes and
+treat a failure it caused as a confirmed finding with the output attached:
 
 | Diff touched | Run |
 | --- | --- |
-| any `**/*.go` | `make go-build`, `make go-test` (race detector on), then `make check` |
-| `internal/collector/**`, `internal/testenv/**`, `cmd/**`, `test/integration/**` | also `make go-vet-integration` and `make go-test-integration` (a DinD Swarm; needs Docker with privileged containers) |
-| `go.mod` / `go.sum` | `make go-tidy` and `make audit-deps` (govulncheck; network required) |
-| `test/**`, `scripts/check-*.sh`, `.golangci.yaml`, `.pre-commit-config.yaml`, `.github/**` | `SSE_REQUIRE_TOOLS=1 go test ./test/...` (the CI `repo-gates` job), then `make check` |
+| any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` (build, fmt, clippy, tests), then `make check` |
+| `src/collector/**`, `src/docker/**`, `testenv/**` | also `make test-integration` (a DinD Swarm; needs Docker with privileged containers) |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (cargo-deny; network required) |
+| `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1 cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
 | `deployments/docker/Dockerfile` | hadolint via `make check`, plus `make docker-build` |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 
-golangci-lint may not be on `PATH`; run it through pre-commit. Several hooks rewrite files
-(prettier, markdownlint, the golangci formatters): check `git status` afterwards and report a
-rewrite as a finding instead of reviewing the rewritten tree. A skipped test is not a pass —
-check the `-v` output for `SKIP`. If a gate is impractical here (no Docker daemon, no network
-for govulncheck), say so explicitly and mark that risk unverified rather than implying it
-passed.
+Several hooks rewrite files (prettier, markdownlint, dclint): check `git status` afterwards and
+report a rewrite as a finding instead of reviewing the rewritten tree. A skipped test is not a
+pass: a meta-test whose tool is missing returns early with a note on stderr unless
+`SWARM_SCHEDULER_EXPORTER_REQUIRE_TOOLS=1`, and the integration runner prints `SKIP`. If a gate
+is impractical here (no Docker daemon, no network for cargo-deny), say so explicitly and mark
+that risk unverified rather than implying it passed.
 
 ## 7. Report
 

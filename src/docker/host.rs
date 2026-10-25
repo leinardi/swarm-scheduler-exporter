@@ -24,7 +24,7 @@
 
 //! `DOCKER_HOST`, as moby's `ParseHostURL` and go-connections' `ConfigureTransport` read it.
 
-use crate::gofmt_compat::quote::quote;
+use crate::go_compat::quote::quote;
 
 /// The longest unix socket path: `len(syscall.RawSockaddrUnix{}.Path)` on Linux.
 const MAX_UNIX_SOCKET_PATH: usize = 108;

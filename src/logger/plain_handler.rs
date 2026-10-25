@@ -37,7 +37,7 @@
 //! them included; a group without a key is dropped; and a group from `with_attrs` with no
 //! attributes is written `key={}`.
 
-use crate::gofmt_compat::{duration, float, quote, time_layout};
+use crate::go_compat::{duration, float, quote, time_layout};
 
 use super::Level;
 use super::value::{Attr, Time, Value};

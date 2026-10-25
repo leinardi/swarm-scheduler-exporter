@@ -22,18 +22,18 @@
  * SOFTWARE.
  */
 
-//! The metric registry, a port of the parts of client_golang the exporter uses.
+//! The metric registry, a port of the parts of the Prometheus Go client the exporter uses.
 //!
 //! A [`Registry`] holds [`Collector`]s, each describing one or more families by [`Desc`].
-//! [`Registry::gather`] collects them and normalises the result as client_golang's `Gather` does:
-//! label pairs sorted by name, series by label values, families by name, and families with no
-//! series dropped. [`text`] encodes that as expfmt's text format 0.0.4, and [`exposition`] picks
-//! the `Content-Type` and `Content-Encoding` the way promhttp negotiates them.
+//! [`Registry::gather`] collects them and normalises the result as the Prometheus Go client's
+//! `Gather` does: label pairs sorted by name, series by label values, families by name, and
+//! families with no series dropped. [`text`] encodes that as expfmt's text format 0.0.4, and
+//! [`exposition`] picks the `Content-Type` and `Content-Encoding` the way promhttp negotiates them.
 //!
 //! The families: [`Gauge`], [`GaugeVec`], [`Counter`], [`CounterVec`], [`Histogram`],
 //! [`GaugeFunc`] (evaluated at scrape) and the snapshot families ([`SnapshotCollector`],
 //! [`SnapshotFamily`]), which are rebuilt whole and swapped in at once. [`process`] and
-//! [`promhttp`] add client_golang's runtime families (Q1).
+//! [`promhttp`] add the Prometheus Go client's runtime families (Q1).
 
 pub mod exposition;
 mod families;
@@ -88,9 +88,9 @@ impl fmt::Display for DescError {
 impl std::error::Error for DescError {}
 
 impl Desc {
-    /// A descriptor, checked as client_golang's `NewDesc` and `NewHistogram` check theirs: a
-    /// legacy-valid metric name, legacy-valid and distinct label names not starting with `__`,
-    /// and no `le` label on a histogram.
+    /// A descriptor, checked as the Prometheus Go client's `NewDesc` and `NewHistogram` check
+    /// theirs: a legacy-valid metric name, legacy-valid and distinct label names not starting with
+    /// `__`, and no `le` label on a histogram.
     ///
     /// # Errors
     ///
@@ -206,7 +206,7 @@ pub struct Family {
     pub series: Vec<Series>,
 }
 
-/// Something that produces families at scrape time, client_golang's `Collector`.
+/// Something that produces families at scrape time, the Prometheus Go client's `Collector`.
 pub trait Collector: Send + Sync {
     /// The descriptors of every family it may produce.
     fn descs(&self) -> Vec<Arc<Desc>>;
@@ -287,8 +287,8 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// [`RegisterError`] when one of its family names is already registered (client_golang's
-    /// `MustRegister` panics there instead; the exporter registers each family once).
+    /// [`RegisterError`] when one of its family names is already registered (the Prometheus Go
+    /// client's `MustRegister` panics there instead; the exporter registers each family once).
     pub fn register(&self, collector: Arc<dyn Collector>) -> Result<(), RegisterError> {
         let mut collectors = self.lock();
         let names: Vec<String> = collector

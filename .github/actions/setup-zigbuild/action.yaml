@@ -1,0 +1,46 @@
+name: "Set up cargo-zigbuild"
+description: >-
+  Installs zig and cargo-zigbuild, the cross-compiler and linker behind the static musl release
+  binaries, each verified against its published digest.
+
+runs:
+  using: "composite"
+  steps:
+    # The same versions and x86_64 archives the Dockerfile's build stage pins (ZIG_VERSION,
+    # CARGO_ZIGBUILD_VERSION and their sha256s); the meta crate's toolchain test keeps each one
+    # value. The zig digest is from
+    # https://ziglang.org/download/index.json, the cargo-zigbuild one is the release asset's .sha256.
+    - name: Install zig and cargo-zigbuild
+      shell: bash
+      env:
+        ZIG_VERSION: "0.17.0"
+        ZIG_SHA256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+        CARGO_ZIGBUILD_VERSION: "0.24.0"
+        CARGO_ZIGBUILD_SHA256: 52be2cb85ad3875682564a29bac1832b2ab3db68b1c504765c92d5249cc9b96f
+      run: |
+        set -euo pipefail
+        if [ "$(uname -m)" != "x86_64" ]; then
+          echo "setup-zigbuild installs the x86_64 assets only (got $(uname -m))." >&2
+          exit 1
+        fi
+
+        zig_archive="${RUNNER_TEMP}/zig.tar.xz"
+        curl -fsSL -o "${zig_archive}" \
+          "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+        echo "${ZIG_SHA256}  ${zig_archive}" | sha256sum --check --strict -
+        zig_dir="${RUNNER_TEMP}/zig"
+        mkdir -p "${zig_dir}"
+        tar -xJf "${zig_archive}" -C "${zig_dir}" --strip-components=1
+        echo "${zig_dir}" >> "${GITHUB_PATH}"
+
+        zigbuild_archive="${RUNNER_TEMP}/cargo-zigbuild.tar.xz"
+        curl -fsSL -o "${zigbuild_archive}" \
+          "https://github.com/rust-cross/cargo-zigbuild/releases/download/v${CARGO_ZIGBUILD_VERSION}/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz"
+        echo "${CARGO_ZIGBUILD_SHA256}  ${zigbuild_archive}" | sha256sum --check --strict -
+        zigbuild_dir="${RUNNER_TEMP}/cargo-zigbuild"
+        mkdir -p "${zigbuild_dir}"
+        tar -xJf "${zigbuild_archive}" -C "${zigbuild_dir}" --strip-components=1
+        sudo install -m 0755 "${zigbuild_dir}/cargo-zigbuild" /usr/local/bin/cargo-zigbuild
+
+        "${zig_dir}/zig" version
+        cargo-zigbuild --version

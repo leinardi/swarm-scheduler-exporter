@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use swarm_scheduler_exporter::gofmt_compat::duration;
+use swarm_scheduler_exporter::go_compat::duration;
 use testenv::context::Context;
 use testenv::metrics_text::{Labels, Scrape, format_series, format_value, labels};
 use tokio::time::{Instant, MissedTickBehavior};
