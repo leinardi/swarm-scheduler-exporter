@@ -34,6 +34,7 @@ pub mod healthcheck;
 pub mod labels;
 pub mod logger;
 pub mod metrics;
+pub mod run;
 pub mod server;
 pub mod version;
 

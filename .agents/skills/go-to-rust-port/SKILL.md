@@ -293,6 +293,14 @@ Rust tutorial. Seen in: awtrix-controller.
   failed file feeds. The procfs crate 0.18 has no netstat parser and uses the system tick rate →
   an in-tree `/proc` reader with std only (the page size from `AT_PAGESZ` in `/proc/self/auxv`,
   where Go's runtime gets it). (S6: 9 of 9 values identical on a stopped process)
+- To diff a Go exporter's `/metrics` against the port, scrape over a raw TCP connection: Go's
+  `http.Client` silently adds `Accept-Encoding: gzip` and decompresses, so a "plain" capture is
+  really the gzip case. Pin the scraper's `Accept` to one Prometheus release (3.0 and 3.15.1 send
+  different strings, the `q` values and escaping clauses move), since `escaping=` comes from it.
+  Settle on the fake daemon's request log rather than on a scrape, so the scrape counter is known
+  (scrape n shows n−1), and mask only what varies (process values, histogram `_sum` and buckets,
+  wall-clock timestamps), each with an assertion instead. (S2; the port's capture: byte-exact
+  after the masks)
 - **YAML (yaml.v3):** serde_yaml_ng, see §2.
 
 ## 4. Concurrency and shutdown
@@ -326,6 +334,11 @@ Rust tutorial. Seen in: awtrix-controller.
   the first key, so every later, different value logs on each recurrence. A port to
   `HashMap::insert` quietly logs less → use `entry().or_insert()` and pin it with a test, or
   list the fix as a behaviour change. (Go source read; ported at-desired log)
+- Go's `time.Ticker` drops the ticks a slow poll overran and resumes its grid; tokio's
+  `interval` defaults to `Burst` (back-to-back catch-up polls), and `Delay` shifts the grid →
+  `MissedTickBehavior::Skip`, with the interval created before the immediate first poll and its
+  immediate first `tick()` consumed, as `NewTicker` before the first poll. (S7: 3 of 3 slow-poll
+  scenarios, paused clock against Go)
 
 ## 5. Tooling, lints and packaging
 
@@ -356,6 +369,15 @@ Rust tutorial. Seen in: awtrix-controller.
 - Go's `t.Skip` has no libtest equivalent: a test gated on an external tool returns early with a
   note on stderr → add an environment variable that turns the missing tool into a panic and set
   it in CI, or the check passes silently exactly where it is meant to guard. (ported meta-tests)
+- A golden test that needs the compile-time version stamps (`option_env!`) cannot get them from
+  the test build without stamping every target, and a stamped and an unstamped build in one
+  target directory keep rebuilding each other → have the test build a stamped copy once
+  (`env!("CARGO")` `build --bin … --target-dir` under `CARGO_TARGET_TMPDIR`, the stamps in its
+  environment, behind a `OnceLock`). (exposition test: 11 s the first time, cached after)
+- `tests/support/mod.rs` is compiled once per test crate, so a helper one crate does not use is
+  dead code there, `pub` or not (a test crate is a binary) → `#[expect(dead_code, reason)]` on that
+  crate's `mod support;` only, and keep a helper only one crate uses in that crate, or the
+  expectation goes unfulfilled in another. (clippy `-D warnings`)
 - **Calibration** (one small network service): Go 12 MB binary and 18 MB RSS; Rust 4.9–6.3 MB
   static binaries and about 5 MB RSS. Clean release builds take 36–110 s. (spike)
 

@@ -56,6 +56,13 @@ rust-build: ## Build the Rust workspace, with the version stamps
 rust-test: ## Run the Rust tests, meta-tests included
 	$(CARGO) test --workspace --locked
 
+# Flags for rust-run, e.g. RUST_RUN_ARGS="--containers --log-level debug".
+RUST_RUN_ARGS ?=
+
+.PHONY: rust-run
+rust-run: ## Run the Rust exporter against the local Docker daemon, with the version stamps (flags in RUST_RUN_ARGS)
+	$(RUST_VERSION_ENV) $(CARGO) run --locked --bin swarm-scheduler-exporter -- $(RUST_RUN_ARGS)
+
 .PHONY: rust-clippy
 rust-clippy: ## Lint the Rust workspace with clippy, warnings as errors
 	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings

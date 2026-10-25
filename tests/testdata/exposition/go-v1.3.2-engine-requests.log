@@ -1,0 +1,10 @@
+HEAD /_ping
+GET /events
+HEAD /_ping
+GET /services
+GET /nodes
+GET /tasks
+GET /containers/json
+GET /containers/c-compose-web/json
+GET /containers/c-compose-worker/json
+GET /containers/c-plain/json

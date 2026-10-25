@@ -69,12 +69,15 @@ clap = { version = "4.6.7", default-features = false, features = [
     "error-context",
     "suggestions",
 ] }
-# The timer (TokioClock), the sockets, tasks and lock of the Docker client, and select! for the
-# cancellable awaits of the reconciler.
+# The timer (TokioClock), the sockets, tasks and lock of the Docker client, select! for the
+# cancellable awaits of the reconciler, the multi-threaded runtime main builds (its worker count
+# from available_parallelism, Q12) and the SIGINT and SIGTERM watch.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",
     "net",
     "rt",
+    "rt-multi-thread",
+    "signal",
     "sync",
     "io-util",
     "macros",

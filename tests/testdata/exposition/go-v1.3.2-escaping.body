@@ -1,0 +1,343 @@
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 4.3023e-05
+go_gc_duration_seconds{quantile="0.25"} 4.3023e-05
+go_gc_duration_seconds{quantile="0.5"} 0.000316806
+go_gc_duration_seconds{quantile="0.75"} 0.000316806
+go_gc_duration_seconds{quantile="1"} 0.000316806
+go_gc_duration_seconds_sum 0.000359829
+go_gc_duration_seconds_count 2
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+# HELP go_gc_gomemlimit_bytes Go runtime memory limit configured by the user, otherwise math.MaxInt64. This value is set by the GOMEMLIMIT environment variable, and the runtime/debug.SetMemoryLimit function. Sourced from /gc/gomemlimit:bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes 9.223372036854776e+18
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 18
+# HELP go_info Information about the Go environment.
+# TYPE go_info gauge
+go_info{version="go1.26.10"} 1
+# HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes 2.860808e+06
+# HELP go_memstats_alloc_bytes_total Total number of bytes allocated in heap until now, even if released already. Equals to /gc/heap/allocs:bytes.
+# TYPE go_memstats_alloc_bytes_total counter
+go_memstats_alloc_bytes_total 4.875928e+06
+# HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table. Equals to /memory/classes/profiling/buckets:bytes.
+# TYPE go_memstats_buck_hash_sys_bytes gauge
+go_memstats_buck_hash_sys_bytes 1.444201e+06
+# HELP go_memstats_frees_total Total number of heap objects frees. Equals to /gc/heap/frees:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_frees_total counter
+go_memstats_frees_total 18332
+# HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata. Equals to /memory/classes/metadata/other:bytes.
+# TYPE go_memstats_gc_sys_bytes gauge
+go_memstats_gc_sys_bytes 3.236592e+06
+# HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use, same as go_memstats_alloc_bytes. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 2.860808e+06
+# HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used. Equals to /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_idle_bytes gauge
+go_memstats_heap_idle_bytes 6.26688e+06
+# HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes
+# TYPE go_memstats_heap_inuse_bytes gauge
+go_memstats_heap_inuse_bytes 5.005312e+06
+# HELP go_memstats_heap_objects Number of currently allocated objects. Equals to /gc/heap/objects:objects.
+# TYPE go_memstats_heap_objects gauge
+go_memstats_heap_objects 12849
+# HELP go_memstats_heap_released_bytes Number of heap bytes released to OS. Equals to /memory/classes/heap/released:bytes.
+# TYPE go_memstats_heap_released_bytes gauge
+go_memstats_heap_released_bytes 5.332992e+06
+# HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes + /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_sys_bytes gauge
+go_memstats_heap_sys_bytes 1.1272192e+07
+# HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
+# TYPE go_memstats_last_gc_time_seconds gauge
+go_memstats_last_gc_time_seconds 1.792918051096607e+09
+# HELP go_memstats_mallocs_total Total number of heap objects allocated, both live and gc-ed. Semantically a counter version for go_memstats_heap_objects gauge. Equals to /gc/heap/allocs:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_mallocs_total counter
+go_memstats_mallocs_total 31181
+# HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures. Equals to /memory/classes/metadata/mcache/inuse:bytes.
+# TYPE go_memstats_mcache_inuse_bytes gauge
+go_memstats_mcache_inuse_bytes 73472
+# HELP go_memstats_mcache_sys_bytes Number of bytes used for mcache structures obtained from system. Equals to /memory/classes/metadata/mcache/inuse:bytes + /memory/classes/metadata/mcache/free:bytes.
+# TYPE go_memstats_mcache_sys_bytes gauge
+go_memstats_mcache_sys_bytes 80360
+# HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures. Equals to /memory/classes/metadata/mspan/inuse:bytes.
+# TYPE go_memstats_mspan_inuse_bytes gauge
+go_memstats_mspan_inuse_bytes 140800
+# HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system. Equals to /memory/classes/metadata/mspan/inuse:bytes + /memory/classes/metadata/mspan/free:bytes.
+# TYPE go_memstats_mspan_sys_bytes gauge
+go_memstats_mspan_sys_bytes 146880
+# HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place. Equals to /gc/heap/goal:bytes.
+# TYPE go_memstats_next_gc_bytes gauge
+go_memstats_next_gc_bytes 4.955194e+06
+# HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations. Equals to /memory/classes/other:bytes.
+# TYPE go_memstats_other_sys_bytes gauge
+go_memstats_other_sys_bytes 1.496327e+06
+# HELP go_memstats_stack_inuse_bytes Number of bytes obtained from system for stack allocator in non-CGO environments. Equals to /memory/classes/heap/stacks:bytes.
+# TYPE go_memstats_stack_inuse_bytes gauge
+go_memstats_stack_inuse_bytes 1.31072e+06
+# HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator. Equals to /memory/classes/heap/stacks:bytes + /memory/classes/os-stacks:bytes.
+# TYPE go_memstats_stack_sys_bytes gauge
+go_memstats_stack_sys_bytes 1.31072e+06
+# HELP go_memstats_sys_bytes Number of bytes obtained from system. Equals to /memory/classes/total:byte.
+# TYPE go_memstats_sys_bytes gauge
+go_memstats_sys_bytes 1.8987272e+07
+# HELP go_sched_gomaxprocs_threads The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously. Sourced from /sched/gomaxprocs:threads.
+# TYPE go_sched_gomaxprocs_threads gauge
+go_sched_gomaxprocs_threads 32
+# HELP go_threads Number of OS threads created.
+# TYPE go_threads gauge
+go_threads 18
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 0.02
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 524288
+# HELP process_network_receive_bytes_total Number of bytes received by the process over the network.
+# TYPE process_network_receive_bytes_total counter
+process_network_receive_bytes_total 7.1687706e+07
+# HELP process_network_transmit_bytes_total Number of bytes sent by the process over the network.
+# TYPE process_network_transmit_bytes_total counter
+process_network_transmit_bytes_total 4.8241271e+07
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 10
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 1.5245312e+07
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.79291804971e+09
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 1.302024192e+09
+# HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
+# TYPE process_virtual_memory_max_bytes gauge
+process_virtual_memory_max_bytes 1.8446744073709552e+19
+# HELP promhttp_metric_handler_requests_in_flight Current number of scrapes being served.
+# TYPE promhttp_metric_handler_requests_in_flight gauge
+promhttp_metric_handler_requests_in_flight 1
+# HELP promhttp_metric_handler_requests_total Total number of scrapes by HTTP status code.
+# TYPE promhttp_metric_handler_requests_total counter
+promhttp_metric_handler_requests_total{code="200"} 6
+promhttp_metric_handler_requests_total{code="500"} 0
+promhttp_metric_handler_requests_total{code="503"} 0
+# HELP swarm_cluster_nodes_by_state Number of Swarm nodes grouped by role, availability, and status.
+# TYPE swarm_cluster_nodes_by_state gauge
+swarm_cluster_nodes_by_state{availability="active",role="manager",status="ready"} 1
+swarm_cluster_nodes_by_state{availability="active",role="worker",status="down"} 1
+swarm_cluster_nodes_by_state{availability="active",role="worker",status="ready"} 1
+swarm_cluster_nodes_by_state{availability="drain",role="worker",status="ready"} 1
+# HELP swarm_container_state Container state info (exactly one state=1 per container). Includes exit_code for exited.
+# TYPE swarm_container_state gauge
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="created"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="dead"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="exited"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="health_starting"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="healthy"} 1
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="paused"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="removing"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="restarting"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="running"} 0
+swarm_container_state{container="shop-web-1",display_name="shop web",exit_code="",orchestrator="compose",project="shop",service="web",stack="",state="unhealthy"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="created"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="dead"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="exited"} 1
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="health_starting"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="healthy"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="paused"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="removing"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="restarting"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="running"} 0
+swarm_container_state{container="shop-worker-1",display_name="shop worker",exit_code="137",orchestrator="compose",project="shop",service="worker",stack="",state="unhealthy"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="created"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="dead"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="exited"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="health_starting"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="healthy"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="paused"} 1
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="removing"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="restarting"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="running"} 0
+swarm_container_state{container="sidecar",display_name="sidecar",exit_code="",orchestrator="none",project="",service="",stack="",state="unhealthy"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="created"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="dead"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="exited"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="health_starting"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="healthy"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="paused"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="removing"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="restarting"} 0
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="running"} 1
+swarm_container_state{container="toolbox",display_name="toolbox",exit_code="",orchestrator="none",project="",service="",stack="",state="unhealthy"} 0
+# HELP swarm_exporter_build_info Build information for this exporter.
+# TYPE swarm_exporter_build_info gauge
+swarm_exporter_build_info{commit="0000000",date="1970-01-01T00:00:00Z",version="golden"} 1
+# HELP swarm_exporter_events_dropped_total Total number of Swarm events dropped because they carried no actor ID.
+# TYPE swarm_exporter_events_dropped_total counter
+swarm_exporter_events_dropped_total 0
+# HELP swarm_exporter_events_reconnects_total Total number of event stream reconnects.
+# TYPE swarm_exporter_events_reconnects_total counter
+swarm_exporter_events_reconnects_total 0
+# HELP swarm_exporter_health Exporter health status: 1=healthy, 0=unhealthy.
+# TYPE swarm_exporter_health gauge
+swarm_exporter_health 1
+# HELP swarm_exporter_last_poll_success_timestamp_seconds Unix time of the latest successfully published replicas-state poll; 0 if none yet.
+# TYPE swarm_exporter_last_poll_success_timestamp_seconds gauge
+swarm_exporter_last_poll_success_timestamp_seconds 1.7929180505526917e+09
+# HELP swarm_exporter_last_resync_success_timestamp_seconds Unix time of the latest completed resync (service and node list); 0 if none yet.
+# TYPE swarm_exporter_last_resync_success_timestamp_seconds gauge
+swarm_exporter_last_resync_success_timestamp_seconds 1.7929180505520518e+09
+# HELP swarm_exporter_poll_duration_seconds Duration of replicas-state polling, in seconds.
+# TYPE swarm_exporter_poll_duration_seconds histogram
+swarm_exporter_poll_duration_seconds_bucket{le="0.005"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="0.01"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="0.025"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="0.05"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="0.1"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="0.25"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="0.5"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="1"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="2.5"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="5"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="10"} 1
+swarm_exporter_poll_duration_seconds_bucket{le="+Inf"} 1
+swarm_exporter_poll_duration_seconds_sum 0.000633741
+swarm_exporter_poll_duration_seconds_count 1
+# HELP swarm_exporter_poll_errors_total Total number of replicas-state polls that resulted in error.
+# TYPE swarm_exporter_poll_errors_total counter
+swarm_exporter_poll_errors_total 0
+# HELP swarm_exporter_poll_rejections_total Total number of per-service poll results not published because the service changed while its tasks were being listed.
+# TYPE swarm_exporter_poll_rejections_total counter
+swarm_exporter_poll_rejections_total 0
+# HELP swarm_exporter_polls_total Total number of replicas-state polls attempted.
+# TYPE swarm_exporter_polls_total counter
+swarm_exporter_polls_total 1
+# HELP swarm_exporter_resyncs_total Total number of resyncs (service and node list) by result: success or failure.
+# TYPE swarm_exporter_resyncs_total counter
+swarm_exporter_resyncs_total{result="failure"} 0
+swarm_exporter_resyncs_total{result="success"} 1
+# HELP swarm_service_at_desired Service is at desired replicas (1) or not (0). Jobs are at desired once finished: every task of the current iteration completed.
+# TYPE swarm_service_at_desired gauge
+swarm_service_at_desired{display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
+swarm_service_at_desired{display_name="db",service="db",service_mode="replicated",stack=""} 1
+swarm_service_at_desired{display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_at_desired{display_name="web api",service="api",service_mode="replicated",stack="web"} 0
+# HELP swarm_service_desired_replicas Number of desired replicas for a Swarm service (replicated: configured replicas; replicated-job: total completions; global and global-job: eligible nodes).
+# TYPE swarm_service_desired_replicas gauge
+swarm_service_desired_replicas{display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1
+swarm_service_desired_replicas{display_name="db",service="db",service_mode="replicated",stack=""} 2
+swarm_service_desired_replicas{display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_desired_replicas{display_name="web api",service="api",service_mode="replicated",stack="web"} 3
+# HELP swarm_service_running_replicas Current number of running tasks per Swarm service (current task per slot for replicated services and replicated jobs or node for global services and global jobs; jobs count only their current iteration).
+# TYPE swarm_service_running_replicas gauge
+swarm_service_running_replicas{display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
+swarm_service_running_replicas{display_name="db",service="db",service_mode="replicated",stack=""} 2
+swarm_service_running_replicas{display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_running_replicas{display_name="web api",service="api",service_mode="replicated",stack="web"} 2
+# HELP swarm_service_schedulable_replicas Number of replicas that can currently be scheduled given node availability and placement constraints (replicated: min(configured, eligible_nodes); global: eligible nodes; jobs and restart-condition none services: 0).
+# TYPE swarm_service_schedulable_replicas gauge
+swarm_service_schedulable_replicas{display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 0
+swarm_service_schedulable_replicas{display_name="db",service="db",service_mode="replicated",stack=""} 1
+swarm_service_schedulable_replicas{display_name="web agent",service="agent",service_mode="global",stack="web"} 1
+swarm_service_schedulable_replicas{display_name="web api",service="api",service_mode="replicated",stack="web"} 1
+# HELP swarm_service_update_completed_timestamp_seconds Unix timestamp (seconds) when the current/last service update completed (0 if unknown).
+# TYPE swarm_service_update_completed_timestamp_seconds gauge
+swarm_service_update_completed_timestamp_seconds{display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1.7896248e+09
+swarm_service_update_completed_timestamp_seconds{display_name="db",service="db",service_mode="replicated",stack=""} 1.7897184e+09
+swarm_service_update_completed_timestamp_seconds{display_name="web agent",service="agent",service_mode="global",stack="web"} 0
+swarm_service_update_completed_timestamp_seconds{display_name="web api",service="api",service_mode="replicated",stack="web"} 0
+# HELP swarm_service_update_started_timestamp_seconds Unix timestamp (seconds) when the current/last service update started (0 if unknown).
+# TYPE swarm_service_update_started_timestamp_seconds gauge
+swarm_service_update_started_timestamp_seconds{display_name="cron backup",service="backup",service_mode="replicated",stack="cron"} 1.7896242e+09
+swarm_service_update_started_timestamp_seconds{display_name="db",service="db",service_mode="replicated",stack=""} 1.7897181e+09
+swarm_service_update_started_timestamp_seconds{display_name="web agent",service="agent",service_mode="global",stack="web"} 1.7898192e+09
+swarm_service_update_started_timestamp_seconds{display_name="web api",service="api",service_mode="replicated",stack="web"} 0
+# HELP swarm_service_update_state_info Service update/rollback state indicator (1 for the current state, 0 otherwise).
+# TYPE swarm_service_update_state_info gauge
+swarm_service_update_state_info{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="completed"} 0
+swarm_service_update_state_info{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="paused"} 1
+swarm_service_update_state_info{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="rollback_completed"} 0
+swarm_service_update_state_info{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="rollback_started"} 0
+swarm_service_update_state_info{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="updating"} 0
+swarm_service_update_state_info{display_name="db",service="db",service_mode="replicated",stack="",state="completed"} 1
+swarm_service_update_state_info{display_name="db",service="db",service_mode="replicated",stack="",state="paused"} 0
+swarm_service_update_state_info{display_name="db",service="db",service_mode="replicated",stack="",state="rollback_completed"} 0
+swarm_service_update_state_info{display_name="db",service="db",service_mode="replicated",stack="",state="rollback_started"} 0
+swarm_service_update_state_info{display_name="db",service="db",service_mode="replicated",stack="",state="updating"} 0
+swarm_service_update_state_info{display_name="web agent",service="agent",service_mode="global",stack="web",state="completed"} 0
+swarm_service_update_state_info{display_name="web agent",service="agent",service_mode="global",stack="web",state="paused"} 0
+swarm_service_update_state_info{display_name="web agent",service="agent",service_mode="global",stack="web",state="rollback_completed"} 0
+swarm_service_update_state_info{display_name="web agent",service="agent",service_mode="global",stack="web",state="rollback_started"} 0
+swarm_service_update_state_info{display_name="web agent",service="agent",service_mode="global",stack="web",state="updating"} 1
+swarm_service_update_state_info{display_name="web api",service="api",service_mode="replicated",stack="web",state="completed"} 1
+swarm_service_update_state_info{display_name="web api",service="api",service_mode="replicated",stack="web",state="paused"} 0
+swarm_service_update_state_info{display_name="web api",service="api",service_mode="replicated",stack="web",state="rollback_completed"} 0
+swarm_service_update_state_info{display_name="web api",service="api",service_mode="replicated",stack="web",state="rollback_started"} 0
+swarm_service_update_state_info{display_name="web api",service="api",service_mode="replicated",stack="web",state="updating"} 0
+# HELP swarm_task_replicas_state Number of tasks per Swarm service segmented by task state (current task per slot for replicated services and replicated jobs or node for global services and global jobs; jobs count only their current iteration).
+# TYPE swarm_task_replicas_state gauge
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="accepted"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="allocated"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="assigned"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="complete"} 1
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="failed"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="new"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="orphaned"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="pending"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="preparing"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="ready"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="rejected"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="remove"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="running"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="shutdown"} 0
+swarm_task_replicas_state{display_name="cron backup",service="backup",service_mode="replicated",stack="cron",state="starting"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="accepted"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="allocated"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="assigned"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="complete"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="failed"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="new"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="orphaned"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="pending"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="preparing"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="ready"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="rejected"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="remove"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="running"} 2
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="shutdown"} 0
+swarm_task_replicas_state{display_name="db",service="db",service_mode="replicated",stack="",state="starting"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="accepted"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="allocated"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="assigned"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="complete"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="failed"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="new"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="orphaned"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="pending"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="preparing"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="ready"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="rejected"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="remove"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="running"} 1
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="shutdown"} 0
+swarm_task_replicas_state{display_name="web agent",service="agent",service_mode="global",stack="web",state="starting"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="accepted"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="allocated"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="assigned"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="complete"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="failed"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="new"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="orphaned"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="pending"} 1
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="preparing"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="ready"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="rejected"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="remove"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="running"} 2
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="shutdown"} 0
+swarm_task_replicas_state{display_name="web api",service="api",service_mode="replicated",stack="web",state="starting"} 0

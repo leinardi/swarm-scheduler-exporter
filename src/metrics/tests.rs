@@ -639,3 +639,16 @@ fn gauge_vec_by_label_map() {
     assert!(vec.delete_with(&labels(&[("a", "1"), ("b", "2")])));
     assert_eq!(vec.get_with(&labels(&[("a", "1"), ("b", "2")])), None);
 }
+
+/// The described names include a vec with no series, which a gather leaves out.
+#[test]
+fn described_names_include_families_without_series() {
+    let registry = Registry::new();
+    let empty = CounterVec::new(Desc::new("empty_total", "Empty.", Kind::Counter, &["a"]).unwrap());
+    registry.register(Arc::new(empty)).unwrap();
+    assert!(registry.gather().is_empty());
+    assert_eq!(
+        registry.described_names().into_iter().collect::<Vec<_>>(),
+        ["empty_total"]
+    );
+}

@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores
+Date: <masked>
+Connection: close
+Transfer-Encoding: chunked
+

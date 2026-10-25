@@ -195,6 +195,26 @@ fn health_waits_for_the_initial_resync() {
     );
 }
 
+/// Before the reconciler exists the check reads Go's unset `activeReconciler`: the initial resync
+/// is not completed, whatever the poll timestamp says; once bound, it reads that reconciler.
+#[test]
+fn unbound_health_waits_for_its_reconciler() {
+    let fixture = fixture(Duration::from_secs(10));
+    let health = Health::unbound(
+        Arc::clone(&fixture.timestamps),
+        Duration::from_secs(10),
+        Arc::clone(&fixture.clock) as Arc<dyn Clock>,
+    );
+    fixture.timestamps.mark_poll_ok(now());
+    assert_eq!(
+        health.snapshot(now()),
+        (false, "initial resync not completed")
+    );
+    let clone = health.clone();
+    health.bind(fixture.reconciler.clone());
+    assert_eq!(clone.snapshot(now()), (true, ""));
+}
+
 /// `swarm_exporter_build_info` carries the build at 1, with Go's names and HELP texts.
 #[test]
 fn build_info_is_one_with_the_build() {

@@ -22,7 +22,37 @@
  * SOFTWARE.
  */
 
-//! The swarm-scheduler-exporter binary. The Go implementation still ships; this entry point is
-//! wired up as the port lands.
+//! The swarm-scheduler-exporter binary. The Go implementation still ships; this entry point runs
+//! the Rust port.
 
-fn main() {}
+use std::io::Write as _;
+use std::process::ExitCode;
+use std::time::Duration;
+
+use swarm_scheduler_exporter::run::{run_with, shutdown_signal};
+
+/// Builds the runtime by hand, rather than with `#[tokio::main]`, so its shutdown is bounded by
+/// what is left of the shutdown budget: dropping a runtime waits for its blocking tasks, with no
+/// bound at all.
+fn main() -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "tokio runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let exit = runtime.block_on(run_with(
+        std::env::args_os(),
+        |key| std::env::var(key).ok(),
+        shutdown_signal(),
+    ));
+    let remaining = exit.deadline.map_or(Duration::ZERO, |deadline| {
+        deadline.saturating_duration_since(tokio::time::Instant::now())
+    });
+    runtime.shutdown_timeout(remaining);
+    ExitCode::from(u8::try_from(exit.code).unwrap_or(1))
+}

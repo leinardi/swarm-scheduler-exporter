@@ -45,6 +45,7 @@ pub mod text;
 #[cfg(test)]
 pub(crate) mod testing;
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -306,6 +307,19 @@ impl Registry {
         }
         collectors.push(collector);
         Ok(())
+    }
+
+    /// The name of every family a registered collector describes, whether it has series or not:
+    /// what Go's tests read from `Describe`, since a vec with no children never appears in a
+    /// gather.
+    #[must_use]
+    pub fn described_names(&self) -> BTreeSet<String> {
+        let collectors: Vec<Arc<dyn Collector>> = self.lock().clone();
+        collectors
+            .iter()
+            .flat_map(|collector| collector.descs())
+            .map(|desc| desc.name().to_owned())
+            .collect()
     }
 
     /// Collects every family and normalises them: label pairs by name, series by label values

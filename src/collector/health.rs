@@ -26,8 +26,8 @@
 //! rather than marked by the poller, so it turns unhealthy when polls stop, even if the poller
 //! is stuck; the success timestamps it reads; and `swarm_exporter_build_info`.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -106,7 +106,9 @@ impl Timestamps {
 /// The health check.
 #[derive(Clone)]
 pub struct Health {
-    reconciler: ReconcilerHandle,
+    // Go's activeReconciler: unset until the reconciler exists, which reads as "initial resync
+    // not completed".
+    reconciler: Arc<OnceLock<ReconcilerHandle>>,
     timestamps: Arc<Timestamps>,
     poll_delay: Duration,
     clock: Arc<dyn Clock>,
@@ -133,12 +135,32 @@ impl Health {
         poll_delay: Duration,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        let health = Self::unbound(timestamps, poll_delay, clock);
+        health.bind(reconciler);
+        health
+    }
+
+    /// The check before the reconciler exists: unhealthy, for the initial resync, until
+    /// [`Health::bind`] names the reconciler. The metrics are registered before the Docker client
+    /// and the reconciler are created, as in Go.
+    #[must_use]
+    pub fn unbound(
+        timestamps: Arc<Timestamps>,
+        poll_delay: Duration,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
-            reconciler,
+            reconciler: Arc::new(OnceLock::new()),
             timestamps,
             poll_delay,
             clock,
         }
+    }
+
+    /// Names the reconciler whose resyncs the check reads, for this check and every clone of it;
+    /// a second call is ignored, as there is one reconciler per process.
+    pub fn bind(&self, reconciler: ReconcilerHandle) {
+        let _ = self.reconciler.set(reconciler);
     }
 
     /// Whether the exporter is healthy now, and why not.
@@ -155,7 +177,10 @@ impl Health {
     ///   that keeps failing leaves the caches behind Docker while polls still succeed.
     #[must_use]
     pub fn snapshot(&self, now: Timestamp) -> (bool, &'static str) {
-        let (requested, completed, outstanding_since) = self.reconciler.resync_state();
+        let Some(reconciler) = self.reconciler.get() else {
+            return (false, REASON_INITIAL_RESYNC);
+        };
+        let (requested, completed, outstanding_since) = reconciler.resync_state();
         if completed == 0 {
             return (false, REASON_INITIAL_RESYNC);
         }
