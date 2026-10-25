@@ -23,11 +23,12 @@
 # SOFTWARE.
 #
 
-# gofmt-on-edit.sh — Claude Code PostToolUse hook (configured in .claude/settings.json).
-# Auto-formats Go files immediately after an Edit/Write tool call so formatting
+# rustfmt-on-edit.sh — Claude Code PostToolUse hook (configured in .claude/settings.json).
+# Auto-formats Rust files immediately after an Edit/Write tool call so formatting
 # drift is fixed at edit time instead of failing later at pre-commit.
 #
 # Input: hook payload JSON on stdin; the edited path is at .tool_input.file_path.
+# rustfmt finds the repository's rustfmt.toml (edition, max_width) from the file's directory.
 # Always exits 0 (a formatting fix must never block the agent).
 
 set -euo pipefail
@@ -35,9 +36,9 @@ set -euo pipefail
 file="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("file_path",""))' 2>/dev/null || true)"
 
 case "$file" in
-  *.go)
-    if [[ -f "$file" ]] && command -v gofmt >/dev/null 2>&1; then
-      gofmt -w "$file" || true
+  *.rs)
+    if [[ -f "$file" ]] && command -v rustfmt >/dev/null 2>&1; then
+      rustfmt --quiet "$file" || true
     fi
     ;;
 esac

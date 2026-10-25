@@ -91,7 +91,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
 - `scripts/` — the licence-header check, the suppression ratchet, the make-common bootstrap and the
-  Claude Code `gofmt` hook (`scripts/hooks/gofmt-on-edit.sh`, wired in `.claude/settings.json`).
+  Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`).
 
 ### Generated or vendored: never hand-edit
 
@@ -144,7 +144,7 @@ The ones to keep in mind while writing code:
 - A new `#[expect]`, `# shellcheck disable=` or `# hadolint ignore=` explains why the fix does not
   apply here, not which lint fired.
 - Where a test or a module replaces Go code, its provenance (`/// Go: TestX`) is a doc comment;
-  sources name no `.go` file, and the reasoning behind a port lives in the commit bodies.
+  sources name no Go source file, and the reasoning behind a port lives in the commit bodies.
 
 ## Licence headers and suppressions
 
@@ -181,7 +181,7 @@ Run before considering an edit done. `make check` applies to every row.
 Skills live in `.agents/skills/` (symlinked as `.claude/skills`). Load them before the work, not
 after review:
 
-- `go-style-guide` — before any `.go` edit.
+- `rust-style-guide` — before any `.rs` edit.
 - `adversarial-review` — for any review request ("review my diff", "is this ready to merge").
 - `go-to-rust-port` — before planning, implementing or reviewing any part of the port to Rust.
   A new learning goes into this repository copy (never `~/.claude`), in the same commit as the

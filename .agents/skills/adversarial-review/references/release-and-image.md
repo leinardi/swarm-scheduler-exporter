@@ -9,10 +9,11 @@ or `docs/release.md`.
 `deployments/docker/Dockerfile`:
 
 - Every base is pinned by tag, not by digest, since dhi.io republishes its tags with security
-  fixes: the build stage (`dhi.io/golang:…-dev`) and the runtime (`dhi.io/static:…`). The
+  fixes: the build stage (`dhi.io/rust:…-debian13-dev`) and the runtime (`dhi.io/static:…`). The
   `# syntax=` frontend line is pinned by tag and index digest. A base on `latest` or with no
-  tag, a frontend without a digest, or a build-stage Go version that differs from the `go`
-  directive in `go.mod`, is a finding.
+  tag, a frontend without a digest, a build-stage Rust release that differs from
+  `rust-toolchain.toml` and the workflows' toolchain steps (patch included), or a zig,
+  cargo-zigbuild or `rust-std` download without its sha256 check, is a finding.
 - The runtime stage sets an explicit `USER 65532:65532`, never root, so the uid is pinned in the
   Dockerfile rather than inherited from the base image's default
   (`docker inspect --format '{{.Config.User}}'` on the built image prints `65532:65532`).
