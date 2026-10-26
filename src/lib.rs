@@ -22,8 +22,7 @@
  * SOFTWARE.
  */
 
-//! swarm-scheduler-exporter: a Prometheus exporter for the Docker Swarm scheduler. The Go
-//! implementation still ships; the Rust modules land here as the port proceeds.
+//! swarm-scheduler-exporter: a Prometheus exporter for the Docker Swarm scheduler.
 
 pub mod cli;
 pub mod clock;

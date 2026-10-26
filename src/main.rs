@@ -22,8 +22,8 @@
  * SOFTWARE.
  */
 
-//! The swarm-scheduler-exporter binary. The Go implementation still ships; this entry point runs
-//! the Rust port.
+//! The swarm-scheduler-exporter binary: runs the exporter on a runtime of its own and returns
+//! its exit code.
 
 use std::io::Write as _;
 use std::process::ExitCode;
