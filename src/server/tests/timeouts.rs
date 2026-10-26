@@ -134,6 +134,81 @@ async fn the_keep_alive_header_timer_starts_at_the_first_byte() {
     dripping.abort();
 }
 
+/// Go: a request and the start of the next one in one write; the second head is due 5s after the
+/// first response, not 5s after its next bytes: the end at 5.00s although the rest arrives at 6s.
+/// (Go writes a 400 first, its partial request line being malformed; hyper does not, Q13.)
+#[tokio::test(start_paused = true)]
+async fn a_pipelined_partial_head_is_due_5s_after_the_response() {
+    let start = Instant::now();
+    let (mut reader, mut writer) = tokio::io::split(connect(healthy_app()));
+    writer
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nGET /hea")
+        .await
+        .unwrap();
+    let finishing = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        let _ = writer
+            .write_all(b"lthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await;
+    });
+    let mut response = Vec::new();
+    let _ = reader.read_to_end(&mut response).await;
+    let text = String::from_utf8_lossy(&response);
+    assert_eq!(text.matches("HTTP/1.1 ").count(), 1, "{text}");
+    assert!(text.starts_with(OK), "{text}");
+    assert_eq!(start.elapsed().as_millis(), 5000);
+    finishing.abort();
+}
+
+/// Go: two whole requests in one write are both answered at once, then the connection idles
+/// 60s: the end at 60.01s.
+#[tokio::test(start_paused = true)]
+async fn two_pipelined_requests_then_an_idle_keep_alive() {
+    let start = Instant::now();
+    let mut client = connect(healthy_app());
+    client
+        .write_all(
+            b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nGET /healthz HTTP/1.1\r\nHost: x\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    let _ = client.read_to_end(&mut response).await;
+    assert_eq!(String::from_utf8_lossy(&response).matches(OK).count(), 2);
+    assert_eq!(start.elapsed().as_millis(), 60_000);
+}
+
+/// Go: a body sent with its request is that request's, not the start of another: the
+/// connection idles 60s after the answer (60.01s), and a chunked body followed by a partial head
+/// is cut 5s after the answer (5.00s).
+#[tokio::test(start_paused = true)]
+async fn a_request_body_does_not_start_the_next_request() {
+    let start = Instant::now();
+    let mut client = connect(healthy_app());
+    client
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nabcd")
+        .await
+        .unwrap();
+    assert_eq!(
+        record(&mut client, start).await,
+        [Seen::Read(0, OK.to_owned()), Seen::End(60_000)]
+    );
+
+    let start = Instant::now();
+    let mut client = connect(healthy_app());
+    client
+        .write_all(
+            b"POST /healthz HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n\
+              2\r\nab\r\n0\r\n\r\nGET /hea",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        record(&mut client, start).await,
+        [Seen::Read(0, OK.to_owned()), Seen::End(5000)]
+    );
+}
+
 /// Go: a 12s handler is answered at 12s although the 10s read deadline passed, which only
 /// cancels the request's context; the connection then idles 60s: the end at 72s.
 #[tokio::test(start_paused = true)]

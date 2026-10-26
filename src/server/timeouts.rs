@@ -31,7 +31,10 @@
 //! - the write deadline is `now + WriteTimeout`, set once the head is read, and stays until the
 //!   next request's head is read;
 //! - after a response the read deadline is `now + IdleTimeout`, waiting for the next request's
-//!   first bytes, whose arrival is that request's `t0`.
+//!   first bytes, whose arrival is that request's `t0`; when they were already read with the
+//!   previous request (pipelining), `t0` is the end of the response, and the idle deadline is
+//!   skipped. hyper keeps such bytes in its own buffer, so [`Framer`] follows the request
+//!   framing to know they are there.
 //!
 //! hyper's own `header_read_timeout` cannot express this: hyper 1.12 arms it as soon as a
 //! connection goes idle, so it also closes an idle keep-alive connection after the header
@@ -46,6 +49,8 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::time::{Instant, Sleep};
+
+use super::framing::Framer;
 
 /// The four `http.Server` timeouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +97,23 @@ struct Inner {
     // keeping the waker would hang the connection for good: hyper would never poll the read
     // side again, and the idle deadline would never be armed.
     stalled_read: Option<Waker>,
+    // Where the requests read so far start and end, and how many responses are done: more
+    // requests started than answered means the next one is already (partly) read.
+    framer: Framer,
+    responses_done: u64,
+}
+
+impl Inner {
+    /// The next request's head is due within the header timeout from `now`.
+    fn start_header(&mut self, timeouts: Timeouts, now: Instant) {
+        self.phase = Phase::Header;
+        self.started = now;
+        self.read_deadline = now + timeouts.read_header;
+    }
+
+    fn next_request_read(&self) -> bool {
+        self.framer.started() > self.responses_done
+    }
 }
 
 /// One connection's deadlines, shared by its I/O wrapper, its service and its response bodies.
@@ -114,6 +136,8 @@ impl ConnState {
                 read_deadline: now + timeouts.read_header,
                 write_deadline: None,
                 stalled_read: None,
+                framer: Framer::new(),
+                responses_done: 0,
             })),
         }
     }
@@ -136,8 +160,13 @@ impl ConnState {
         let now = Instant::now();
         let waker = {
             let mut inner = self.lock();
-            inner.phase = Phase::Idle;
-            inner.read_deadline = now + self.timeouts.idle;
+            inner.responses_done += 1;
+            if inner.next_request_read() {
+                inner.start_header(self.timeouts, now);
+            } else {
+                inner.phase = Phase::Idle;
+                inner.read_deadline = now + self.timeouts.idle;
+            }
             inner.stalled_read.take()
         };
         if let Some(waker) = waker {
@@ -145,13 +174,14 @@ impl ConnState {
         }
     }
 
-    fn on_bytes_read(&self) {
+    /// The connection read `bytes`. On an idle connection, the first bytes of a new request
+    /// start its header timer; the rest of a body the handler did not read does not.
+    fn on_bytes_read(&self, bytes: &[u8]) {
         let now = Instant::now();
         let mut inner = self.lock();
-        if inner.phase == Phase::Idle {
-            inner.phase = Phase::Header;
-            inner.started = now;
-            inner.read_deadline = now + self.timeouts.read_header;
+        inner.framer.feed(bytes);
+        if inner.phase == Phase::Idle && inner.next_request_read() {
+            inner.start_header(self.timeouts, now);
         }
     }
 
@@ -228,8 +258,9 @@ impl<T: AsyncRead + Unpin> AsyncRead for TimedIo<T> {
         let before = buf.filled().len();
         match Pin::new(&mut this.io).poll_read(context, buf) {
             Poll::Ready(Ok(())) => {
-                if buf.filled().len() > before {
-                    this.state.on_bytes_read();
+                let read = &buf.filled()[before..];
+                if !read.is_empty() {
+                    this.state.on_bytes_read(read);
                 }
                 Poll::Ready(Ok(()))
             }

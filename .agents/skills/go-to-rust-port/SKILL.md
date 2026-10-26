@@ -149,10 +149,13 @@ Prometheus exporter).
   `auto_date_header(false)`, all three by hand, `is_end_stream() == false`. Go frames bodies up to
   2048 bytes with `Content-Length`, larger ones chunked. hyper's `header_read_timeout` also
   closes idle keep-alives (and panics without a timer) → enforce Go's four deadlines in an I/O
-  wrapper that keeps and wakes `cx.waker()`. `TcpListener::bind(":8888")` is a DNS error and its
-  backlog 128 → socket2, `[::]` dual stack, `listen(65535)`, `SO_REUSEADDR`. A boxed-error body
-  in a spawned `serve_connection` fails "not general enough" → a concrete error type. (37 Go
-  captures; paused-clock tests)
+  wrapper that keeps and wakes `cx.waker()`. hyper reads ahead, so a pipelined request's first
+  bytes sit in its buffer and the wrapper would arm the 60s idle deadline where Go (`bufr.Peek`)
+  arms the 5s header one → track the request framing (head, `Content-Length`, chunked) in the
+  wrapper and count started against answered requests. `TcpListener::bind(":8888")` is a DNS
+  error and its backlog 128 → socket2, `[::]` dual stack, `listen(65535)`, `SO_REUSEADDR`. A
+  boxed-error body in a spawned `serve_connection` fails "not general enough" → a concrete error
+  type. (37 Go captures; paused-clock tests; a pipelining probe against Go 1.26)
 - **Prometheus (client_golang, expfmt):** no crate writes Go's text (float formats, `charset`,
   `escaping=`, HELP escaping, sort order) → an in-tree registry and encoder porting `writeFloat`
   and `Gather`'s normalisation. promhttp negotiates `escaping=` over all four formats, protobuf

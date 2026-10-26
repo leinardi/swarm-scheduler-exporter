@@ -38,6 +38,7 @@
 //! - The listener is bound as Go's `net.Listen` binds it, and the drain on shutdown stops at a
 //!   deadline it is handed (Q8).
 
+mod framing;
 pub mod gopath;
 pub mod timeouts;
 
