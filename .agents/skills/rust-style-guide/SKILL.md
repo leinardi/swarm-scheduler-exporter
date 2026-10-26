@@ -104,7 +104,7 @@ rustfmt does not wrap comments: keep them at 100 columns by hand.
   year of the file's first commit), then the module comment.
 - A comment says **why the code is the way it is**; history and "changed X to Y" belong in the
   commit body.
-- Where the Rust deliberately differs from 1.x (Q1–Q13 in the README's migration section), the
+- Where the Rust deliberately differs from 1.x (Q1–Q14 in the README's migration section), the
   module comment names the difference; where it ports a Go behaviour on purpose
   (`src/go_compat`), it says which and why the contract depends on it. Sources never name a Go
   file; a ported test's provenance is its `Go:` doc comment (§12).

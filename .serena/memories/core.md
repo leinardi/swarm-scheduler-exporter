@@ -7,7 +7,7 @@ akerouanton/swarm-tasks-exporter; a port of its Go 1.x implementation, metric fo
 
 AGENTS.md (repo root) is the authoritative contract: layout, commands, invariants, validation
 matrix, commit types. Read it before any change; memories below only add what it does not say.
-The README "Migrating from 1.x" section lists the only intended differences from Go (Q1-Q13).
+The README "Migrating from 1.x" section lists the only intended differences from Go (Q1-Q14).
 
 ## Source map
 
