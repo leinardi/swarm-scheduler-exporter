@@ -230,14 +230,6 @@ impl MetadataCache {
         Self::default()
     }
 
-    /// Stores `metadata`, keeping the desired replicas of an entry already there.
-    pub fn set(&mut self, service_id: &str, mut metadata: ServiceMetadata) {
-        if let Some(previous) = self.entries.get(service_id) {
-            metadata.desired_replicas = previous.desired_replicas;
-        }
-        self.entries.insert(service_id.to_owned(), metadata);
-    }
-
     /// Stores `metadata` as it is, desired replicas included.
     pub fn replace(&mut self, service_id: &str, metadata: ServiceMetadata) {
         self.entries.insert(service_id.to_owned(), metadata);

@@ -897,7 +897,7 @@ async fn a_failed_build_leaves_the_poll_timestamp() {
         &CustomLabels::default(),
     );
     metadata.custom_labels = BTreeMap::from([("team".to_owned(), "a".to_owned())]);
-    fixture.reconciler.metadata.set("svc", metadata);
+    fixture.reconciler.metadata.replace("svc", metadata);
     let (running, previous) = run_with_an_old_poll(&mut fixture);
     let error = poll_and_publish_replicas_state(
         &FakeDocker::default(),

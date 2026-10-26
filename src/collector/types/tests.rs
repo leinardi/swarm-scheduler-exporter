@@ -273,23 +273,6 @@ fn build_metadata_custom_labels() {
     assert_eq!(custom.sanitized_names(), ["team", "tier"]);
 }
 
-/// Go: `TestSetServiceMetadata_PreservesDesiredReplicas`
-#[test]
-fn set_service_metadata_preserves_desired_replicas() {
-    let mut cache = MetadataCache::new();
-    let metadata = || ServiceMetadata {
-        stack: "stack".to_owned(),
-        service: "svc".to_owned(),
-        service_mode: SERVICE_MODE_REPLICATED.to_owned(),
-        ..ServiceMetadata::default()
-    };
-    cache.set("svc1", metadata());
-    cache.set_desired_replicas("svc1", 5.0);
-    // A service update stores fresh metadata; the desired replicas survive it.
-    cache.set("svc1", metadata());
-    assert!(cache.get("svc1").unwrap().desired_replicas.eq(&5.0));
-}
-
 #[test]
 fn metadata_cache_replaces_deletes_and_copies() {
     let mut cache = MetadataCache::new();
@@ -298,8 +281,9 @@ fn metadata_cache_replaces_deletes_and_copies() {
         cache.get("unknown").is_none(),
         "an unknown service is left alone"
     );
-    cache.set("svc1", ServiceMetadata::default());
+    cache.replace("svc1", ServiceMetadata::default());
     cache.set_desired_replicas("svc1", 5.0);
+    assert!(cache.get("svc1").unwrap().desired_replicas.eq(&5.0));
     cache.replace(
         "svc1",
         ServiceMetadata {
