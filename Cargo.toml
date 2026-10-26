@@ -1,0 +1,137 @@
+[workspace]
+# Listed explicitly, never as a glob: meta/tests/workspace_lints.rs checks each member's manifest.
+members = [".", "meta", "testenv"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+authors = ["Roberto Leinardi"]
+repository = "https://github.com/leinardi/swarm-scheduler-exporter"
+
+# The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
+# not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
+# workspace-wide.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Only `#[expect(lint, reason = "...")]` may silence a lint: it fails once the lint stops firing,
+# and the reason is mandatory. Every one is counted by scripts/check-suppressions.sh.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+# No panics outside tests; clippy.toml allows both in tests.
+unwrap_used = "deny"
+expect_used = "deny"
+# Output goes through the logger, or an explicit writeln! to a handle.
+print_stdout = "deny"
+print_stderr = "deny"
+# A match on an enum names every variant, so a new variant is a compile-time decision everywhere.
+wildcard_enum_match_arm = "deny"
+# Descriptive names; clippy's default allow-list applies.
+min_ident_chars = "deny"
+# The wall-clock ban in clippy.toml is only enforced if the lint is.
+disallowed_methods = "deny"
+
+# Dependency conventions, for the crates the port adds (S1-S8 spikes):
+# - rustls and tokio-rustls with `default-features = false` plus the `ring` feature, which keeps
+#   aws-lc-sys (C, hard to cross-build for musl) out of the graph;
+# - hyper and hyper-util with only `http1`, `client` or `server`, and the tokio features;
+# - no tracing or log bridge: the logger is in-tree, and hyper, hyper-util, tokio and rustls print
+#   nothing without a subscriber.
+
+[package]
+name = "swarm-scheduler-exporter"
+version = "0.0.0"
+description = "Prometheus exporter for the Docker Swarm scheduler"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
+# in-tree, the way Go does (src/go_compat), so none of jiff's tzdb or system features is on.
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+# The flags (Q3, Q4). No color: help and errors are plain text, as Go's were.
+clap = { version = "4.6.7", default-features = false, features = [
+    "std",
+    "derive",
+    "help",
+    "usage",
+    "error-context",
+    "suggestions",
+] }
+# The timer (TokioClock), the sockets, tasks and lock of the Docker client, select! for the
+# cancellable awaits of the reconciler, the multi-threaded runtime main builds (its worker count
+# from available_parallelism, Q12) and the SIGINT and SIGTERM watch.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "time",
+    "net",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "io-util",
+    "macros",
+] }
+# CancellationToken, Go's context cancellation for the long-lived tasks.
+tokio-util = { version = "0.7.20", default-features = false }
+# gzip for /metrics, as promhttp offers it, and the Docker client's transparent gunzip on TCP;
+# the pure-Rust backend, so no C zlib.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+# The Docker client (S1): HTTP/1 only, on connections it dials and pools itself. The metrics and
+# health endpoints (S3): hyper's HTTP/1 server with hyper-util's graceful drain. The healthcheck
+# (S3): hyper-util's legacy client, which reads no proxy variable and follows no redirect.
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1.21", default-features = false, features = [
+    "tokio",
+    "http1",
+    "server",
+    "server-graceful",
+    "client-legacy",
+] }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+# TLS to the daemon (Q5): ring, TLS 1.2 and 1.3, the system roots plus ca.pem, and PEM parsing
+# through rustls-pki-types rather than rustls-pemfile.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
+rustls-native-certs = "0.8.5"
+# Go's TCP keep-alive settings on the Docker connection.
+socket2 = { version = "0.6.5", features = ["all"] }
+# The daemon's JSON (error bodies here; the API types in plan phase 8).
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+# The paused clock (start_paused) needs the test runtime.
+tokio = { version = "1.54.1", default-features = false, features = [
+    "time",
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "test-util",
+    "net",
+    "io-util",
+    "sync",
+] }
+# Test certificates for the Docker TLS tests, made at run time as the Go tests make theirs.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+# unwind, not abort (awtrix-controller aborts): the reconciler recovers a panicking step with
+# catch_unwind, logs it and requests a resync, the way the Go code recovers it with recover().
+# Under panic = "abort" there would be nothing to catch.
+panic = "unwind"

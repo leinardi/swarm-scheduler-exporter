@@ -29,7 +29,7 @@
 # Leinardi's copyright, so a header copied from another project is caught as surely as a missing
 # one.
 #
-# Governed: Go and shell sources, Dockerfiles, the Makefile and the repo-local .mk snippets.
+# Governed: Rust and shell sources, Dockerfiles, the Makefile and the repo-local .mk snippets.
 # Exempt: the make-common files the bootstrap fetches (upstream, named in the Makefile's
 # MK_COMMON_FILES, and scripts/bootstrap-mk-common.sh), which carry make-common's own header under
 # its licence. YAML, JSON, Markdown and the testdata fixtures are never governed.
@@ -52,11 +52,11 @@ fi
 
 cd "$(git rev-parse --show-toplevel)"
 
-# How many leading lines the header must sit in: a //go:build line, a shebang or a Dockerfile
-# syntax directive, and the blank or comment line after it, may precede it.
+# How many leading lines the header must sit in: a shebang or a Dockerfile syntax directive, and
+# the blank or comment line after it, may precede it.
 HEADER_WINDOW=30
 
-# Substrings rather than whole lines: Go files carry the notice in a /* */ block (" * "), the
+# Substrings rather than whole lines: Rust files carry the notice in a /* */ block (" * "), the
 # others in # comments.
 REQUIRED_LINES=(
 	"MIT License"
@@ -86,7 +86,7 @@ is_governed() {
 	*/testdata/*)
 		return 1
 		;;
-	*.go | *.sh | .mk/*.mk)
+	*.rs | *.sh | .mk/*.mk)
 		return 0
 		;;
 	esac
@@ -160,7 +160,7 @@ done < <(git ls-files -z)
 if [[ ${#missing[@]} -gt 0 ]]; then
 	echo "These files lack the MIT header:" >&2
 	printf '  %s\n' "${missing[@]}" >&2
-	echo "Copy the header from any Go or shell file (IntelliJ: the MIT copyright profile), with" >&2
+	echo "Copy the header from any Rust or shell file (IntelliJ: the MIT copyright profile), with" >&2
 	echo "the year of the file's first commit." >&2
 	exit 1
 fi

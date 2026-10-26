@@ -45,7 +45,8 @@ assignees: []
 
 * Project version / commit SHA: `?`
 * Operating system and version: `?`
-* Runtime and version (e.g., Go): `?`
+* Docker Engine version (`docker version`): `?`
+* Platform (CPU architecture; image or binary): `?`
 * Any relevant tooling / dependencies and versions: `?`
 
 ---

@@ -1,0 +1,54 @@
+level=INFO plain s=plain
+level=INFO with space s="with space"
+level=INFO say "hi" s="say \"hi\""
+level=INFO k=v s="k=v"
+level=INFO C:\\path\\x s="C:\\path\\x"
+level=INFO line1\nline2 s="line1\nline2"
+level=INFO a\tb s="a\tb"
+level=INFO a\rb s="a\rb"
+level=INFO a\x01b s="a\x01b"
+level=INFO a\x7fb s="a\x7fb"
+level=INFO a\x08b\x0cc s="a\bb\fc"
+level=INFO a\xffb s="a\xffb"
+level=INFO \xff s="\xff"
+level=INFO ok 🚀 s="ok 🚀"
+level=INFO 🚀 s=🚀
+level=INFO s=""
+level=INFO html <a>&amp; s="html <a>&amp;"
+level=INFO nbsp\u00a0x s="nbsp\u00a0x"
+level=INFO zw\u200bx s="zw\u200bx"
+level=INFO ls\u2028x s="ls\u2028x"
+level=INFO é s=é
+level=INFO repl�x s=repl�x
+level=INFO bidi\u202ex s="bidi\u202ex"
+level=INFO c1\u0085x s="c1\u0085x"
+level=INFO {brace} s="{brace}"
+level=INFO -dash s=-dash
+level=INFO 日本語 s=日本語
+level=INFO 😀\x00 s="😀\x00"
+level=INFO tab\tand space s="tab\tand space"
+level=INFO trailing  s="trailing "
+level=INFO  leading s=" leading"
+level=INFO keys "with space"=v ""=emptykey "a=b"=v "q\"k"=v dot.key=v "k\nnl"=v
+level=INFO ints zero=0 neg=-42 min=-9223372036854775808 max=9223372036854775807 umax=18446744073709551615 u=7
+level=INFO floats half=0.5 big=1e+21 e20=1e+20 small=1e-07 e6=1e-06 mil=1.23456789e+08 negzero=-0 sum=0.3 rsum=0.30000000000000004 stamp=1.7297712345e+09 one=1 maxf=1.7976931348623157e+308 sub=5e-324 e21m=1.2345678901234568e+20
+level=INFO nan nan=NaN after=x
+level=INFO inf pinf=+Inf ninf=-Inf
+level=INFO bools t=true f=false
+level=INFO durations zero=0s ms=500ms s30=30s m1=1m0s hms=1h2m3.5s ns=1ns us=1.5µs neg=-2s min=-2562047h47m16.854775808s max=2562047h47m16.854775807s h100=100h0m0s frac=1.23456789s ms1=1.000001ms
+level=INFO times cet=2026-10-25T14:03:04.567891234+01:00 utc=2026-01-02T03:04:05Z frac=2026-01-02T03:04:05.12Z neg=1999-12-31T23:59:59.999999999-05:30 zero=0
+level=INFO slices and errors list="[a b c]" empty=[] one=[x] ctl="[a\bb\f \x01\x7f \u2028\u2029 nl\n ]" quoted="[\"q\" <&>]" err="dial tcp: \"x\" refused" wrapped="service list: boom\nline2" nilerr=<nil>
+level=INFO invalid utf8 slice bad="[\xff]"
+level=INFO groups req={req.method=GET req.n=2} a={a.b={a.b.c=1}} "sp ace"={"sp ace.k"="v w"}
+level=DEBUG debug
+level=INFO info
+level=WARN warn
+level=ERROR error
+level=ERROR info+1
+level=DEBUG debug-1
+level=ERROR error+4
+level=ERROR warn-1
+level=INFO with g.component=reconciler g.x=1 g.y=2
+level=INFO with empty group eg.c=d
+level=INFO nested with groups g1.g2.h={g1.g2.h.i=3}
+level=INFO k=1

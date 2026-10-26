@@ -1,0 +1,13 @@
+### get-metrics-dotdot-end  (port 18080)
+### request: GET /metrics/.. HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 307 Temporary Redirect
+Content-Type: text/html; charset=utf-8
+Location: /
+Date: Sun, 25 Oct 2026 08:44:41 GMT
+Content-Length: 37
+Connection: close
+
+<a href="/">Temporary Redirect</a>.
+
+[end: <nil>]
+

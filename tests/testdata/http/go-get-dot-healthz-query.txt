@@ -1,0 +1,13 @@
+### get-dot-healthz-query  (port 18080)
+### request: GET /./healthz?x=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 307 Temporary Redirect
+Content-Type: text/html; charset=utf-8
+Location: /healthz?x=1
+Date: Sun, 25 Oct 2026 08:44:07 GMT
+Content-Length: 48
+Connection: close
+
+<a href="/healthz?x=1">Temporary Redirect</a>.
+
+[end: <nil>]
+

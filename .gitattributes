@@ -1,0 +1,6 @@
+# Byte-for-byte HTTP wire captures: their CRLF line ends are the bytes under test, so no
+# line-end conversion (a core.autocrlf of input or true would rewrite them).
+tests/testdata/http/*.txt -text
+# The Go /metrics captures: header files with CRLF line ends, bodies and their raw gzip and
+# protobuf forms, all byte for byte.
+tests/testdata/exposition/go-v1.3.2-* -text

@@ -43,7 +43,7 @@ still worth reporting here if the weekly scheduled scan has not caught it.
 - **Supply chain.** Every GitHub Action is pinned to a commit SHA and every image the workflows and
   the Dockerfile use to an index digest. Each release image is scanned for `HIGH` and `CRITICAL`
   vulnerabilities before its version is tagged, and the latest release is scanned again every week,
-  together with the Go dependencies. The release process is described in
+  together with the Rust dependencies (cargo-deny). The release process is described in
   [docs/release.md](docs/release.md).
 
 ## Verifying a release

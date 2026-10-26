@@ -43,30 +43,40 @@ updates:
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
     ignore:
-      # The build stage's Go must match the go directive in go.mod. Take patch
-      # releases of the current line only; move to a new minor by bumping go.mod
-      # and this image together, by hand.
-      - dependency-name: "golang"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # The build stage's Rust is one line with rust-toolchain.toml, and its
+      # patch release is the one the RUST_VERSION argument and the musl
+      # standard libraries' sha256s are written for: a tag bump alone would
+      # break the build. Bump the image, RUST_VERSION and the checksums
+      # together, by hand.
+      - dependency-name: "rust"
     groups:
       docker-base-images:
         patterns:
           - "*"
 
-  - package-ecosystem: "gomod"
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "monthly"
     # fix, not chore: the release version is derived from commit types, so a
-    # Go dependency bump (security fixes included) produces a patch release.
-    # The other ecosystems stay chore(deps) and bump nothing. That includes the
-    # docker one, whose base-image bumps do change the shipped image: when one
-    # carries a security fix that should ship, release with an explicit version.
+    # crate bump (security fixes included) produces a patch release. The other
+    # ecosystems stay chore(deps) and bump nothing. That includes the docker
+    # one, whose base-image bumps do change the shipped image: when one carries
+    # a security fix that should ship, release with an explicit version.
+    # Dev-dependencies (test clients) never reach the binary, so their bumps
+    # are chore(deps) and in a group of their own: one grouped PR carries a
+    # single prefix, so mixing them would release a binary that did not change.
     commit-message:
       prefix: "fix(deps)"
+      prefix-development: "chore(deps)"
     open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
     groups:
-      go-modules:
+      cargo-crates:
+        dependency-type: "production"
+        patterns:
+          - "*"
+      cargo-dev-crates:
+        dependency-type: "development"
         patterns:
           - "*"

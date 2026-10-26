@@ -1,0 +1,11 @@
+### get-encoded-healthz  (port 18080)
+### request: GET /%68ealthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+Date: Sun, 25 Oct 2026 08:44:07 GMT
+Content-Length: 3
+Connection: close
+
+ok
+[end: <nil>]
+

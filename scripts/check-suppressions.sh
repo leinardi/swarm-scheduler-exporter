@@ -31,12 +31,13 @@
 # Two rules, and the second is the one that matters:
 #
 #   1. No count may exceed its baseline, and no rule may appear that the baseline does not know.
-#      Counts are per rule: one per nolint linter, and one per code for the shellcheck and
-#      droast directives. Deleting a suppression
-#      of one rule therefore cannot pay for adding a suppression of another.
+#      Counts are per rule: one per Rust lint, and one per code for the droast and shellcheck
+#      directives. Deleting a suppression of one rule therefore cannot pay for adding a
+#      suppression of another.
 #   2. A staged diff that adds a suppression line is refused unless the same commit also changes
 #      the baseline file. Rule 1 alone is blind to a swap within the same rule (delete one
-#      //nolint:gosec, add another), and the baseline file is the thing a reviewer reads.
+#      #[expect(clippy::expect_used)], add another), and the baseline file is the thing a reviewer
+#      reads.
 #
 # A count below its baseline is also refused: the baseline is meant to describe the repository, and
 # a stale one quietly buys room for a suppression nobody approved. Run with --update to rewrite it,
@@ -45,17 +46,19 @@
 # file -- has to stage: those leave every count where it was, so without the stamp rule 2 would
 # refuse with nothing to change.
 #
-# These four families (nolint, shellcheck-disable, droast-ignore, droast-global-ignore) are
-# the mechanisms this repository's code linters read. Others exist -- markdownlint-disable,
-# yamllint's disable-line, shellcheck directives inside workflow run: blocks -- and are not counted;
-# adding a family here is the moment to start counting one.
+# These five families (expect, allow, shellcheck-disable, droast-ignore and
+# droast-global-ignore) are the mechanisms this repository's code linters read. The two Rust
+# families key on the lint path as written, so expect/clippy::unwrap_used and expect/unwrap_used
+# would be different rules; a cfg_attr-wrapped lint attribute is not counted. Others exist --
+# markdownlint-disable, yamllint's disable-line, shellcheck directives inside workflow run: blocks
+# -- and are not counted; adding a family here is the moment to start counting one.
 #
 # Upstream and fixture files are not scanned (see EXCLUDED_PREFIXES): a suppression nobody in this
 # repository wrote is not a decision this ratchet can hold anyone to, and refreshing a file from
 # make-common must not move the baseline.
 #
-# scripts/check-suppressions.sh is exercised by test/suppressions, which drives it against scratch
-# repositories rather than this one.
+# scripts/check-suppressions.sh is exercised by meta/tests/suppressions.rs, which drives it against
+# scratch repositories rather than this one.
 
 set -euo pipefail
 
@@ -73,40 +76,76 @@ EXCLUDED_PREFIXES=(
 # throws them away again. It reads either a list of files, taking each path from FILENAME, or one
 # file on standard input whose name is given as -v override.
 #
-# A Go directive counts when it opens the first comment on the line, which is how golangci-lint
-# reads it too: a trailing directive after code, or a directive on a line of its own. The comment
-# opener is found by scanning past string and rune literals, so a "//" inside a URL neither hides a
-# real directive nor invents one. Prose that mentions a directive later inside a comment -- this
-# repository has such a sentence -- is not a suppression, because the comment it sits in opens with
-# something else.
-#
 # The program is read from a quoted heredoc, so its $0 and its regexes reach awk exactly as
 # written without a single-quoted string the shell would have to be told not to expand.
 read -r -d '' detect_program <<'AWK' || true
-BEGIN { quote_rune = sprintf("%c", 39) }
+BEGIN { quote_char = sprintf("%c", 39) }
 
 function emit(key) {
 	printf "%s:%d\t%s\n", path, FNR, key
 }
 
-# go_comment_start returns the index of the "//" that opens the first line comment outside any
-# string literal, rune literal or block comment, and 0 when the line has none.
+# --- Rust ---
 #
-# Two states outlive a line and are carried in globals: raw_open for a backquoted string, which is
-# the one Go literal that spans lines -- a fixture holding directive text inside one is exactly
-# what a test of this script looks like -- and block_open for a block comment, whose continuation
-# lines golangci-lint does not read directives out of either.
-function go_comment_start(s,   i, n, c, next_c, quote) {
+# A Rust lint attribute counts wherever it sits in code: outer or inner, on a line of its own or
+# after other tokens, and spread over several lines the way rustfmt wraps a long one. Each lint it
+# names is a rule of its own, reported on the line that names it, so adding a lint to an existing
+# multi-line attribute is an addition too. The reason = "..." item is not a lint and is skipped.
+#
+# Strings, raw strings, character literals and (nesting) block comments are tracked across lines,
+# so attribute text inside a fixture or a comment is not a suppression.
+
+function rs_finish_item(   name) {
+	name = attr_item
+	gsub(/[ \t]/, "", name)
+	if (name ~ /^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$/) {
+		printf "%s:%d\t%s/%s\n", path, attr_item_line, attr_family, name
+	}
+	attr_item = ""
+	attr_item_line = 0
+}
+
+# rs_attr_char feeds one character of an attribute's argument list, outside any string or comment.
+function rs_attr_char(c) {
+	if (c == "(") {
+		attr_item = attr_item c
+		attr_depth++
+		return
+	}
+	if (c == ")") {
+		attr_depth--
+		if (attr_depth == 0) {
+			rs_finish_item()
+			attr_family = ""
+			return
+		}
+		attr_item = attr_item c
+		return
+	}
+	if (c == "," && attr_depth == 1) {
+		rs_finish_item()
+		return
+	}
+	if (attr_item_line == 0 && c !~ /[ \t]/) {
+		attr_item_line = FNR
+	}
+	attr_item = attr_item c
+}
+
+function rs_scan(s,   i, n, c, two, closing, token, prev) {
 	n = length(s)
-	quote = raw_open ? "`" : ""
 	i = 1
 
 	while (i <= n) {
 		c = substr(s, i, 1)
+		two = substr(s, i, 2)
 
-		if (block_open) {
-			if (c == "*" && substr(s, i + 1, 1) == "/") {
-				block_open = 0
+		if (rs_block > 0) {
+			if (two == "/*") {
+				rs_block++
+				i += 2
+			} else if (two == "*/") {
+				rs_block--
 				i += 2
 			} else {
 				i++
@@ -114,87 +153,108 @@ function go_comment_start(s,   i, n, c, next_c, quote) {
 			continue
 		}
 
-		if (quote != "") {
-			if (c == "\\" && quote != "`") {
+		if (rs_raw >= 0) {
+			closing = "\""
+			for (token = 0; token < rs_raw; token++) {
+				closing = closing "#"
+			}
+			if (substr(s, i, length(closing)) == closing) {
+				rs_raw = -1
+				i += length(closing)
+			} else {
+				i++
+			}
+			continue
+		}
+
+		if (rs_str) {
+			if (c == "\\") {
 				i += 2
 			} else {
-				if (c == quote) {
-					quote = ""
+				if (c == "\"") {
+					rs_str = 0
 				}
 				i++
 			}
 			continue
 		}
 
-		if (c == "\"" || c == "`" || c == quote_rune) {
-			quote = c
+		if (two == "//") {
+			return
+		}
+
+		if (two == "/*") {
+			rs_block = 1
+			i += 2
+			continue
+		}
+
+		prev = (i > 1 ? substr(s, i - 1, 1) : "")
+		if ((c == "r" || c == "b") && prev !~ /[A-Za-z0-9_]/ && match(substr(s, i), /^b?r#*"/)) {
+			token = substr(s, i, RLENGTH)
+			rs_raw = gsub(/#/, "", token)
+			if (attr_family != "") {
+				attr_item = attr_item "\""
+			}
+			i += RLENGTH
+			continue
+		}
+
+		if (c == "\"") {
+			rs_str = 1
+			if (attr_family != "") {
+				attr_item = attr_item c
+			}
 			i++
 			continue
 		}
 
-		if (c == "/") {
-			next_c = substr(s, i + 1, 1)
-			if (next_c == "/") {
-				raw_open = 0
-				return i
+		if (c == quote_char) {
+			if (substr(s, i + 1, 1) == "\\") {
+				token = index(substr(s, i + 3), quote_char)
+				i = (token > 0 ? i + 3 + token : n + 1)
+			} else if (substr(s, i + 2, 1) == quote_char) {
+				i += 3
+			} else {
+				# A lifetime or a label.
+				i++
 			}
-			if (next_c == "*") {
-				block_open = 1
-				i += 2
-				continue
-			}
+			continue
+		}
+
+		if (attr_family != "") {
+			rs_attr_char(c)
+			i++
+			continue
+		}
+
+		if (c == "#" && match(substr(s, i), /^#!?\[[ \t]*(expect|allow)[ \t]*\(/)) {
+			token = substr(s, i, RLENGTH)
+			attr_family = (token ~ /expect/ ? "expect" : "allow")
+			attr_depth = 1
+			attr_item = ""
+			attr_item_line = 0
+			i += RLENGTH
+			continue
 		}
 
 		i++
 	}
-
-	raw_open = (quote == "`")
-
-	return 0
 }
 
 FNR == 1 {
-	raw_open = 0
-	block_open = 0
+	rs_block = 0
+	rs_raw = -1
+	rs_str = 0
+	attr_family = ""
 }
 
 {
 	line = $0
 	path = (override != "" ? override : FILENAME)
 
-	if (path ~ /\.go$/) {
-		pos = go_comment_start(line)
-		if (pos > 0) {
-			body = substr(line, pos + 2)
-
-			if (substr(body, 1, 7) == "nolint:") {
-				# Read the list as golangci-lint does: everything up to the explanation's "//",
-				# split on commas, each name trimmed and lower-cased, so "gosec, errcheck" counts
-				# both linters it silences rather than stopping at the first space.
-				rest = substr(body, 8)
-				explanation = index(rest, "//")
-				if (explanation > 0) {
-					rest = substr(rest, 1, explanation - 1)
-				}
-				stop = match(rest, /[^A-Za-z0-9_, \t-]/)
-				if (stop > 0) {
-					rest = substr(rest, 1, stop - 1)
-				}
-				count = split(rest, linters, ",")
-				for (i = 1; i <= count; i++) {
-					name = tolower(linters[i])
-					gsub(/^[ \t]+|[ \t]+$/, "", name)
-					if (name != "") {
-						emit("nolint/" name)
-					}
-				}
-			} else if (body ~ /^nolint([^A-Za-z0-9_:-]|$)/) {
-				# Bare //nolint silences every linter. golangci-lint rejects it through
-				# nolintlint.require-specific, so this is a second line of defence rather than
-				# the only one.
-				emit("nolint/*")
-			}
-		}
+	if (path ~ /\.rs$/) {
+		rs_scan(line)
 		next
 	}
 
@@ -263,7 +323,7 @@ is_excluded() {
 # is_scanned reports whether a path is one of the file kinds the detector understands.
 is_scanned() {
 	case "$1" in
-	*.go | *.sh | *Dockerfile) return 0 ;;
+	*.rs | *.sh | *Dockerfile) return 0 ;;
 	*) return 1 ;;
 	esac
 }
@@ -281,7 +341,7 @@ scanned_files() {
 		if ! is_excluded "$path" && is_scanned "$path"; then
 			SCANNED+=("$path")
 		fi
-	done < <(git ls-files -z -- '*.go' '*.sh' '*Dockerfile')
+	done < <(git ls-files -z -- '*.rs' '*.sh' '*Dockerfile')
 }
 
 # current_counts prints the tree's suppression counts as "<key><TAB><count>", sorted by key.

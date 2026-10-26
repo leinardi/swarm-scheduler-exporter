@@ -8,9 +8,10 @@ that way.
 ## What a release produces
 
 - Two static binaries, `swarm-scheduler-exporter-linux-amd64` and
-  `swarm-scheduler-exporter-linux-arm64`, built with `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`
-  and the version, commit and commit date compiled in, plus `checksums.txt` over both. All three are
-  attached to the GitHub release, and each binary has a [build provenance
+  `swarm-scheduler-exporter-linux-arm64`, static musl builds cross-compiled by `cargo zigbuild`
+  with the checkout and registry paths remapped and the version, commit and commit date compiled
+  in, plus `checksums.txt` over both. All three are attached to the GitHub release, and each
+  binary has a [build provenance
   attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations) from the
   release workflow (verify one with
   `gh attestation verify <binary> --repo leinardi/swarm-scheduler-exporter --signer-workflow leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml`).
@@ -60,9 +61,10 @@ committed as a `fix` (or `feat`); `perf`, `refactor`, `style` and `revert` are f
 deliberately not meant to trigger a release. When no commit since the last release is a `feat`, a
 `fix` or a breaking change, a run with no version **fails** with *"No feat/fix or breaking-change
 commit since `<tag>`, so there is nothing to bump. Re-run with an explicit version to force one."*
-Dependabot's Go module updates are committed as `fix(deps)`, so a dependency bump alone is enough
-for a patch release; its GitHub Actions, pre-commit and Docker updates stay `chore(deps)` and bump
-nothing, so a Docker base-image bump that carries a security fix needs an explicit version to ship.
+Dependabot's Cargo updates to runtime dependencies are committed as `fix(deps)` (development
+dependencies as `chore(deps)`), so a dependency bump alone is enough for a patch release; its GitHub
+Actions, pre-commit and Docker updates stay `chore(deps)` and bump nothing, so a Docker base-image
+bump that carries a security fix needs an explicit version to ship.
 
 Whether derived or typed, the version must be **higher than every version already released**. Tags
 here are immutable, so publishing a `v1.9.9` after `v1.10.0` would create a permanent lower tag. The
@@ -113,10 +115,10 @@ the tagged commit (see [Recovering a failed publish](#recovering-a-failed-publis
    not `refs/heads/master`, and every other job waits on it. `workflow_dispatch` lets the caller
    pick any branch, and the release job holds `contents: write`, `packages: write` and an OIDC
    identity.
-2. **Verify.** `test` (`make go-vet`, then `go test -race ./...`) and `audit` (`make audit-deps`:
-   govulncheck). They are copies of the CI jobs rather than a call into `ci.yaml`, so a release
-   never depends on which pull request last ran CI, and both take Go from `go.mod`, the toolchain
-   the release builds with.
+2. **Verify.** `test` (clippy, then `cargo test --workspace`) and `audit` (cargo-deny over the
+   workspace). They are copies of the CI jobs rather than a call into `ci.yaml`, so a release never
+   depends on which pull request last ran CI, and `test` pins the same Rust toolchain the release
+   builds with.
 3. **Resolve the version**, as in [Versioning](#versioning).
 4. **Check the tag.** If `refs/tags/<version>` already exists on the remote, the run continues only
    when it points at `HEAD`, as a recovery. Pointing anywhere else is a hard failure. The tag is
@@ -169,11 +171,12 @@ described under [Recovery guarantees](#recovery-guarantees).
 
 Everything stamped into an artifact comes from the commit rather than from the clock: the version, a
 fixed seven-character commit prefix, the commit date as the build date, and the commit time as
-BuildKit's `SOURCE_DATE_EPOCH`. The binaries are built with `-trimpath` and the exact Go version
-from `go.mod`, so a re-run of the same commit produces the same bytes, which is what lets a recovery
-check published assets by sha256. The image is not byte-reproducible: its provenance records the
-build itself, so two builds of the same commit have different index digests. That is why a recovery
-never compares a rebuilt index with a published one. The `dhi.io` base images in
+BuildKit's `SOURCE_DATE_EPOCH`. The binaries are built by `cargo zigbuild --locked` with the pinned
+Rust toolchain, zig and cargo-zigbuild (`.github/actions/setup-zigbuild`) and the checkout and
+registry paths remapped, so a re-run of the same commit produces the same bytes, which is what lets
+a recovery check published assets by sha256. The image is not byte-reproducible: its provenance
+records the build itself, so two builds of the same commit have different index digests. That is why
+a recovery never compares a rebuilt index with a published one. The `dhi.io` base images in
 [`deployments/docker/Dockerfile`](../deployments/docker/Dockerfile) are pinned by tag, not by
 digest: dhi.io republishes its tags often to ship security fixes, so a recovery rebuild can use
 newer bases than the first attempt did, and it is scanned like any other build. Dependabot moves the
@@ -314,16 +317,18 @@ is compromised, would execute inside the release job, which holds `contents: wri
 `packages: write` and an OIDC identity. A SHA cannot be moved. Dependabot's `github-actions`
 ecosystem updates the pins and rewrites the comment.
 
-**Every image the release job runs is pinned by digest**: the job-local registry (`REGISTRY_IMAGE`)
-and skopeo (`SKOPEO_IMAGE`) in the workflow's `env`, and the base images in the Dockerfile. The
-Dockerfile frontend (`# syntax=docker/dockerfile:…`) is pinned by digest too, so BuildKit never
+**Every image the release job runs itself is pinned by digest**: the job-local registry
+(`REGISTRY_IMAGE`) and skopeo (`SKOPEO_IMAGE`) in the workflow's `env`. The `dhi.io` base images of
+the Dockerfile are the exception, pinned by tag for the reason given under
+[Why the build happens before the tag](#why-the-build-happens-before-the-tag). The Dockerfile
+frontend (`# syntax=docker/dockerfile:…`) is pinned by digest too, so BuildKit never
 pulls a frontend that moved under its tag. Dependabot's `docker` ecosystem does not update that
 syntax line, nor the images in the workflow's `env`, so they are bumped by hand: resolve the new
 index digest with `docker buildx imagetools inspect <image>:<tag>` and replace the tag and the
-digest together. `svu` (`SVU_VERSION`) and Trivy (`TRIVY_VERSION`, in both `release.yaml` and
-`scheduled-scan.yaml`) are pinned as versions and bumped by hand for the same reason. Pinning Trivy
-does not pin what it knows: its vulnerability database is fetched at run time, which is the point of
-scanning at release time.
+digest together. `svu` (`SVU_VERSION`, installed from its release tarball and checked against
+`SVU_SHA256`) and Trivy (`TRIVY_VERSION`, in both `release.yaml` and `scheduled-scan.yaml`) are
+pinned as versions and bumped by hand for the same reason. Pinning Trivy does not pin what it knows:
+its vulnerability database is fetched at run time, which is the point of scanning at release time.
 
 **Workflow tokens are read-only by default.** Each workflow sets `permissions: contents: read` at
 the top, and only the jobs that need more say so: the reviewdog jobs in `ci.yaml` add
@@ -336,13 +341,14 @@ run too: `leinardi/gha-pre-commit-reviewdog-actions` from `v1.0.1` and
 `leinardi/gh-reusable-workflows` from `v1.2.1`, the releases pinned here. The warm-up workflow
 matters more than it looks. It declares `permissions: contents: read`, but every step in a job also
 gets the Actions cache token, which can write any cache key, and the warm-up runs on `master`, so it
-writes into the `master` cache scope. The release job restores that scope twice: `actions/setup-go`
-with `cache: true` restores the Go module and build caches, and the image build reads the BuildKit
-layer cache with `cache-from: type=gha`. A moved tag inside the warm-up could therefore poison what
-the release builds, attests and signs. Keep the nested pins in both repositories current, and bump
-the pins here when they release. The other `ci.yaml` jobs also run on pushes to `master`, so they
-could write that scope too: their `actions/setup-go` steps save a cache only on a pull request
-(`cache` is false otherwise), and `pre-commit-all` only restores the warm-up's entry.
+writes into the `master` cache scope. The release workflow restores that scope twice: the image
+build reads the BuildKit layer cache with `cache-from: type=gha`, and the `test` job restores the
+Cargo build cache through `Swatinem/rust-cache` (the release job builds its binaries without one). A
+moved tag inside the warm-up could therefore poison what the release builds, attests and signs, or
+what its tests vouch for. Keep the nested pins in both repositories current, and bump the pins here
+when they release. The other `ci.yaml` jobs also run on pushes to `master`, so they could write that
+scope too: their `Swatinem/rust-cache` steps save a cache only on a pull request (`save-if`), and
+`pre-commit-all` only restores the warm-up's entry.
 
 ## One-time setup
 
@@ -354,7 +360,7 @@ protection rules, which by itself changes nothing. Configure it by hand:
 1. **Restrict it to `master`** with a deployment branch rule, as a server-side second line of
    defence behind the `guard` job. Add required reviewers too if a release should wait for a human.
    Leave the "Immutable tags" ruleset exactly as it is; the release job is written for it.
-2. **Give it the `dhi.io` credentials**: the image's build stage pulls `dhi.io/golang`, so the job
+2. **Give it the `dhi.io` credentials**: the image's build stage pulls `dhi.io/rust`, so the job
    needs the `DHI_TOKEN` secret and the `DHI_USERNAME` variable. Add both **to the environment**,
    not to the repository, so only a job that passed the environment's rules can read them:
 
@@ -385,15 +391,14 @@ check for that. The rulesets are managed as code in
 
 The checks to require are `ci-result` and `integration`, set there as
 `default_branch_required_checks = ["ci-result", "integration"]`. `ci-result` needs every other job
-of `ci.yaml` (`pre-commit-all`, `conventional-commits`, `repo-gates`, `release-scripts`, `go-test`
-and `go-vulncheck`) and fails unless each one succeeded; `conventional-commits` alone may be
-skipped, off pull requests. A new `ci.yaml` job therefore becomes required by joining
-`ci-result`'s `needs`, not the ruleset, and GitHub counting a skipped required job as passing is
-why the jobs themselves are not listed. `integration` runs in its own workflow, which `ci-result`
-cannot need, so it is required by name. The reviewdog annotation jobs (`actionlint`,
-`pre-commit-hooks`, `markdownlint`, `shellcheck`, `yamllint`) stay optional: they duplicate
-`pre-commit-all` as inline comments. None of these workflows uses path filters, so every required
-check reports on every pull request.
+of `ci.yaml` (`pre-commit-all`, `conventional-commits`, `release-scripts` and `rust`) and fails
+unless each one succeeded; `conventional-commits` alone may be skipped, off pull requests. A new
+`ci.yaml` job therefore becomes required by joining `ci-result`'s `needs`, not the ruleset, and
+GitHub counting a skipped required job as passing is why the jobs themselves are not listed.
+`integration` runs in its own workflow, which `ci-result` cannot need, so it is required by name.
+The reviewdog annotation jobs (`actionlint`, `pre-commit-hooks`, `markdownlint`, `shellcheck`,
+`yamllint`) stay optional: they duplicate `pre-commit-all` as inline comments. None of these
+workflows uses path filters, so every required check reports on every pull request.
 
 Once the ruleset is applied, open one pull request and confirm the required checks report under
 exactly the names `ci-result` and `integration`. A required check that never reports blocks every
@@ -401,6 +406,27 @@ merge.
 
 Repository admins keep the ruleset's pull-request bypass, so an admin can still merge a pull request
 whose check fails. That is a deliberate escape hatch, not a gap in the check.
+
+### Bumping the Rust toolchain
+
+One exact Rust release builds everything: `rust-toolchain.toml`, every `dtolnay/rust-toolchain`
+step in the workflows and the `dhi.io/rust:<version>-debian13-dev` tag of the Dockerfile's build
+stage, and `meta/tests/toolchain.rs` fails when any of them differs, patch included. Dependabot
+ignores the `rust` image on purpose: `dhi.io/rust` has no rustup, so the build stage adds each musl
+target by unpacking `rust-std-<version>-<triple>.tar.xz` from static.rust-lang.org and checking it
+against a sha256 written in the Dockerfile, and those archives must be the image's exact release.
+A bump is therefore one hand-made pull request that moves, together:
+
+1. the image tag and `ARG RUST_VERSION` in the Dockerfile;
+2. the two `rust-std` sha256s (the `.sha256` file published next to each archive);
+3. `rust-toolchain.toml` and every toolchain step under `.github`;
+4. the MSRV in `Cargo.toml` when the minor version changes.
+
+zig and cargo-zigbuild follow the same rule between the Dockerfile and
+`.github/actions/setup-zigbuild`: the version and the x86_64 archive's sha256 are each one value,
+checked by the same meta-test. A release built after such a bump produces new binary digests, as
+any toolchain change does; a recovery of an older release must run on its own commit, which still
+names its own toolchain.
 
 ## Commit messages are checked on every pull request
 
@@ -416,3 +442,20 @@ Only merge commits are enabled on this repository; squash and rebase merging are
 commit in a pull request therefore lands on `master` as it is, and the pull-request title never
 becomes a commit subject, which is why there is no title check. If squash merging is ever enabled,
 the title becomes the commit subject, and a pull-request title check has to be added to CI first.
+
+## Historical notes: the Go releases (1.x)
+
+Releases up to and including `v1.3.2` were built from the Go implementation, which the 2.0 cutover
+replaced. What differed then, for anyone recovering or auditing one of them:
+
+- The binaries were built by `go build` with `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`,
+  the version stamped through `-ldflags -X`, and the Go version taken from `go.mod`; the image's
+  build stage was `dhi.io/golang`.
+- The `test` job ran `make go-vet` and `go test -race ./...`, and the `audit` job ran govulncheck;
+  CI's required `ci-result` also needed `repo-gates`, `go-test` and `go-vulncheck`.
+- `svu` was installed with `go install`, and the Go module and build caches were restored by
+  `actions/setup-go`.
+- Dependabot's `gomod` updates were the dependency bumps committed as `fix(deps)`.
+
+A recovery of a 1.x release runs on that release's commit, whose workflows still describe all of
+this, so nothing in this section is needed to run one.

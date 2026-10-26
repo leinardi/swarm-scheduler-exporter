@@ -15,23 +15,9 @@ desktop.ini
 *.swp
 *~
 
-# Go build and test outputs
+# Build outputs: cargo's, and the release binaries the release workflow collects
+/target/
 /dist/
-/bin/
-/build/
-/coverage.out
-/coverage.html
-*.test
-*.out
-*.prof
-*.pprof
-*.coverprofile
-profile.*
-
-# Go workspaces and vendoring
-go.work
-go.work.sum
-vendor/
 
 # Tool caches
 .cache/

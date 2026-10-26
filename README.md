@@ -18,9 +18,10 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
   changed, and a single reconciler inspects it, backed by a full resync (service and node list) at
   startup, every 5 minutes, whenever it had to drop changes, and every time the event stream
   reconnects. A reconnect resumes the stream from just before the last event seen; the resync covers
-  what the daemon no longer replays, such as the events of a restart. A socket proxy closing an idle
-  stream (HAProxy does so after its 10-minute client timeout on a quiet cluster) is expected: that
-  clean close is logged at info, any other stream end at warn.
+  what the daemon no longer replays, such as the events of a restart. A stream that ends cleanly is
+  logged at info, any other stream end at warn. A socket proxy cutting an idle stream (HAProxy does
+  so after its client timeout, about 10 minutes, on a quiet cluster) ends it without the chunked
+  body's terminating chunk, so that is logged at warn too, followed by the reconnect.
 - Periodically polls **tasks** and aggregates **current** states per service (current task per slot
   for replicated services or per node for global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only:
@@ -30,9 +31,21 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
 
 ## 🪶 Resource usage
 
-Swarm Scheduler Exporter is designed to be lightweight. In typical Docker deployments it can sit
-around **~25 MiB RAM** when idle (exact usage depends on platform, Go version, and container runtime
-settings).
+Swarm Scheduler Exporter is designed to be lightweight. Measured side by side against 1.3.2 (the
+last Go release) on one single-node Swarm with `--containers`, both exporting the same 964
+`swarm_*` series:
+
+|  | 1.x (Go) | 2.x (Rust) |
+| --- | --- | --- |
+| Binary, linux/amd64 | 11.2 MB | 4.4 MB |
+| Binary, linux/arm64 | 10.5 MB | 3.9 MB |
+| Image (linux/amd64) | 13.1 MB | 6.3 MB |
+| Idle RSS after 10 minutes | 20.1-20.6 MB | 18.6-20.4 MB |
+
+The idle RSS was read from `VmRSS` on a 32-CPU host. The Rust exporter starts one runtime worker
+thread per available CPU, so a host with fewer CPUs, or a CPU limit, means fewer threads and less
+memory: under `--cpus 2` the same exporter idled at 15.3 MB. Exact usage depends on the platform
+and the container runtime settings.
 
 ## 📊 Metrics
 
@@ -50,7 +63,7 @@ labels:
   of `docker service ls`
 - `display_name` — `stack service`, or just the stack (or service) name when the two are equal or
   the stack is empty
-- one label per `-label` flag (see [Custom label guardrails](#custom-label-guardrails)), with the
+- one label per `--label` flag (see [Custom label guardrails](#custom-label-guardrails)), with the
   value of that service label, empty when the service does not set it
 
 `...custom` below stands for those custom labels.
@@ -178,10 +191,29 @@ For example:
     summary: "Swarm exporter has not published a task poll for over 2 minutes"
 ```
 
+### Runtime metrics
+
+Beside the `swarm_*` families, `/metrics` carries the process and handler metrics the Prometheus Go
+client exports by default, with the same names, types and help texts:
+
+- `process_cpu_seconds_total`, `process_open_fds`, `process_max_fds`,
+  `process_virtual_memory_bytes`, `process_virtual_memory_max_bytes`,
+  `process_resident_memory_bytes`, `process_start_time_seconds`,
+  `process_network_receive_bytes_total` and `process_network_transmit_bytes_total` (Linux);
+- `promhttp_metric_handler_requests_total{code}` (`200`, `500` and `503` from startup) and
+  `promhttp_metric_handler_requests_in_flight`.
+
+There are no `go_*` metrics: the exporter has no Go runtime.
+
+The exposition is always the text format (`text/plain; version=0.0.4; charset=utf-8; escaping=…`),
+gzip-compressed when the scraper accepts it. A scraper asking for protobuf gets text too, which
+Prometheus reads without a setting: it scrapes protobuf only for native histograms, and the exporter
+has none.
+
 ### Container-level (opt-in)
 
 If you also run non-Swarm workloads (e.g. plain Docker Compose or standalone containers),
-the exporter can expose **container state** metrics when started with `-containers`.
+the exporter can expose **container state** metrics when started with `--containers`.
 
 - `swarm_container_state{project,stack,service,container,orchestrator,display_name,state,exit_code}`
   Emits an **info-style one-hot series** per container across all known states.
@@ -189,7 +221,8 @@ the exporter can expose **container state** metrics when started with `-containe
 
   - `project` / `service` — from Compose labels (`com.docker.compose.*`), if present
   - `stack` — from Swarm labels (`com.docker.stack.namespace`), if present
-  - `container` — sanitized container name
+  - `container` — the container's first name without its leading `/`, as Docker reports it (not
+    sanitized)
   - `orchestrator` — `compose`, `swarm`, or `none`
   - `display_name` — friendly name (`stack service` or `stack` if identical)
   - `state` — one of `created`, `restarting`, `running`, `removing`, `paused`, `exited`, `dead`,
@@ -200,14 +233,14 @@ the exporter can expose **container state** metrics when started with `-containe
 > **every running container** (to read its health state, if any) and **every exited container** (to
 > read its exit code). Inspects are capped at **300 per poll**, failed ones included, and share one
 > **10s** deadline per poll; a container past the cap or the deadline keeps its listed state and an
-> empty `exit_code`. Swarm task containers are skipped unless `-containers-include-swarm` is set.
+> empty `exit_code`. Swarm task containers are skipped unless `--containers-include-swarm` is set.
 
 ## ✅ Health
 
 The exporter is healthy once its first resync (service and node list) has completed, a task poll has
-been published, and the latest published poll is no older than `max(3 × -poll-delay, 30s)` (30s with
-the default 10s poll delay). A requested resync that stays outstanding for longer than that same
-window, for example because listing services keeps failing, makes it unhealthy too.
+been published, and the latest published poll is no older than `max(3 × --poll-delay, 30s)` (30s
+with the default 10s poll delay). A requested resync that stays outstanding for longer than that
+same window, for example because listing services keeps failing, makes it unhealthy too.
 
 - HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason
   (`initial resync not completed`, `no successful poll yet`, `last poll too old` or
@@ -215,22 +248,22 @@ window, for example because listing services keeps failing, makes it unhealthy t
 - Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy, evaluated
   at every scrape.
 - Container health: the image is distroless (no shell, no curl), so it ships a `HEALTHCHECK` that
-  runs the binary itself with `-healthcheck`. That mode requests `/healthz` on `-listen-addr` (a
+  runs the binary itself with `--healthcheck`. That mode requests `/healthz` on `--listen-addr` (a
   wildcard host such as `0.0.0.0` or `::` is probed on loopback), never through a proxy and without
   following redirects, and exits `0` on a `200` and `1` otherwise, printing the status and the
   reason. The check allows a 90s start period for the first resync, then probes every 30s; after 3
   failures the container is unhealthy and Swarm replaces the task, which is the intended remedy for
   a stuck exporter.
 
-The image's check uses the default `-listen-addr`. If you change it, override the check with the
+The image's check uses the default `--listen-addr`. If you change it, override the check with the
 same address:
 
 ```yaml
 services:
   exporter:
-    command: [ "-listen-addr", "0.0.0.0:9100" ]
+    command: [ "--listen-addr", "0.0.0.0:9100" ]
     healthcheck:
-      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "-healthcheck", "-listen-addr", "0.0.0.0:9100" ]
+      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "--healthcheck", "--listen-addr", "0.0.0.0:9100" ]
 ```
 
 To turn it off, set `healthcheck: disable: true` in compose or a stack file, or pass
@@ -276,8 +309,8 @@ docker run --rm \
  -v /var/run/docker.sock:/var/run/docker.sock:ro \
  --group-add 140 \
  ghcr.io/leinardi/swarm-scheduler-exporter:latest \
- -log-format text \
- -log-level warn
+ --log-format text \
+ --log-level warn
 ```
 
 Replace `140` with the value from `stat -c %g /var/run/docker.sock`.
@@ -295,7 +328,7 @@ docker service create \
  --mount type=tmpfs,dst=/tmp,tmpfs-size=16m \
  --publish published=8888,target=8888 \
  ghcr.io/leinardi/swarm-scheduler-exporter:latest \
- -poll-delay 10s
+ --poll-delay 10s
 ```
 
 > ℹ️ **Why the `manager` constraint?**
@@ -328,15 +361,17 @@ Swarm, and checks that the exporter works through it and that what is left off i
 >   (`/services/<id>/logs`, `/tasks/<id>/logs`: the containers' logs, from across the Swarm), and
 >   the service list the exporter reads carries every service spec, environment variables included.
 > - `CONTAINERS=1` allows every `GET` under `/containers`, including logs, stats, `top`, `archive`
->   and `export`. `CONTAINERS` is needed only with `-containers`: without that flag, set it to `0`.
+>   and `export`. `CONTAINERS` is needed only with `--containers`: without that flag, set it to `0`.
 >   That narrows the exposure, but log access stays.
 >
 > Exact per-endpoint rules would need a custom `haproxy.cfg`, which the example does not attempt.
 
 Two proxy behaviours to know:
 
-- HAProxy closes an idle event stream after its 10-minute client timeout. The exporter reconnects
-  (and resyncs), and logs that clean close at info, not as a warning.
+- HAProxy cuts an idle event stream after its client timeout (about 10 minutes; a quiet stream was
+  held 660s). It ends the stream without the chunked body's terminating chunk, so the exporter logs
+  `event stream ended; will reconnect` at warn, then reconnects (and resyncs). A server timeout, a
+  proxy restart and a stopped daemon end the stream the same way.
 - The task poll sends no filter in its URL, so a large cluster never runs into HAProxy's request
   size limit.
 
@@ -358,7 +393,7 @@ docker service create \
  --mount type=bind,src=/path/to/certs,dst=/run/certs,ro \
  --env DOCKER_CERT_PATH=/run/certs \
  ghcr.io/leinardi/swarm-scheduler-exporter:latest \
- -poll-delay 10s
+ --poll-delay 10s
 ```
 
 This avoids group and permission issues, relying instead on proper TLS authentication.
@@ -375,27 +410,44 @@ socket-proxy stack is in
 ### Flags
 
 ```
-  -containers
-        Expose container state metrics (opt-in).
-  -containers-include-swarm
-        Include containers belonging to Swarm tasks.
-  -healthcheck
-        Probe this exporter's /healthz on -listen-addr and exit 0 if healthy, 1 otherwise
-  -help
-        Display help message
-  -label value
-        Name of custom service labels to add to metrics
-  -listen-addr string
-        IP address and port to bind (default "0.0.0.0:8888")
-  -log-format string
-        Either json, text or plain (default "text")
-  -log-level string
-        Either debug, info, warn, error, fatal, panic (default "info")
-  -log-time
-        Include timestamp in logs
-  -poll-delay duration
-        How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s. (default 10s)
+Usage: swarm-scheduler-exporter [OPTIONS]
+
+Options:
+      --listen-addr <string>
+          IP address and port to bind [default: 0.0.0.0:8888]
+      --poll-delay <duration>
+          How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s. [default: 10s]
+      --containers[=<BOOL>]
+          Expose container state metrics (opt-in).
+      --containers-include-swarm[=<BOOL>]
+          Include containers belonging to Swarm tasks.
+      --log-format <string>
+          Either json, text or plain [default: text]
+      --log-level <string>
+          Either debug, info, warn, error, fatal, panic [default: info]
+      --log-time[=<BOOL>]
+          Include timestamp in logs
+      --healthcheck[=<BOOL>]
+          Probe this exporter's /healthz on --listen-addr and exit 0 if healthy, 1 otherwise
+      --label <value>
+          Name of custom service labels to add to metrics
+  -h, --help
+          Display help message
 ```
+
+- Flags are long options with two dashes only. A single-dash spelling (`-poll-delay`) is refused
+  with a pointer to the `--` one, and so is any positional argument (exit code `2`).
+- A value goes after a space or `=` (`--poll-delay 30s`, `--poll-delay=30s`); a repeated flag keeps
+  its last value, and `--label` may be repeated (an empty name is refused).
+- A boolean flag alone means `true`; turning one off takes `=` (`--containers=false`, also `0`,
+  `f`, `F`, `FALSE`, `False`). `--containers false` is refused: `false` would be a positional
+  argument.
+- `--log-level` takes `debug`, `info`, `warn`, `warning`, `error`, `fatal` or `panic`, and
+  `--log-format` takes `json`, `text` or `plain`, in any case; anything else is refused at startup
+  (exit code `2`).
+- `--poll-delay` takes a Go-style duration (`500ms`, `10s`, `1m30s`) of at least `1s` (exit code
+  `1` otherwise).
+- `-h` and `--help` print the help to standard output and exit `0`.
 
 ### Environment (Docker client)
 
@@ -405,17 +457,20 @@ socket-proxy stack is in
 - `DOCKER_API_VERSION` — Pin the Engine API version instead of negotiating it (must be within
   1.40–1.56)
 
+The client connects to `DOCKER_HOST` directly: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are not
+read. To go through a proxy (a socket proxy, say), point `DOCKER_HOST` at it.
+
 ### Custom label guardrails
 
 - Names are validated & **sanitized** to Prometheus label rules: ASCII `[a-zA-Z0-9_]` only, every
   other character (non-ASCII letters included) becomes `_`, and a name that would start with a digit
   gets a leading `_` (e.g., `app.kubernetes.io/name` → `app_kubernetes_io_name`, `équipe` →
   `_quipe`). Label values are kept as they are.
-  > ⚠️ Earlier versions kept non-ASCII letters in label names. If a `-label` name has one, its
+  > ⚠️ Earlier versions kept non-ASCII letters in label names. If a `--label` name has one, its
   > series label name changes (`tëam` is now `t_am`): update the queries, dashboards and alerts that
   > use it. A name that starts with two or more non-ASCII characters (`команда`, `团队`, `ÜÖteam`) now
   > sanitizes to a name starting with `__`, which is reserved: the exporter rejects it at startup,
-  > and the `-label` must be renamed.
+  > and the `--label` must be renamed.
 - Duplicate/colliding sanitized names are rejected at startup, and so is a sanitized name starting
   with `__` (reserved by Prometheus).
 - At most **8** custom label keys; more are rejected at startup.
@@ -553,8 +608,8 @@ scrape_configs:
 
 ## 🛠 Addressed vs Original Project
 
-- **Data races**: one reconciler goroutine owns every cache and per-service metric write; removed
-  global `nodeCount`; no per-event goroutines.
+- **Data races**: one reconciler task owns every cache and per-service metric write; removed
+  the shared global node count; no per-event tasks.
 - **Event resiliency**: reconnect with capped backoff and a resync on every reconnect; a bounded
   dirty set that falls back to a full resync; periodic resync.
 - **Series lifecycle**: `replicas_state` is rebuilt and published as one snapshot per poll, so a
@@ -565,7 +620,7 @@ scrape_configs:
 - **Label sanitation & validation**: full Prometheus regex, collision checks, max label keys,
   high-cardinality warning, raw→sanitized mapping.
 - **Operability**: graceful shutdown; `/healthz`; health/build/exporter metrics; quieter default
-  logs; validated `-poll-delay`.
+  logs; validated `--poll-delay`.
 - **Performance**: node snapshot cache; on node events recompute every service from cached
   placement, without inspecting it; task poll optimized to “current task per slot/node”; burst
   events coalesced per service.
@@ -574,6 +629,55 @@ scrape_configs:
   rollbacks/paused/update flows.
 - **SLO helpers**: `swarm_service_running_replicas` and `swarm_service_at_desired` for direct
   alerting/dashboards.
+- **Footprint**: since 2.0 a static Rust binary on a distroless base, with a smaller image and
+  binary than the Go 1.x releases (see [Resource usage](#-resource-usage)), and a Docker client
+  that can only send read requests.
+
+## 🔄 Migrating from 1.x
+
+2.0 is the same exporter rewritten in Rust: every `swarm_*` metric keeps its name, type, help text,
+labels and values, and `/metrics`, `/healthz`, the health rules, the flags' names and defaults and
+the Docker access (read-only, the same endpoints) are unchanged. The `/metrics` output of the two
+was diffed against a capture of 1.3.2 over the same Engine API fixtures: for the text exposition
+and for Prometheus 3's request (gzip included) the headers and bodies are identical once the `go_*`
+families are left out and the process values, the poll-duration samples and the two success
+timestamps are masked; a protobuf request differs only in the `Content-Type`, the body being 1.3.2's
+protobuf content as text; and across all 24 captured `Accept` and `Accept-Encoding` combinations
+the encoding is identical and the `Content-Type` too, except where 1.3.2 chose protobuf.
+
+What to change when upgrading:
+
+- **Flags take two dashes.** `-poll-delay 10s` becomes `--poll-delay 10s`, `-containers` becomes
+  `--containers`, and so on, in `command:`, `docker run` and `docker service create` arguments.
+  1.x accepted both spellings; 2.0 refuses the single-dash one at startup and names the `--` one.
+- **Healthchecks you override** run `--healthcheck`:
+  `test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "--healthcheck" ]`. The image's own
+  `HEALTHCHECK` and the compose examples in `deployments/docker/` already do.
+- **Dashboards or alerts on `go_*` metrics** have nothing to read: use `process_*` instead.
+- **`DOCKER_CERT_PATH` without `DOCKER_TLS_VERIFY`** no longer connects without verifying the
+  daemon's certificate: set `DOCKER_TLS_VERIFY=1`.
+- **A TCP `DOCKER_HOST` reached through `HTTP_PROXY` or `HTTPS_PROXY`** is now dialled directly.
+  If the daemon is reachable only through that proxy, point `DOCKER_HOST` at a proxy that forwards
+  to it (a socket proxy). A unix socket was never proxied.
+
+Every intended difference, 1.x (Go) against 2.0 (Rust):
+
+| # | Area | 1.x | 2.0 |
+| --- | --- | --- | --- |
+| Q1 | Runtime metrics | `go_*`, `process_*` and `promhttp_metric_handler_*` | No `go_*`; `process_*` (the same Linux families, names, types and help texts) and `promhttp_metric_handler_*` unchanged |
+| Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always text 0.0.4, with the `escaping=` value and the gzip choice computed as 1.x does; only the body format differs where 1.x picked protobuf |
+| Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false` and every `strconv.ParseBool` spelling, Go durations for `--poll-delay`, repeatable `--label`, exit 2 on parse errors |
+| Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2); the accepted values are unchanged, in any case |
+| Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | Startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |
+| Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the daemon answers 2xx; a failed connect goes straight to the warn path |
+| Q7 | Reconnect backoff | The 500ms backoff reset only after a stream that carried an event, so a quiet cluster behind a proxy backed off to 30s | It resets after any stream that connected |
+| Q8 | Shutdown | 10s for the HTTP drain, then an unbounded wait for the workers | One 10s budget from the signal to exit, covering the drain and the workers |
+| Q9 | Error texts | Library errors in Go's and the Docker SDK's wording | Library errors in Rust's wording; every prefix and message the exporter writes itself is unchanged |
+| Q10 | Panic recovery | `reconciler recovered from panic` with a Go stack trace | The same record, with the panic message and a Rust backtrace |
+| Q11 | Docker wire | User-Agent `moby-client/…`; one version ping per concurrent first request | User-Agent `swarm-scheduler-exporter/<version>`; concurrent first requests share one ping; every other request detail unchanged |
+| Q12 | Go runtime environment | `GOMAXPROCS`, `GOMEMLIMIT`, `GOGC` and `GODEBUG` tuned the process | No effect; the worker count follows the CPUs available to the container |
+| Q13 | HTTP edge cases | net/http's answers to malformed requests (a bad version, a missing `Host`), its header-count and size limits, and its silent close on a header timeout | hyper's equivalents (for example 431 above 100 headers); paths, status codes, bodies, header order, the 307 for unclean paths, HEAD and the server timeouts are unchanged |
+| Q14 | Docker proxy variables | A TCP `DOCKER_HOST` went through `HTTP_PROXY` / `HTTPS_PROXY` (honouring `NO_PROXY` and skipping loopback), as Go's `http.ProxyFromEnvironment` decides | The client dials `DOCKER_HOST` directly and reads no proxy variable; unix sockets are unaffected |
 
 ## 🤝 Contributing
 

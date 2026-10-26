@@ -1,0 +1,25 @@
+# Accept	Accept-Encoding	=> Content-Type	Content-Encoding
+		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=1.0.0		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=1.0.0;escaping=allow-utf-8		=> text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+application/json		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4;escaping=underscores		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4;escaping=dots		=> text/plain; version=0.0.4; charset=utf-8; escaping=dots	
+text/plain;version=0.0.4;escaping=values		=> text/plain; version=0.0.4; charset=utf-8; escaping=values	
+text/plain;version=0.0.4;escaping=bogus		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain; version=0.0.4; escaping=allow-utf-8		=> text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited,text/plain;version=0.0.4;escaping=allow-utf-8		=> application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+text/plain;version=0.0.4;escaping=allow-utf-8;q=0.5,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.9		=> application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+application/openmetrics-text;version=1.0.0;escaping=allow-utf-8,text/plain;version=0.0.4;escaping=dots;q=0.5		=> text/plain; version=0.0.4; charset=utf-8; escaping=dots	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=text		=> application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=text; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=compact-text		=> application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=compact-text; escaping=underscores	
+application/openmetrics-text;version=1.0.0		=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	zstd,gzip	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	*	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	deflate	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	identity;q=0.5, gzip;q=0.6	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	GZIP	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip, identity	=> text/plain; version=0.0.4; charset=utf-8; escaping=underscores	

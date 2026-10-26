@@ -1,0 +1,53 @@
+# cargo-deny: the dependency gate for the Rust workspace. `cargo deny check` runs every section;
+# `make audit-deps` runs the advisories section on its own, since it is the one that needs the
+# network to be current.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every vulnerability and unsound advisory fails; "unmaintained" fails for direct and transitive
+# crates alike unless ignored here by advisory ID, with a reason. An ignore written as
+# `{ crate = "name" }` would only ignore yanked versions, so none is.
+version = 2
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # Unmaintained, the parser under serde_yaml_ng, which only the meta crate's tests use, to read
+    # this repository's own .pre-commit-config.yaml; nothing it parses reaches the exporter. No
+    # vulnerability is reported against it; serde-saphyr is the safe-Rust way out if that changes.
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, transitive via serde_yaml_ng in the meta crate's tests only; no known vulnerability" },
+]
+
+[licenses]
+version = 2
+# Only the licences the Cargo.lock graph needs, each added by the change that brings in the crate
+# needing it. The spikes (S8) found these more for the planned dependency set: Apache-2.0 (the
+# dual-licensed crates pick MIT until a crate is Apache-only), Apache-2.0 WITH LLVM-exception
+# (wasi), BSD-3-Clause (subtle), ISC (ring, rustls, rustls-webpki, untrusted) and Zlib
+# (miniz_oxide). No webpki-roots (CDLA-Permissive-2.0): Docker TLS trusts the system pool and the
+# user's ca.pem.
+allow = [
+    "MIT",
+    # unicode-ident, (MIT OR Apache-2.0) AND Unicode-3.0: through proc-macro2 under clap_derive
+    # in the exporter's own graph, and under meta's toml dev-dependency.
+    "Unicode-3.0",
+    # ring (Apache-2.0 AND ISC), under rustls and tokio-rustls for the Docker TLS (and rcgen in
+    # the tests).
+    "Apache-2.0",
+    # ring, rustls-webpki and untrusted.
+    "ISC",
+    # subtle, under rustls.
+    "BSD-3-Clause",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,8 @@
+### bad-version  (port 18080)
+### request: GET /healthz HTTP/9.9\r\nHost: x\r\n\r\n
+HTTP/1.1 505 HTTP Version Not Supported: unsupported protocol version
+Content-Type: text/plain; charset=utf-8
+Connection: close
+
+505 HTTP Version Not Supported: unsupported protocol version[end: <nil>]
+

@@ -1,0 +1,8 @@
+### bad-header  (port 18080)
+### request: GET /healthz HTTP/1.1\r\nHost: x\r\nBad Header: y\r\n\r\n
+HTTP/1.1 400 Bad Request: invalid header name
+Content-Type: text/plain; charset=utf-8
+Connection: close
+
+400 Bad Request: invalid header name[end: <nil>]
+

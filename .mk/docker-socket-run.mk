@@ -52,7 +52,7 @@ SOCK_GID := $(shell \
 	fi)
 
 # App runtime args (drop-in defaults)
-DOCKER_RUN_ARGS ?= -listen-addr 0.0.0.0:8888
+DOCKER_RUN_ARGS ?= --listen-addr 0.0.0.0:8888
 DOCKER_RUN_PORT ?= 8888
 
 # The exporter writes nothing to its filesystem and needs no Linux capability (it only reads the

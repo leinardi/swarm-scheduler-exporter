@@ -1,0 +1,54 @@
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"plain","s":"plain"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"with space","s":"with space"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"say \"hi\"","s":"say \"hi\""}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"k=v","s":"k=v"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"C:\\path\\x","s":"C:\\path\\x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"line1\nline2","s":"line1\nline2"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"a\tb","s":"a\tb"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"a\rb","s":"a\rb"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"a\u0001b","s":"a\u0001b"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"ab","s":"ab"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"a\u0008b\u000cc","s":"a\u0008b\u000cc"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"a\ufffdb","s":"a\ufffdb"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"\ufffd","s":"\ufffd"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"ok 🚀","s":"ok 🚀"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"🚀","s":"🚀"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"","s":""}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"html <a>&amp;","s":"html <a>&amp;"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"nbsp x","s":"nbsp x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"zw​x","s":"zw​x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"ls\u2028x","s":"ls\u2028x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"é","s":"é"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"repl�x","s":"repl�x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"bidi‮x","s":"bidi‮x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"c1x","s":"c1x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"{brace}","s":"{brace}"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"-dash","s":"-dash"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"日本語","s":"日本語"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"😀\u0000","s":"😀\u0000"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"tab\tand space","s":"tab\tand space"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"trailing ","s":"trailing "}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":" leading","s":" leading"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"keys","with space":"v","":"emptykey","a=b":"v","q\"k":"v","dot.key":"v","k\nnl":"v"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"ints","zero":0,"neg":-42,"min":-9223372036854775808,"max":9223372036854775807,"umax":18446744073709551615,"u":7}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"floats","half":0.5,"big":1e+21,"e20":100000000000000000000,"small":1e-7,"e6":0.000001,"mil":123456789,"negzero":-0,"sum":0.3,"rsum":0.30000000000000004,"stamp":1729771234.5,"one":1,"maxf":1.7976931348623157e+308,"sub":5e-324,"e21m":123456789012345680000}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"nan","nan":"!ERROR:json: unsupported value: NaN","after":"x"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"inf","pinf":"!ERROR:json: unsupported value: +Inf","ninf":"!ERROR:json: unsupported value: -Inf"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"bools","t":true,"f":false}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"durations","zero":0,"ms":500000000,"s30":30000000000,"m1":60000000000,"hms":3723500000000,"ns":1,"us":1500,"neg":-2000000000,"min":-9223372036854775808,"max":9223372036854775807,"h100":360000000000000,"frac":1234567890,"ms1":1000001}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"times","cet":"2026-10-25T14:03:04.567891234+01:00","utc":"2026-01-02T03:04:05Z","frac":"2026-01-02T03:04:05.12Z","neg":"1999-12-31T23:59:59.999999999-05:30","zero":"0001-01-01T00:00:00Z"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"slices and errors","list":["a","b c"],"empty":[],"one":["x"],"ctl":["a\bb\f","\u0001","\u2028\u2029","nl\n",""],"quoted":["\"q\"","<&>"],"err":"dial tcp: \"x\" refused","wrapped":"service list: boom\nline2","nilerr":null}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"invalid utf8 slice","bad":["\ufffd"]}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"groups","req":{"method":"GET","n":2},"a":{"b":{"c":1}},"inl":1,"sp ace":{"k":"v w"}}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"DEBUG","msg":"debug"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"info"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"WARN","msg":"warn"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"ERROR","msg":"error"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO+1","msg":"info+1"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"DEBUG-1","msg":"debug-1"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"ERROR+4","msg":"error+4"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO+3","msg":"warn-1"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"with","component":"reconciler","g":{"x":1,"y":2}}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"with empty group","c":"d"}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"nested with groups","g1":{"g2":{"h":{"i":3}}}}
+{"time":"2026-10-25T14:03:04.567891234+01:00","level":"INFO","msg":"","k":1}

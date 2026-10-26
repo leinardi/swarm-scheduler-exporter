@@ -3,19 +3,19 @@
     "allow": [
       "Bash(make check)",
       "Bash(make check-stage)",
-      "Bash(make go-build)",
-      "Bash(make go-test)",
-      "Bash(make go-vet)",
-      "Bash(make go-vet-integration)",
-      "Bash(make go-lint)",
+      "Bash(make rust-build)",
+      "Bash(make rust-test)",
+      "Bash(make rust-clippy)",
+      "Bash(make rust-fmt)",
+      "Bash(make rust-fmt-check)",
       "Bash(make verify)",
-      "Bash(make verify-go)",
-      "Bash(go test *)",
-      "Bash(go build *)",
-      "Bash(go vet *)",
-      "Bash(gofmt *)",
+      "Bash(make test-integration)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
+      "Bash(rustfmt *)",
       "Bash(pre-commit run *)",
-      "Bash(golangci-lint run *)",
       "Bash(scripts/check-*.sh)",
       "Bash(bash .github/scripts/binary-attestation-status.test.sh)",
       "mcp__serena__initial_instructions",
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/gofmt-on-edit.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/rustfmt-on-edit.sh"
           }
         ]
       }

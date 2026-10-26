@@ -1,0 +1,95 @@
+-	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=1.0.0	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=1.0.0;escaping=allow-utf-8	-	text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+application/json	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4;escaping=underscores	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4;escaping=dots	-	text/plain; version=0.0.4; charset=utf-8; escaping=dots	
+text/plain;version=0.0.4;escaping=values	-	text/plain; version=0.0.4; charset=utf-8; escaping=values	
+text/plain;version=0.0.4;escaping=bogus	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain; version=0.0.4; escaping=allow-utf-8	-	text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited,text/plain;version=0.0.4;escaping=allow-utf-8	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+text/plain;version=0.0.4;escaping=allow-utf-8;q=0.5,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.9	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+application/openmetrics-text;version=1.0.0;escaping=allow-utf-8,text/plain;version=0.0.4;escaping=dots;q=0.5	-	text/plain; version=0.0.4; charset=utf-8; escaping=dots	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=text	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=text; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=compact-text	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=compact-text; escaping=underscores	
+application/openmetrics-text;version=1.0.0	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	zstd,gzip	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	*	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	deflate	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	identity;q=0.5, gzip;q=0.6	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	GZIP	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip, identity	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/openmetrics-text;version=1.0.0;escaping=allow-utf-8;q=0.7,application/openmetrics-text;version=0.0.1;q=0.6,text/plain;version=1.0.0;escaping=allow-utf-8;q=0.5,text/plain;version=0.0.4;q=0.4,*/*;q=0.3	-	text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+application/openmetrics-text;version=1.0.0;escaping=allow-utf-8;q=0.6,application/openmetrics-text;version=0.0.1;escaping=allow-utf-8;q=0.5,text/plain;version=1.0.0;escaping=allow-utf-8;q=0.4,text/plain;version=0.0.4;escaping=allow-utf-8;q=0.3,*/*;q=0.2	-	text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+*/*	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+*	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/*	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/*	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+*/plain	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain/x	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+ text/plain 	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4;q=0	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;q=0.5,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.5	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.5,text/plain;q=0.5	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+*/*;q=1,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.9	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.1,*/*	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+text/plain;escaping=allow-utf-8;escaping=dots	-	text/plain; version=0.0.4; charset=utf-8; escaping=dots	
+text/plain;escaping=dots;version=0.0.4	-	text/plain; version=0.0.4; charset=utf-8; escaping=dots	
+application/json;escaping=allow-utf-8,text/plain	-	text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+application/json;escaping=allow-utf-8;q=0.1,text/plain	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.5	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4=1	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;;version=0.0.4	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain; q=0.5	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;q= 0.5,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.4	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+text/plain;q=0x1p-1,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.4	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;q=1_0,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.4	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;q=nan,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;q=-1,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=-0.5	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+text/plain;q=inf,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.30000001,text/plain;q=0.3	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;Q=0.1,text/plain;q=0.2	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+TEXT/PLAIN	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;charset=latin1	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4;escaping=allow-utf-8,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited	-	text/plain; version=0.0.4; charset=utf-8; escaping=allow-utf-8	
+,,text/plain,	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+a/b,c/d,e/f,g/h,i/j,k/l,m/n,o/p,q/r,s/t,u/v,w/x,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+*/*;q=0.5,text/*;q=0.5,text/plain;q=0.5,application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.5;escaping=dots	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;escaping=allow-utf-8	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=allow-utf-8	
+application/vnd.google.protobuf;proto=other;encoding=delimited	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/vnd.google.protobuf	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/openmetrics-text	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/openmetrics-text;version=0.0.1;escaping=values	-	text/plain; version=0.0.4; charset=utf-8; escaping=values	
+text/plain|application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited	-	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited|text/plain	-	application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0.5, identity;q=0.5	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	identity;q=0, gzip;q=0	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0.0001	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	gzip;q=1.5	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	gzip;q=2	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=.5	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip; q=0.5, identity;q=0.4	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	gzip ;q=0.5,identity;q=0.4	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	gzip;Q=0.5	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;level=1	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0.5;level=1	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	x-gzip	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	br, gzip	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	*;q=0.5, gzip;q=0.4	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0.4, *;q=0.5	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	identity	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	identity;q=0	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	*;q=0	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4		text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	 	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip,	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	,gzip	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	gzip;q=0.12345678901234567890123	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	deflate|gzip	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip
+text/plain;version=0.0.4	gzip;q=0|identity	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	
+text/plain;version=0.0.4	zstd;q=1,gzip;q=0.9	text/plain; version=0.0.4; charset=utf-8; escaping=underscores	gzip

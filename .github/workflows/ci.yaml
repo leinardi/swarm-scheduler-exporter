@@ -19,8 +19,8 @@ permissions:
 
 jobs:
   # The authoritative lint gate: every pre-commit hook over every file, with the versions pinned in
-  # .pre-commit-config.yaml. Skipped hooks, each run by a dedicated job below: go-test-repo-mod
-  # (go-test, with -race) and audit-deps-go (go-vulncheck, which needs the network).
+  # .pre-commit-config.yaml. Skipped hooks, each run by the rust job below: cargo-test and
+  # cargo-deny (which needs the network).
   pre-commit-all:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -29,15 +29,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The system Go that the language: system hooks (licence headers, suppression ratchet, docs
-      # links) and the golangci-lint hooks build with. It saves and restores a Go cache only on a
-      # pull request: on a push it would write the master cache scope the release job restores
-      # (docs/release.md, "Workflow tokens").
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # For the cargo-fmt, cargo-clippy and cargo-machete hooks and the language: system hooks that
+      # run cargo (docs links). The Rust cache is saved only on a pull request: on a push it would
+      # write the master cache scope the release job restores (docs/release.md, "Workflow tokens").
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          go-version-file: go.mod
-          cache: ${{ github.event_name == 'pull_request' }}
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name == 'pull_request' }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -60,11 +64,11 @@ jobs:
 
       - name: Run every pre-commit hook on every file
         env:
-          SKIP: go-test-repo-mod,audit-deps-go
+          SKIP: cargo-test,cargo-deny
         run: pre-commit run --all-files --show-diff-on-failure
 
       # pre-commit fails a hook that modifies a tracked file, which covers the auto-fixing hooks
-      # (markdownlint fix, prettier, dclint fix, golangci-lint fmt); this also fails on a file a hook
+      # (markdownlint fix, prettier, dclint fix); this also fails on a file a hook
       # creates, which its diff check does not see, so no fix can pass silently.
       - name: Fail if a hook modified a file
         run: |
@@ -134,9 +138,6 @@ jobs:
             check-added-large-files
             dclint
             droast
-            golangci-lint-config-verify
-            golangci-lint-fmt
-            golangci-lint-full
 
   markdownlint:
     # Reports inline PR review comments over a diff range; a manual dispatch has
@@ -238,37 +239,6 @@ jobs:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
 
-  # The meta-tests under test/, with the tool they drive: a missing golangci-lint fails here
-  # (SSE_REQUIRE_TOOLS=1) instead of skipping, as it may on a developer machine.
-  repo-gates:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Saves and restores a Go cache only on a pull request: on a push it would write the master
-      # cache scope the release job restores (docs/release.md, "Workflow tokens").
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ github.event_name == 'pull_request' }}
-
-      # The version is the golangci-lint rev in .pre-commit-config.yaml; test/toolchain holds the
-      # two together.
-      - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          install-only: true
-          version: v2.14.0
-
-      - name: Run the repository meta-tests
-        env:
-          SSE_REQUIRE_TOOLS: "1"
-        run: go test ./test/...
-
   # The release workflow's scripts, tested with a stub gh: no network, no token.
   release-scripts:
     runs-on: ubuntu-latest
@@ -283,48 +253,46 @@ jobs:
       - name: Test binary-attestation-status.sh
         run: bash .github/scripts/binary-attestation-status.test.sh
 
-  # Modelled on runhold's go-test.yaml, without its reusable-workflow and cache-warmup split:
-  # setup-go's built-in cache (keyed on go.sum) is enough at this size.
-  go-test:
+  # The Rust workspace: the same workspace-wide commands as make verify and the pre-commit hooks,
+  # plus cargo-deny (advisories, licences, bans and sources; the advisory database needs the
+  # network). The toolchain matches rust-toolchain.toml. The cache is saved only on a pull
+  # request, as in pre-commit-all.
+  rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Saves and restores a Go cache only on a pull request: on a push it would write the master
-      # cache scope the release job restores (docs/release.md, "Workflow tokens").
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          go-version-file: go.mod
-          cache: ${{ github.event_name == 'pull_request' }}
+          toolchain: 1.98.1
+          components: clippy, rustfmt
 
-      - name: Run unit tests with the race detector
-        run: go test -race ./...
-
-  # The source-aware govulncheck scan (make audit-deps-go). It needs Go and the network, so it
-  # does not fit the reviewdog pre-commit-hooks job above, which runs an explicit hook allowlist.
-  # The .mk snippets are committed, so the make bootstrap only reads them here.
-  go-vulncheck:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Saves and restores a Go cache only on a pull request: on a push it would write the master
-      # cache scope the release job restores (docs/release.md, "Workflow tokens").
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          go-version-file: go.mod
-          cache: ${{ github.event_name == 'pull_request' }}
+          save-if: ${{ github.event_name == 'pull_request' }}
 
-      - name: Scan dependencies for known vulnerabilities
-        run: make audit-deps-go
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      # --all-features: the harness code behind testenv's integration feature is linted too.
+      - name: Lint with clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run the tests
+        run: cargo test --workspace --locked
+
+      - name: Check dependencies with cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          # The root is a package as well as the workspace, so without --workspace cargo-deny
+          # would check the exporter's graph only, not the meta and testenv crates.
+          arguments: --workspace
+          command: check
 
   # The one required check that stands for the rest: GitHub counts a skipped required job as passing,
   # so this job runs always and decides. On a pull request every needed job must succeed; on a push
@@ -335,10 +303,8 @@ jobs:
     needs:
       - pre-commit-all
       - conventional-commits
-      - repo-gates
       - release-scripts
-      - go-test
-      - go-vulncheck
+      - rust
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

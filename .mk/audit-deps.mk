@@ -25,29 +25,17 @@
 ifndef MK_LOCAL_AUDIT_DEPS_INCLUDED
 MK_LOCAL_AUDIT_DEPS_INCLUDED := 1
 
-# Local snippet (NOT part of make-common): check the dependencies this repository ships against
-# known vulnerabilities, with the tool the Go ecosystem publishes.
-#
-# What this is and is not. govulncheck is source-aware: it reports a vulnerable module only when
-# the build actually reaches the affected symbol, so it answers "is this repository exposed", not
-# "does a vulnerable version appear in the graph".
-#
-# It needs the network, and govulncheck over every package is too slow to run on every Go change.
-# This target is the one that is run deliberately, whenever go.mod or go.sum change.
-#
-# -test and -tags=integration scan the test files and the integration harness too: they run on
-# developer machines and in CI, and a vulnerable dependency they reach is reached there.
-#
-# The version is pinned so two runs mean the same thing. Bump it deliberately.
-
-GOVULNCHECK_VERSION ?= v1.8.0
-GOVULNCHECK        ?= golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+# Local snippet (NOT part of make-common): check every Rust dependency against the RustSec
+# advisory database, with cargo-deny as configured in deny.toml. It is not reachability-aware: any
+# advisory against a crate in the graph counts, which is why every ignore in deny.toml carries a
+# reason. It needs the network for the database, so it runs when Cargo.toml, Cargo.lock or
+# deny.toml change (the cargo-deny hook, with every check), on every pull request (CI's rust job)
+# and every week (scheduled-scan), and deliberately here. --workspace: the root is a package as
+# well as the workspace, and cargo-deny would otherwise check its graph alone. CARGO comes from
+# rust.mk.
 
 .PHONY: audit-deps
-audit-deps: audit-deps-go ## Scan Go dependencies for known vulnerabilities (network required)
-
-.PHONY: audit-deps-go
-audit-deps-go: ## Run the pinned govulncheck over every Go package, tests included
-	$(GO) run $(GOVULNCHECK) -test -tags=integration ./...
+audit-deps: ## Check every Rust dependency against the RustSec advisories (cargo-deny; network required)
+	$(CARGO) deny --workspace check advisories
 
 endif  # MK_LOCAL_AUDIT_DEPS_INCLUDED

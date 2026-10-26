@@ -9,14 +9,15 @@
 # matches on a path prefix, so every enabled section allows every GET under it. SERVICES and TASKS,
 # which the exporter always needs, also allow service and task logs from across the Swarm, and the
 # service list carries every spec, environment variables included. CONTAINERS=1 (needed by
-# -containers) allows every GET under /containers: logs, stats, top, archive and export. Logs,
-# specs and container files can hold secrets. Drop -containers and set CONTAINERS=0 if you do not
+# --containers) allows every GET under /containers: logs, stats, top, archive and export. Logs,
+# specs and container files can hold secrets. Drop --containers and set CONTAINERS=0 if you do not
 # need container metrics: that narrows the exposure, but log access stays. Exact per-endpoint rules
 # would need a custom haproxy.cfg, which this example does not attempt.
 #
-# HAProxy closes an idle event stream after 10 minutes (its "timeout client"): the exporter
-# reconnects and logs that at info. The task poll sends no filter in its URL, so a large cluster
-# does not run into the proxy's request size limit.
+# HAProxy cuts an idle event stream after about 10 minutes (its "timeout client"; a quiet stream
+# was held 660s) without ending the chunked body: the exporter logs the cut at warn and
+# reconnects. The task poll sends no filter in its URL, so a large cluster does not run into the
+# proxy's request size limit.
 
 services:
   docker-socket-proxy:
@@ -65,14 +66,14 @@ services:
     networks:
       - socket-proxy
 
-    # -containers needs CONTAINERS=1 in socket-proxy.env; drop both if you do not need it.
-    command: [ "-poll-delay", "10s", "-containers" ]
+    # --containers needs CONTAINERS=1 in socket-proxy.env; drop both if you do not need it.
+    command: [ "--poll-delay", "10s", "--containers" ]
 
     # The image's HEALTHCHECK, spelled out: the binary probes its own /healthz, and Swarm replaces
-    # a task that stays unhealthy. If you change -listen-addr in command, add the same
-    # "-listen-addr", "<addr>" to test.
+    # a task that stays unhealthy. If you change --listen-addr in command, add the same
+    # "--listen-addr", "<addr>" to test.
     healthcheck:
-      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "-healthcheck" ]
+      test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "--healthcheck" ]
       interval: 30s
       timeout: 5s
       start_period: 90s

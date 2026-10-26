@@ -1,0 +1,24 @@
+### get-metrics  (port 18080)
+### request: GET /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 200 OK
+Content-Type: text/plain; version=0.0.4; charset=utf-8; escaping=underscores
+Date: Sun, 25 Oct 2026 08:44:07 GMT
+Connection: close
+Transfer-Encoding: chunked
+
+800
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 0
+go_gc_duration_seconds{quantile="0.25"} 0
+go_gc_duration_seconds{quantile="0.5"} 0
+go_gc_duration_seconds{quantile="0.75"} 0
+go_gc_duration_seconds{quantile="1"} 0
+go_gc_duration_seconds_sum 0
+go_gc_duration_seconds_count 0
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+# HELP go_gc_gomemlimit_bytes Go runtime memory limit configured by the user, otherwise math.MaxInt64. This value is set by the GOMEMLIMIT environment variable, and the runtime/debug.SetMemoryLimit function. Sourced from /gc/gomemlimit:bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes 9.22337203685477

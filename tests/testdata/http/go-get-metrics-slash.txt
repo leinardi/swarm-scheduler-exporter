@@ -1,0 +1,12 @@
+### get-metrics-slash  (port 18080)
+### request: GET /metrics/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n
+HTTP/1.1 404 Not Found
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+Date: Sun, 25 Oct 2026 08:44:07 GMT
+Content-Length: 19
+Connection: close
+
+404 page not found
+[end: <nil>]
+
