@@ -139,7 +139,7 @@ pub fn register_metrics(
     must_register(nodes_by_state.register(registry));
     let exporter_metrics = Arc::new(ExporterMetrics::new(timestamps));
     must_register(exporter_metrics.register(registry));
-    let service_update = Arc::new(ServiceUpdateMetrics::new(custom, logger.clone()));
+    let service_update = Arc::new(ServiceUpdateMetrics::new(custom));
     must_register(service_update.register(registry));
     let containers = options.containers.enabled.then(|| {
         let containers = Arc::new(ContainersState::new(

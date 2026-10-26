@@ -27,11 +27,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::docker::types::{GoTime, Service};
 use crate::go_compat::float::from_int;
-use crate::logger::Logger;
 use crate::metrics::{
     Collector, GaugeVec, Kind, LabelsMismatch, RegisterError, Registry, constant_desc,
 };
@@ -104,27 +102,19 @@ pub fn clone_labels_with_state(
     labels
 }
 
-/// The three families.
+/// The service update metrics: the three families.
 #[derive(Debug)]
-struct Families {
+pub struct ServiceUpdateMetrics {
     state: Arc<GaugeVec>,
     started: Arc<GaugeVec>,
     completed: Arc<GaugeVec>,
-}
-
-/// The service update metrics; before they are configured, their use is an error, logged once.
-#[derive(Debug)]
-pub struct ServiceUpdateMetrics {
-    families: Option<Families>,
-    logger: Logger,
-    warned: AtomicBool,
 }
 
 impl ServiceUpdateMetrics {
     /// The families, labelled with the base labels plus `custom_labels`, and `state` last on
     /// the state family.
     #[must_use]
-    pub fn new(custom_labels: &CustomLabels, logger: Logger) -> Self {
+    pub fn new(custom_labels: &CustomLabels) -> Self {
         let mut base = vec![
             LABEL_STACK.to_owned(),
             LABEL_SERVICE.to_owned(),
@@ -144,76 +134,48 @@ impl ServiceUpdateMetrics {
             )))
         };
         Self {
-            families: Some(Families {
-                state: family("update_state_info", UPDATE_STATE_HELP, &with_state),
-                started: family(
-                    "update_started_timestamp_seconds",
-                    UPDATE_STARTED_HELP,
-                    &base,
-                ),
-                completed: family(
-                    "update_completed_timestamp_seconds",
-                    UPDATE_COMPLETED_HELP,
-                    &base,
-                ),
-            }),
-            logger,
-            warned: AtomicBool::new(false),
+            state: family("update_state_info", UPDATE_STATE_HELP, &with_state),
+            started: family(
+                "update_started_timestamp_seconds",
+                UPDATE_STARTED_HELP,
+                &base,
+            ),
+            completed: family(
+                "update_completed_timestamp_seconds",
+                UPDATE_COMPLETED_HELP,
+                &base,
+            ),
         }
     }
 
-    /// Metrics that were never configured: the Go exporter's nil families.
-    #[must_use]
-    pub fn unconfigured(logger: Logger) -> Self {
-        Self {
-            families: None,
-            logger,
-            warned: AtomicBool::new(false),
-        }
-    }
-
-    /// Registers the three families; nothing when unconfigured.
+    /// Registers the three families.
     ///
     /// # Errors
     ///
     /// The registry's refusal.
     pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        let Some(families) = &self.families else {
-            return Ok(());
-        };
-        for family in [&families.state, &families.started, &families.completed] {
+        for family in [&self.state, &self.started, &self.completed] {
             registry.register(Arc::clone(family) as Arc<dyn Collector>)?;
         }
         Ok(())
     }
 
-    /// The families when configured, else the error, logged the first time only.
-    fn families(&self, action: &str) -> Option<&Families> {
-        if self.families.is_none() && !self.warned.swap(true, Ordering::SeqCst) {
-            self.logger.error(
-                &format!("service update metrics not configured before use; skipping {action}"),
-                &[],
-            );
-        }
-        self.families.as_ref()
-    }
-
     /// The state family.
     #[must_use]
-    pub fn state(&self) -> Option<&GaugeVec> {
-        self.families.as_ref().map(|families| &*families.state)
+    pub fn state(&self) -> &GaugeVec {
+        &self.state
     }
 
     /// The started-timestamp family.
     #[must_use]
-    pub fn started(&self) -> Option<&GaugeVec> {
-        self.families.as_ref().map(|families| &*families.started)
+    pub fn started(&self) -> &GaugeVec {
+        &self.started
     }
 
     /// The completed-timestamp family.
     #[must_use]
-    pub fn completed(&self) -> Option<&GaugeVec> {
-        self.families.as_ref().map(|families| &*families.completed)
+    pub fn completed(&self) -> &GaugeVec {
+        &self.completed
     }
 
     /// Writes every known state of `service` (1 for the current one, completed without an
@@ -227,38 +189,30 @@ impl ServiceUpdateMetrics {
         service: &Service,
         metadata: &ServiceMetadata,
     ) -> Result<(), LabelsMismatch> {
-        let Some(families) = self.families("emission") else {
-            return Ok(());
-        };
         let base = labels_for_metadata(metadata);
         let status = service.update_status.as_ref();
         let current = update_state_from_swarm(status.map(|status| status.state.as_str()));
         for state in KNOWN_STATES {
             let value = if state == current { 1.0 } else { 0.0 };
-            families
-                .state
+            self.state
                 .set_with(&clone_labels_with_state(&base, state), value)?;
         }
         let seconds = |time: Option<GoTime>| time.map_or(0.0, |time| from_int(time.unix()));
         let started = seconds(status.and_then(|status| status.started_at));
         let completed = seconds(status.and_then(|status| status.completed_at));
-        families.started.set_with(&base, started)?;
-        families.completed.set_with(&base, completed)
+        self.started.set_with(&base, started)?;
+        self.completed.set_with(&base, completed)
     }
 
     /// Deletes every series of a removed service.
     pub fn clear(&self, metadata: &ServiceMetadata) {
-        let Some(families) = self.families("clear") else {
-            return;
-        };
         let base = labels_for_metadata(metadata);
         for state in KNOWN_STATES {
-            families
-                .state
+            self.state
                 .delete_with(&clone_labels_with_state(&base, state));
         }
-        families.started.delete_with(&base);
-        families.completed.delete_with(&base);
+        self.started.delete_with(&base);
+        self.completed.delete_with(&base);
     }
 }
 

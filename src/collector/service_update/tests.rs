@@ -31,9 +31,7 @@ use super::*;
 use crate::collector::metrics_ids::SERVICE_MODE_REPLICATED;
 use crate::collector::types::display_name;
 use crate::docker::types::UpdateStatus;
-use crate::logger::Level;
 use crate::metrics::testing::gather_series;
-use crate::test_support::capture_logs;
 
 /// Go's `makeTestMetadata`.
 fn test_metadata(stack: &str, service: &str, mode: &str) -> ServiceMetadata {
@@ -56,7 +54,7 @@ fn service_labels(stack: &str, service: &str, mode: &str) -> BTreeMap<String, St
 }
 
 fn metrics() -> ServiceUpdateMetrics {
-    ServiceUpdateMetrics::new(&CustomLabels::default(), capture_logs(Level::INFO).0)
+    ServiceUpdateMetrics::new(&CustomLabels::default())
 }
 
 fn time(seconds: i64) -> GoTime {
@@ -135,7 +133,6 @@ fn updating_state_is_the_one_set() {
         assert_eq!(
             metrics
                 .state()
-                .unwrap()
                 .get_with(&clone_labels_with_state(&base, state)),
             Some(want),
             "{state}"
@@ -155,13 +152,9 @@ fn no_update_status_is_completed() {
         .unwrap();
     let base = service_labels("stack", "svc", SERVICE_MODE_REPLICATED);
     let completed = clone_labels_with_state(&base, UPDATE_STATE_COMPLETED);
-    assert_eq!(metrics.state().unwrap().get_with(&completed), Some(1.0));
-    assert_eq!(
-        metrics.started().unwrap().get_with(&base),
-        Some(0.0),
-        "0 if unknown"
-    );
-    assert_eq!(metrics.completed().unwrap().get_with(&base), Some(0.0));
+    assert_eq!(metrics.state().get_with(&completed), Some(1.0));
+    assert_eq!(metrics.started().get_with(&base), Some(0.0), "0 if unknown");
+    assert_eq!(metrics.completed().get_with(&base), Some(0.0));
 }
 
 /// Go: `TestUpdateServiceUpdateMetricsForService_TimestampsPopulated`, plus a fraction, which
@@ -186,14 +179,8 @@ fn timestamps_are_whole_seconds() {
         )
         .unwrap();
     let base = service_labels("stack", "svc", SERVICE_MODE_REPLICATED);
-    assert_eq!(
-        metrics.started().unwrap().get_with(&base),
-        Some(1_700_000_000.0)
-    );
-    assert_eq!(
-        metrics.completed().unwrap().get_with(&base),
-        Some(1_700_000_060.0)
-    );
+    assert_eq!(metrics.started().get_with(&base), Some(1_700_000_000.0));
+    assert_eq!(metrics.completed().get_with(&base), Some(1_700_000_060.0));
 }
 
 /// Go: `TestClearServiceUpdateMetrics_DeletesSeries`
@@ -204,9 +191,9 @@ fn clear_deletes_every_series() {
     metrics
         .update_for_service(&Service::default(), &metadata)
         .unwrap();
-    let state = Arc::clone(&metrics.families.as_ref().unwrap().state);
-    let started = Arc::clone(&metrics.families.as_ref().unwrap().started);
-    let completed = Arc::clone(&metrics.families.as_ref().unwrap().completed);
+    let state = Arc::clone(&metrics.state);
+    let started = Arc::clone(&metrics.started);
+    let completed = Arc::clone(&metrics.completed);
     assert_eq!(
         gather_series(Arc::clone(&state) as Arc<dyn Collector>).len(),
         5
@@ -220,8 +207,8 @@ fn clear_deletes_every_series() {
 #[test]
 fn families_carry_go_names_help_and_label_order() {
     let custom = CustomLabels::new(&["team".to_owned()], &["team".to_owned()]);
-    let metrics = ServiceUpdateMetrics::new(&custom, capture_logs(Level::INFO).0);
-    let desc = |family: Option<&GaugeVec>| Arc::clone(&family.unwrap().descs()[0]);
+    let metrics = ServiceUpdateMetrics::new(&custom);
+    let desc = |family: &GaugeVec| Arc::clone(&family.descs()[0]);
     let state = desc(metrics.state());
     assert_eq!(state.name(), "swarm_service_update_state_info");
     assert_eq!(state.help(), UPDATE_STATE_HELP);
@@ -263,33 +250,4 @@ fn families_carry_go_names_help_and_label_order() {
     let registry = Registry::new();
     metrics.register(&registry).unwrap();
     assert!(metrics.register(&registry).is_err());
-}
-
-/// The Go families are nil until configured: the first use logs an error, once for the life of
-/// the metrics, and nothing is written.
-#[test]
-fn unconfigured_metrics_log_one_error() {
-    let (logger, sink) = capture_logs(Level::INFO);
-    let metrics = ServiceUpdateMetrics::unconfigured(logger);
-    let metadata = test_metadata("stack", "svc", SERVICE_MODE_REPLICATED);
-    metrics
-        .update_for_service(&Service::default(), &metadata)
-        .unwrap();
-    metrics.clear(&metadata);
-    metrics
-        .update_for_service(&Service::default(), &metadata)
-        .unwrap();
-    assert_eq!(
-        sink.contents(),
-        "level=ERROR service update metrics not configured before use; skipping emission\n"
-    );
-    assert!(metrics.state().is_none());
-    metrics.register(&Registry::new()).unwrap();
-
-    let (logger, sink) = capture_logs(Level::INFO);
-    ServiceUpdateMetrics::unconfigured(logger).clear(&metadata);
-    assert_eq!(
-        sink.contents(),
-        "level=ERROR service update metrics not configured before use; skipping clear\n"
-    );
 }

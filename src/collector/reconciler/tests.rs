@@ -512,7 +512,7 @@ fn fixture_with(docker: TestDocker, policy: &ReconcilerPolicy) -> Fixture {
     let collectors = Collectors {
         custom_labels: custom.clone(),
         replica_gauges: Arc::new(ReplicaGauges::new(&custom)),
-        service_update: Arc::new(ServiceUpdateMetrics::new(&custom, logger.clone())),
+        service_update: Arc::new(ServiceUpdateMetrics::new(&custom)),
         nodes_by_state: Arc::new(NodesByState::new(logger.clone())),
         replicas_state: Arc::new(ReplicasState::new(&custom, logger.clone())),
         metrics: Arc::new(ExporterMetrics::new(Arc::new(Timestamps::default()))),
@@ -1536,7 +1536,7 @@ async fn a_removed_service_deletes_its_update_series() {
     fixture.complete_first_resync().await;
     let labels = labels_for_metadata(fixture.reconciler.metadata().get("svc1").unwrap());
     let service_update = Arc::clone(&fixture.collectors.service_update);
-    let started = service_update.started().unwrap();
+    let started = service_update.started();
     assert_eq!(started.get_with(&labels), Some(0.0));
     fixture.docker.set_services(vec![]);
     fixture

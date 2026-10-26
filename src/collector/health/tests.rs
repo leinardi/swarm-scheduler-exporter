@@ -58,7 +58,7 @@ fn reconciler_handle() -> ReconcilerHandle {
     let collectors = Collectors {
         custom_labels: custom.clone(),
         replica_gauges: Arc::new(ReplicaGauges::new(&custom)),
-        service_update: Arc::new(ServiceUpdateMetrics::new(&custom, logger.clone())),
+        service_update: Arc::new(ServiceUpdateMetrics::new(&custom)),
         nodes_by_state: Arc::new(NodesByState::new(logger.clone())),
         replicas_state: Arc::new(ReplicasState::new(&custom, logger.clone())),
         metrics: Arc::new(ExporterMetrics::new(Arc::new(Timestamps::default()))),
