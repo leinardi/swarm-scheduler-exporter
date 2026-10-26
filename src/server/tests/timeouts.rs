@@ -209,6 +209,41 @@ async fn a_request_body_does_not_start_the_next_request() {
     );
 }
 
+/// Go: a `Content-Length` after 1024 spaces still frames its body, however long the line. Sent
+/// alone, the connection idles 60s after the answer (60.01s); with a body that looks like a
+/// request, then a whole request and a partial one, both are answered and the partial head is
+/// cut 5s after the answers (5.00s).
+#[tokio::test(start_paused = true)]
+async fn a_padded_content_length_still_frames_the_body() {
+    let padded = |length: usize| {
+        let mut head = b"GET /healthz HTTP/1.1\r\nHost: x\r\nContent-Length: ".to_vec();
+        head.extend(vec![b' '; 1024]);
+        head.extend(format!("{length}\r\n\r\n").bytes());
+        head
+    };
+    let start = Instant::now();
+    let mut client = connect(healthy_app());
+    let mut request = padded(4);
+    request.extend(b"\r\n\r\n");
+    client.write_all(&request).await.unwrap();
+    assert_eq!(
+        record(&mut client, start).await,
+        [Seen::Read(0, OK.to_owned()), Seen::End(60_000)]
+    );
+
+    let start = Instant::now();
+    let mut client = connect(healthy_app());
+    let body = b"GET /fake HTTP/1.1\r\nContent-Length: 99999\r\n\r\n";
+    let mut requests = padded(body.len());
+    requests.extend(body);
+    requests.extend(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\nGET /hea");
+    client.write_all(&requests).await.unwrap();
+    let mut response = Vec::new();
+    let _ = client.read_to_end(&mut response).await;
+    assert_eq!(String::from_utf8_lossy(&response).matches(OK).count(), 2);
+    assert_eq!(start.elapsed().as_millis(), 5000);
+}
+
 /// Go: a 12s handler is answered at 12s although the 10s read deadline passed, which only
 /// cancels the request's context; the connection then idles 60s: the end at 72s.
 #[tokio::test(start_paused = true)]
