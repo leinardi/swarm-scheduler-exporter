@@ -134,7 +134,12 @@ Prometheus exporter).
   go-connections' transport (10s dial, 15s keep-alive, two idle for 30s, retry on a reused
   connection, gzip on TCP only). go-connections also sends TCP hosts through `ProxyFromEnvironment`:
   a client without it is a breaking change to list. Keep bollard for a test harness, re-setting the
-  healthcheck before every update. (8 of 8 ping cases, moby v0.6.0)
+  healthcheck before every update. (8 of 8 ping cases, moby v0.6.0) A scoped IPv6
+  `tcp://[::1%25lo]:2375` works in Go: `url.Parse` decodes `%25` to the zone (`::1%lo`), the
+  dialer resolves it to an interface index and net/http's `Host` drops it (`removeZone`);
+  `lookup_host` refuses `%` → port `parseHost`'s checks, build the `SocketAddrV6` with its scope
+  (sysfs `ifindex`, else the zone as a number, else 0), and strip the zone from `Host`. (Go 1.26
+  probe against a fake Engine on `[::1]`)
 - **Event streams:** every real close of Docker's chunked stream is a cut without the
   terminating chunk (HAProxy timeout, stopped daemon), surfaced by hyper as a body `Err` with
   `is_incomplete_message() == false` → classify "the body returned Err" vs "ended", decode with

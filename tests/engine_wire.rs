@@ -731,6 +731,34 @@ async fn engine_wire_pins_requests_and_metrics_api_1_56() {
         .or_panic();
 }
 
+/// A scoped IPv6 `DOCKER_HOST` dials the loopback through its zone, `%25` decoded as Go's
+/// `url.Parse` decodes it, and sends the `Host` header without the zone, as net/http does.
+#[tokio::test(flavor = "multi_thread")]
+async fn engine_wire_dials_a_scoped_ipv6_host() {
+    let engine = FakeEngine::start_ipv6(FIXTURE_SETS[1]).await;
+    let port = engine.addr().port();
+    let client = FakeEngine::client_for(&format!("tcp://[::1%25lo]:{port}"));
+    let services = tokio::time::timeout(TEST_TIMEOUT, with_docker_timeout(client.service_list()))
+        .await
+        .or_panic()
+        .or_panic();
+    assert!(!services.is_empty(), "the services fixture, listed");
+    let requests = engine.all_requests();
+    let sent: Vec<_> = requests
+        .iter()
+        .map(|entry| format!("{} {}", entry.method, entry.path))
+        .collect();
+    assert_eq!(sent, ["HEAD /_ping", "GET /services"]);
+    for entry in &requests {
+        assert_eq!(
+            entry.host,
+            format!("[::1]:{port}"),
+            "Host of {}",
+            entry.path
+        );
+    }
+}
+
 /// Socket proxies such as `HAProxy` reject a request line past their buffer (16 KB by default);
 /// 8 KB leaves room for the headers that share it.
 const MAX_TASK_LIST_REQUEST_URI: usize = 8 << 10;

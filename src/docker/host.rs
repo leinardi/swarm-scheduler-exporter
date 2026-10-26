@@ -104,36 +104,119 @@ fn parse_tcp_url(addr: &str) -> Result<(String, String), String> {
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    check_host(host)?;
-    Ok((host.to_owned(), unescape_path(path)?))
+    Ok((parse_host(host)?, unescape_path(path)?))
 }
 
-/// Go's `parseHost` checks: an IPv6 literal closed by `]`, a port of digits only, and no
-/// character a host cannot hold.
-fn check_host(host: &str) -> Result<(), String> {
-    let port = if let Some(literal) = host.strip_prefix('[') {
-        let Some(close) = literal.find(']') else {
+/// Go 1.26's `parseHost`: the host with its `%XX` escapes decoded, or the error after
+/// `parse "<url>": `. A bracketed literal must be an IPv6 address (`netip.ParseAddr`), its zone
+/// introduced by `%25` (RFC 6874) and decoded too, so `[::1%25lo]` becomes `[::1%lo]`; a port
+/// is digits only.
+fn parse_host(host: &str) -> Result<String, String> {
+    if host.rfind('[').is_some_and(|open| open > 0) {
+        return Err("invalid IP-literal".to_owned());
+    }
+    if host.starts_with('[') {
+        let Some(close) = host.rfind(']') else {
             return Err("missing ']' in host".to_owned());
         };
-        &literal[close + 1..]
-    } else {
-        host.rfind(':').map_or("", |colon| &host[colon..])
-    };
-    let valid_port = port.is_empty()
+        check_port(&host[close + 1..])?;
+        let literal = if let Some(zone) = host[..close].find("%25") {
+            let address = unescape_host(&host[..zone], false)?;
+            let zone_part = unescape_host(&host[zone..close], true)?;
+            format!("{address}{zone_part}")
+        } else {
+            unescape_host(&host[..close], false)?
+        };
+        check_ip_literal(&literal[1..])?;
+        let rest = unescape_host(&host[close..], false)?;
+        return Ok(format!("{literal}{rest}"));
+    }
+    if let Some(colon) = host.rfind(':') {
+        check_port(&host[colon..])?;
+    }
+    unescape_host(host, false)
+}
+
+/// Go's `validOptionalPort`, with its error.
+fn check_port(port: &str) -> Result<(), String> {
+    let valid = port.is_empty()
         || (port.starts_with(':') && port[1..].bytes().all(|byte| byte.is_ascii_digit()));
-    if !valid_port {
-        return Err(format!("invalid port {} after host", quote(port)));
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("invalid port {} after host", quote(port)))
     }
-    if let Some(bad) = host
-        .chars()
-        .find(|&character| character.is_ascii() && !is_host_char(character))
-    {
-        return Err(format!(
-            "invalid character {} in host name",
-            quote(&bad.to_string())
-        ));
+}
+
+/// `netip.ParseAddr` on a bracketed literal, which must be IPv6 (an IPv4-mapped one included),
+/// with a non-empty zone if it has one. The message is Go's for the common mistakes; any other
+/// malformed address gets `ParseAddr`'s generic one (Q9).
+fn check_ip_literal(literal: &str) -> Result<(), String> {
+    let failed = |reason: &str| {
+        Err(format!(
+            "invalid host: ParseAddr({}): {reason}",
+            quote(literal)
+        ))
+    };
+    let (address, zone) = literal
+        .split_once('%')
+        .map_or((literal, None), |(address, zone)| (address, Some(zone)));
+    if address.parse::<std::net::Ipv6Addr>().is_ok() {
+        return if zone == Some("") {
+            failed("zone must be a non-empty string")
+        } else {
+            Ok(())
+        };
     }
-    Ok(())
+    if zone.is_none() && address.parse::<std::net::Ipv4Addr>().is_ok() {
+        return Err("invalid IP-literal".to_owned());
+    }
+    if zone.is_some() && !address.contains(':') {
+        return failed("missing IPv6 address");
+    }
+    failed("unable to parse IP")
+}
+
+/// Go's `unescape` for a host (`encodeHost`) or a zone (`encodeZone`): besides `%25`, a `%XX`
+/// escape may only stand for a non-ASCII byte in a host, and only for an ASCII byte a host may
+/// hold, or a space, in a zone; a byte a host cannot hold is refused in either.
+fn unescape_host(host: &str, zone: bool) -> Result<String, String> {
+    let bytes = host.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'%' {
+            let escape = host.get(index..index + 3).unwrap_or(&host[index..]);
+            let value = escape
+                .get(1..3)
+                .filter(|hex| hex.bytes().all(|digit| digit.is_ascii_hexdigit()))
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                .ok_or_else(|| format!("invalid URL escape {}", quote(escape)))?;
+            let allowed = escape == "%25"
+                || if zone {
+                    value == b' '
+                        || (value.is_ascii() && value != b'%' && is_host_char(char::from(value)))
+                } else {
+                    !value.is_ascii()
+                };
+            if !allowed {
+                return Err(format!("invalid URL escape {}", quote(escape)));
+            }
+            out.push(value);
+            index += 3;
+        } else {
+            if byte.is_ascii() && !is_host_char(char::from(byte)) {
+                return Err(format!(
+                    "invalid character {} in host name",
+                    quote(&char::from(byte).to_string())
+                ));
+            }
+            out.push(byte);
+            index += 1;
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// The ASCII characters Go's `url` package accepts in a host: unreserved, sub-delims, `:`, `[`,
@@ -237,6 +320,21 @@ pub(crate) fn push_percent(out: &mut String, byte: u8) {
     out.push('%');
     out.push(char::from(HEX[usize::from(byte >> 4)]));
     out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+}
+
+/// net/http's `removeZone`: the `Host` header of a scoped IPv6 address goes without its zone
+/// (`[::1%lo]:2375` is sent as `[::1]:2375`), since the zone means nothing to the server.
+pub(crate) fn remove_zone(host: &str) -> String {
+    if !host.starts_with('[') {
+        return host.to_owned();
+    }
+    let Some(close) = host.rfind(']') else {
+        return host.to_owned();
+    };
+    match host[..close].rfind('%') {
+        Some(zone) => format!("{}{}", &host[..zone], &host[close..]),
+        None => host.to_owned(),
+    }
 }
 
 /// The host and port to dial for a TCP address, as net/http's `canonicalAddr` completes it: the

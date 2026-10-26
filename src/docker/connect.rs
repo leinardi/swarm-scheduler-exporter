@@ -31,6 +31,7 @@
 
 use std::fmt;
 use std::io;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -252,6 +253,30 @@ async fn dial_unix(path: &str) -> Result<Stream, ConnectError> {
     }
 }
 
+/// An IPv6 literal with a zone (`fe80::1%eth0`, from `[fe80::1%25eth0]` in `DOCKER_HOST`), which
+/// the resolver does not take: the zone becomes the interface index Go's dialer gives it, the
+/// index of the interface of that name, else the zone read as a number, else 0.
+fn scoped_ipv6(host: &str, port: u16) -> Option<SocketAddr> {
+    let (address, zone) = host.split_once('%')?;
+    let address: Ipv6Addr = address.parse().ok()?;
+    let scope = interface_index(zone)
+        .or_else(|| zone.parse().ok())
+        .unwrap_or(0);
+    Some(SocketAddr::V6(SocketAddrV6::new(address, port, 0, scope)))
+}
+
+/// The index of the network interface `name`, from sysfs (Go asks netlink for the same table).
+fn interface_index(name: &str) -> Option<u32> {
+    if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+        return None;
+    }
+    std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Go's dialer: the name resolved, each address tried in turn, the whole within
 /// [`DIAL_TIMEOUT`]; the first error is the one reported. The connection gets Go's `TCP_NODELAY`
 /// and keep-alive settings.
@@ -262,20 +287,30 @@ async fn dial_tcp(host: &str, port: u16) -> Result<Stream, ConnectError> {
         format!("{host}:{port}")
     };
     let attempt = async {
-        let addresses = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|error| ConnectError::Lookup {
-                host: host.to_owned(),
-                error,
-            })?;
+        let addresses: Vec<SocketAddr> = match scoped_ipv6(host, port) {
+            Some(address) => vec![address],
+            None => tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|error| ConnectError::Lookup {
+                    host: host.to_owned(),
+                    error,
+                })?
+                .collect(),
+        };
         let mut first_error = None;
         for address in addresses {
             match TcpStream::connect(address).await {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
+                    // A scoped address is reported with its zone as written, as Go does.
+                    let address = if host.contains('%') {
+                        display.clone()
+                    } else {
+                        address.to_string()
+                    };
                     first_error.get_or_insert(ConnectError::Dial {
                         network: "tcp",
-                        address: address.to_string(),
+                        address,
                         error,
                     });
                 }
@@ -304,3 +339,6 @@ async fn dial_tcp(host: &str, port: u16) -> Result<Stream, ConnectError> {
     let _ = SockRef::from(&stream).set_tcp_keepalive(&keepalive);
     Ok(Stream::Tcp(stream))
 }
+
+#[cfg(test)]
+mod tests;

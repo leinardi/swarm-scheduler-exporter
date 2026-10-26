@@ -42,7 +42,7 @@ use rustls::ClientConfig;
 
 use super::connect::{ConnectError, Connector};
 use super::error::{ConfigError, Error};
-use super::host::{Endpoint, Host, escape_host, escape_path, join_path};
+use super::host::{Endpoint, Host, escape_host, escape_path, join_path, remove_zone};
 use super::pool::{Pool, PooledBody, SendError};
 use super::version::{self, MAX_API_VERSION, parse_api_version};
 use super::{DEFAULT_DOCKER_HOST, DUMMY_HOST, tls};
@@ -230,7 +230,7 @@ impl Client {
         let connector = Connector::new(settings.endpoint.clone(), settings.tls.clone());
         let host_header = match &settings.endpoint {
             Endpoint::Unix(_) => DUMMY_HOST.to_owned(),
-            Endpoint::Tcp(addr) => addr.clone(),
+            Endpoint::Tcp(addr) => remove_zone(addr),
         };
         let negotiation = Negotiation {
             state: tokio::sync::Mutex::new(NegotiationState {

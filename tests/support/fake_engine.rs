@@ -166,6 +166,20 @@ impl FakeEngine {
         events_content_type: &str,
         body_overrides: HashMap<String, Vec<u8>>,
     ) -> Self {
+        Self::start_on("127.0.0.1:0", set, events_content_type, body_overrides).await
+    }
+
+    /// As [`FakeEngine::start`], listening on the IPv6 loopback.
+    pub async fn start_ipv6(set: FixtureSet) -> Self {
+        Self::start_on("[::1]:0", set, set.events_content_type, HashMap::new()).await
+    }
+
+    async fn start_on(
+        bind: &str,
+        set: FixtureSet,
+        events_content_type: &str,
+        body_overrides: HashMap<String, Vec<u8>>,
+    ) -> Self {
         let fixtures: PathBuf = [
             env!("CARGO_MANIFEST_DIR"),
             "tests/testdata/engine_wire",
@@ -180,7 +194,7 @@ impl FakeEngine {
             recorder: Mutex::new(Recorder::default()),
             script: Mutex::new(Script::default()),
         });
-        let listener = TcpListener::bind("127.0.0.1:0")
+        let listener = TcpListener::bind(bind)
             .await
             .unwrap_or_else(|error| panic!("fake engine: bind: {error}"));
         let addr = listener
@@ -203,8 +217,13 @@ impl FakeEngine {
     /// it: it negotiates its API version lazily, with a ping before its first request.
     #[must_use]
     pub fn client(&self) -> Client {
-        let host = format!("tcp://{}", self.addr);
-        let settings = Settings::from_env(|name| (name == "DOCKER_HOST").then(|| host.clone()))
+        Self::client_for(&format!("tcp://{}", self.addr))
+    }
+
+    /// A Docker client built as [`FakeEngine::client`] builds it, with `host` as `DOCKER_HOST`.
+    #[must_use]
+    pub fn client_for(host: &str) -> Client {
+        let settings = Settings::from_env(|name| (name == "DOCKER_HOST").then(|| host.to_owned()))
             .unwrap_or_else(|error| panic!("docker client: {error}"));
         Client::new(settings)
     }
