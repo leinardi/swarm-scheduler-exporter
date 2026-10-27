@@ -265,6 +265,11 @@ rustfmt does not wrap comments: keep them at 100 columns by hand.
   one.
 - A write to the caches or derived gauges from anywhere but the reconciler task (§9).
 - A non-`GET` request, or a Docker crate in the exporter package (§12).
+- A `Regex` compiled where it is used: a fixed pattern is a `static NAME: LazyLock<Regex>` beside
+  its user, compiled once per process, and a pattern built from runtime data is compiled once,
+  outside the loop that uses it. A helper that returns a fresh `Regex` per call is the trap when it
+  is called per line or per file: in an unoptimised test build, one such helper in
+  swarm-device-access's meta-tests took 27 s of a 36 s `cargo test`.
 - Designing for hypothetical requirements: no configurability or abstractions for features that
   do not exist yet.
 - Skipping or suppressing pre-commit hooks (`--no-verify`).
