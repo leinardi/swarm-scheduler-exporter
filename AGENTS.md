@@ -15,7 +15,8 @@ is the user-facing story; the metrics it lists are the public contract.
 Build / test / lint use Make wrappers around `cargo`, workspace-wide and `--locked`:
 
 ```bash
-make verify               # rust-build (stamped), rust-fmt-check, rust-clippy and rust-test in one go
+make verify               # rust-build (stamped), rust-fmt-check, rust-clippy, rust-test and rust-doc
+make rust-doc             # cargo doc --workspace --all-features --no-deps --locked, warnings as errors
 make rust-build           # cargo build --workspace --all-targets --all-features, with the version stamps
 make rust-test            # cargo test --workspace: every test but the integration suite, meta-tests included
 make rust-clippy          # clippy over every target and feature, warnings as errors
