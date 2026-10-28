@@ -3,7 +3,7 @@ name: adversarial-review
 description: >
   Adversarial code review of changes to swarm-scheduler-exporter — working tree,
   staged diff, a branch vs master, a commit range, or a PR — in any language (Rust,
-  bash, Dockerfile, Makefile, YAML, docs). Loads rust-style-guide for Rust and Cargo
+  bash, Dockerfile, Makefile, YAML, docs). Uses user-level Rust skills for Rust and Cargo
   paths, checks the exporter's invariants (read-only Docker access, metrics as a public
   contract, series lifecycle, single reconciler owner, bounded work, release pipeline) and
   reports ranked findings with a block/approve verdict. Use when the user asks to
@@ -24,7 +24,7 @@ Copy this checklist and tick items as you go:
 ```text
 Review progress:
 - [ ] 1. Scope chosen; diff, stated intent and every changed file read in full
-- [ ] 2. `rust-style-guide` loaded for the Rust and Cargo paths
+- [ ] 2. User-level Rust skills and AGENTS.md consulted for the Rust and Cargo paths
 - [ ] 3. Repo invariants checked
 - [ ] 4. Adversarial passes run; every candidate confirmed or dropped
 - [ ] 5. Always-on passes (a)–(e) run
@@ -72,7 +72,7 @@ on nothing" says how to attack one.
 ## 2. Load the domain skill
 
 For any `**/*.rs` path, any `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml` or
-`rust-toolchain.toml`, load `rust-style-guide` before judging it; its rules are findings even
+`rust-toolchain.toml`, use user-level Rust skills and read `AGENTS.md`; project rules are findings even
 when clippy is green. Every other path (Dockerfile, compose files, `Makefile`, `.mk/*.mk`,
 GitHub workflows, other YAML, bash, Markdown) gets the passes in §4 plus the invariants in
 §3 with the **same rigor** — an unmatched language is not a lighter review.
@@ -318,9 +318,9 @@ in this repo (copied from another project) is a finding too.
 ### (d) Cross-file duplication
 
 Before accepting a new helper, search for the one that already exists — in `src/**`, `tests/support`
-and `testenv/**`, by *behavior*, not by the name the author chose. The *Reuse before writing* table
-in `rust-style-guide` lists the helpers that already exist (label building and sanitization, metric
-constants, Go-compatible formatting, test fakes and wait helpers). Two implementations of the same
+and `testenv/**`, by *behavior*, not by the name the author chose. Check label building and
+sanitization, metric constants, Go-compatible formatting, test fakes and wait helpers.
+Two implementations of the same
 rule drift apart, and the one the reviewer did not read is the one that keeps the bug.
 
 ### (e) Docs drift
