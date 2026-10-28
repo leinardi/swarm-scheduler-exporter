@@ -22,6 +22,8 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
   logged at info, any other stream end at warn. A socket proxy cutting an idle stream (HAProxy does
   so after its client timeout, about 10 minutes, on a quiet cluster) ends it without the chunked
   body's terminating chunk, so that is logged at warn too, followed by the reconnect.
+  Individual event JSON records are limited to 1 MiB, excluding leading whitespace and JSON-sequence
+  record separators. An oversized record ends the stream at warn, followed by a reconnect and resync.
 - Periodically polls **tasks** and aggregates **current** states per service (current task per slot
   for replicated services or per node for global services, exhaustive zero-emission).
 - Computes **desired replicas** precisely for `global` services (eligible nodes only:

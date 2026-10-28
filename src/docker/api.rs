@@ -299,14 +299,14 @@ impl Client {
     where
         T: Default + for<'de> Deserialize<'de>,
     {
-        decode_list(&self.get_body(path, query).await?).map_err(Error::decode)
+        decode_list(&self.get_body(path, query).await?)
     }
 
     async fn get_object<T>(&self, path: &str) -> Result<T, Error>
     where
         T: Default + for<'de> Deserialize<'de>,
     {
-        decode_first(&self.get_body(path, "").await?).map_err(Error::decode)
+        decode_first(&self.get_body(path, "").await?)
     }
 }
 

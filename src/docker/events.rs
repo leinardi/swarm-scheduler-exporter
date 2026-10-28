@@ -37,6 +37,10 @@
 //! chunk, a transport error), is Go's `io.ErrUnexpectedEOF`. The failure is detected from the body
 //! returning an error, not from hyper's `is_incomplete_message`, which is false for a chunked body
 //! cut by the peer.
+//!
+//! An undecoded record is limited to 1 MiB after leading whitespace and record separators are
+//! removed. Oversized records end the stream with a decode error so the listener reconnects and
+//! resyncs instead of retaining an unbounded buffer.
 
 use std::fmt;
 
@@ -58,6 +62,10 @@ pub const EVENTS_ACCEPT: [&str; 3] = [
 
 /// The record separator of RFC 7464 JSON text sequences.
 const RS: u8 = 0x1E;
+
+/// A generous bound for one event, including attributes ignored by the exporter. Increasing it
+/// raises the memory and synchronous JSON parsing work allowed for an incomplete record.
+const MAX_EVENT_BYTES: usize = 1024 * 1024;
 
 /// How a stream ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +136,7 @@ impl std::error::Error for StreamError {}
 pub struct JsonStream<B> {
     body: B,
     buffer: Vec<u8>,
+    pending: Bytes,
     rs_filter: bool,
     ended: bool,
 }
@@ -141,6 +150,7 @@ where
         Self {
             body,
             buffer: Vec::new(),
+            pending: Bytes::new(),
             rs_filter: content_type == Some(MEDIA_TYPE_JSON_SEQUENCE),
             ended: false,
         }
@@ -157,6 +167,7 @@ where
     /// # Errors
     ///
     /// [`StreamError`] once the stream is over, with how it ended.
+    /// An undecoded record exceeding 1 MiB is a decode error.
     pub async fn next<T>(&mut self) -> Result<T, StreamError>
     where
         T: Default + for<'de> Deserialize<'de>,
@@ -167,11 +178,12 @@ where
                 .iter()
                 .position(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'));
             if let Some(start) = start {
-                let mut values = serde_json::Deserializer::from_slice(&self.buffer[start..])
-                    .into_iter::<Option<T>>();
+                self.buffer.drain(..start);
+                let mut values =
+                    serde_json::Deserializer::from_slice(&self.buffer).into_iter::<Option<T>>();
                 match values.next() {
                     Some(Ok(value)) => {
-                        let consumed = start + values.byte_offset();
+                        let consumed = values.byte_offset();
                         self.buffer.drain(..consumed);
                         return Ok(value.unwrap_or_default());
                     }
@@ -191,12 +203,19 @@ where
                     return Err(StreamError::eof());
                 }
             }
+            // Ready body frames must not prevent shutdown or another task from running while
+            // an incomplete record (or an endless whitespace stream) is being accumulated.
+            tokio::task::yield_now().await;
             self.fill().await?;
         }
     }
 
-    /// Reads the next chunk into the buffer, or marks the body as ended.
+    /// Copies at most the remaining record budget from a frame, retaining its unread suffix.
+    /// A large transport frame can hold many small records without exceeding the record limit.
     async fn fill(&mut self) -> Result<(), StreamError> {
+        if !self.pending.is_empty() {
+            return self.copy_pending();
+        }
         match self.body.frame().await {
             None => self.ended = true,
             // Go's chunked reader reports a cut body as io.ErrUnexpectedEOF, and the decoder
@@ -209,14 +228,28 @@ where
             }
             Some(Ok(frame)) => {
                 if let Ok(data) = frame.into_data() {
-                    if self.rs_filter {
-                        self.buffer
-                            .extend(data.iter().copied().filter(|byte| *byte != RS));
-                    } else {
-                        self.buffer.extend_from_slice(&data);
-                    }
+                    self.pending = data;
+                    self.copy_pending()?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn copy_pending(&mut self) -> Result<(), StreamError> {
+        let remaining = MAX_EVENT_BYTES - self.buffer.len();
+        if remaining == 0 && !self.pending.is_empty() {
+            return Err(StreamError::new(
+                StreamErrorKind::Decode,
+                format!("event JSON exceeds {MAX_EVENT_BYTES} bytes"),
+            ));
+        }
+        let data = self.pending.split_to(self.pending.len().min(remaining));
+        if self.rs_filter {
+            self.buffer
+                .extend(data.iter().copied().filter(|byte| *byte != RS));
+        } else {
+            self.buffer.extend_from_slice(&data);
         }
         Ok(())
     }

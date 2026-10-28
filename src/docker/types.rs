@@ -39,6 +39,8 @@ use serde::{Deserialize, Deserializer};
 
 use crate::go_compat::time_layout::{go_zero_time, is_go_zero_time};
 
+use super::error::Error;
+
 /// Labels, as the daemon sends them.
 pub type Labels = BTreeMap<String, String>;
 
@@ -471,7 +473,7 @@ pub struct Actor {
 /// Decodes the first JSON value of `body` the way Go's `json.NewDecoder(body).Decode(&out)`
 /// does: leading whitespace skipped, whatever follows the value ignored, a `null` the zero value,
 /// and an empty body `EOF`.
-pub(crate) fn decode_first<T>(body: &[u8]) -> Result<T, String>
+pub(crate) fn decode_first<T>(body: &[u8]) -> Result<T, Error>
 where
     T: Default + for<'de> Deserialize<'de>,
 {
@@ -479,16 +481,22 @@ where
         .into_iter::<Option<T>>()
         .next()
     {
-        None => Err("EOF".to_owned()),
+        None => Err(Error::decode("EOF".to_owned())),
         Some(Ok(value)) => Ok(value.unwrap_or_default()),
-        Some(Err(error)) if error.is_eof() => Err("unexpected EOF".to_owned()),
-        Some(Err(error)) => Err(error.to_string()),
+        Some(Err(error)) => {
+            let message = if error.is_eof() {
+                "unexpected EOF".to_owned()
+            } else {
+                error.to_string()
+            };
+            Err(Error::decode(message).with_source(error))
+        }
     }
 }
 
 /// Decodes a list the way Go decodes it into a slice: `null` is an empty list and a `null`
 /// element the zero value.
-pub(crate) fn decode_list<T>(body: &[u8]) -> Result<Vec<T>, String>
+pub(crate) fn decode_list<T>(body: &[u8]) -> Result<Vec<T>, Error>
 where
     T: Default + for<'de> Deserialize<'de>,
 {

@@ -65,6 +65,28 @@ pub(crate) enum SendError {
     Http(hyper::Error),
 }
 
+impl std::fmt::Display for SendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connect(error) => error.fmt(formatter),
+            Self::HeaderTimeout => {
+                formatter.write_str("net/http: timeout awaiting response headers")
+            }
+            Self::Http(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Connect(error) => Some(error),
+            Self::Http(error) => Some(error),
+            Self::HeaderTimeout => None,
+        }
+    }
+}
+
 struct IdleConnection {
     id: u64,
     sender: SendRequest<Empty<Bytes>>,

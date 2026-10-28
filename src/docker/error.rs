@@ -26,6 +26,7 @@
 
 use std::error::Error as StdError;
 use std::fmt;
+use std::sync::Arc;
 
 use hyper::StatusCode;
 
@@ -102,6 +103,7 @@ pub struct Error {
     kind: ErrorKind,
     message: String,
     status: Option<StatusCode>,
+    source: Option<Arc<dyn StdError + Send + Sync>>,
 }
 
 impl Error {
@@ -110,6 +112,7 @@ impl Error {
             kind: ErrorKind::ConnectionFailed,
             message,
             status: None,
+            source: None,
         }
     }
 
@@ -118,6 +121,7 @@ impl Error {
             kind: ErrorKind::Response,
             message,
             status: Some(status),
+            source: None,
         }
     }
 
@@ -126,6 +130,7 @@ impl Error {
             kind: ErrorKind::Body,
             message,
             status: None,
+            source: None,
         }
     }
 
@@ -134,6 +139,7 @@ impl Error {
             kind: ErrorKind::Decode,
             message,
             status: None,
+            source: None,
         }
     }
 
@@ -142,6 +148,7 @@ impl Error {
             kind: ErrorKind::InvalidParameter,
             message,
             status: None,
+            source: None,
         }
     }
 
@@ -152,7 +159,17 @@ impl Error {
             kind: ErrorKind::DeadlineExceeded,
             message: "context deadline exceeded".to_owned(),
             status: None,
+            source: None,
         }
+    }
+
+    /// Retains the original cause without changing the Go-compatible message. Clones share it.
+    pub(crate) fn with_source(
+        mut self,
+        source: impl Into<Box<dyn StdError + Send + Sync>>,
+    ) -> Self {
+        self.source = Some(Arc::from(source.into()));
+        self
     }
 
     /// containerd's `errdefs.IsNotFound` of a moby error: the daemon answered 404.
@@ -180,4 +197,10 @@ impl fmt::Display for Error {
     }
 }
 
-impl StdError for Error {}
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn StdError + 'static))
+    }
+}

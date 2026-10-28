@@ -146,6 +146,15 @@ impl fmt::Display for ConnectError {
     }
 }
 
+impl std::error::Error for ConnectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Dial { error, .. } | Self::Lookup { error, .. } | Self::Tls(error) => Some(error),
+            Self::DialTimeout { .. } | Self::TlsHandshakeTimeout | Self::ServerName(_) => None,
+        }
+    }
+}
+
 /// A connection, plain or under TLS.
 #[derive(Debug)]
 pub(crate) enum Stream {
