@@ -180,7 +180,6 @@ Run before considering an edit done. `make check` applies to every row.
 Skills live in `.agents/skills/` (symlinked as `.claude/skills`). Load them before the work, not
 after review:
 
-- `rust-style-guide` — before any `.rs` edit.
 - `adversarial-review` — for any review request ("review my diff", "is this ready to merge").
 
 ## Commit messages
