@@ -32,8 +32,8 @@
 //!
 //! Go guards the dirty set, the generations and the resync counters with `Reconciler.mu`, taken
 //! before `metadataMu` when an overflow prunes the generations of uncached services. Here the
-//! cache's key set rides in the generation entries ([`Generation::cached`]), so the two locks
-//! become the one [`Shared`] lock, never held across an await.
+//! cache's key set rides in the generation entries (`Generation::cached`), so the two locks
+//! become the one `Shared` lock, never held across an await.
 
 mod listener;
 mod poll;
@@ -226,6 +226,16 @@ impl State {
         self.resync_requested += 1;
         self.epoch += 1;
     }
+
+    /// Drops queued keys and uncached generations before invalidating in-flight polls.
+    /// Fresh allocations release the old storage, keeping memory bounded by the cap plus the
+    /// cache even across repeated overflows while resyncs fail.
+    fn overflow(&mut self, now: Timestamp) {
+        self.pending_set = HashMap::new();
+        self.pending_order = Vec::new();
+        self.prune_service_generations();
+        self.request_resync(now);
+    }
 }
 
 /// What the reconciler and its handles share.
@@ -256,20 +266,12 @@ impl Shared {
         self.wake.notify_one();
     }
 
-    /// Drops the dirty set and requests a resync, which will see every change the set held.
-    /// Fresh allocations release the old storage, and the generations of services neither
-    /// cached nor queued go too (the epoch bump already invalidates every poll), so memory stays
-    /// bounded by the cap plus the cache across any number of overflows, even while resyncs
-    /// fail.
-    fn overflow(&self, state: &mut State, now: Timestamp) {
+    /// Logs an overflow outside the state lock; scheduling remains the caller's responsibility.
+    fn log_overflow(&self, cap: usize) {
         self.logger.warn(
             "dirty service keys over the cap; dropping them for a resync",
-            &[Attr::int("cap", saturating_i64(state.pending_cap))],
+            &[Attr::int("cap", saturating_i64(cap))],
         );
-        state.pending_set = HashMap::new();
-        state.pending_order = Vec::new();
-        state.prune_service_generations();
-        state.request_resync(now);
     }
 }
 
@@ -330,6 +332,7 @@ impl ReconcilerHandle {
     /// Invalidates `service_id`'s generation and queues it, due at `now`. A queued key keeps its
     /// place in the FIFO and has its retry state reset: a fresh event supersedes a retry.
     fn mark_service_dirty(&self, service_id: &str, now: Instant) {
+        let timestamp = self.shared.clock.now();
         let mut state = self.shared.lock();
         state.bump_service_generation(service_id, None);
         if let Some(pending) = state.pending_set.get_mut(service_id) {
@@ -338,7 +341,10 @@ impl ReconcilerHandle {
             return;
         }
         if state.pending_set.len() >= state.pending_cap {
-            self.shared.overflow(&mut state, self.shared.clock.now());
+            let cap = state.pending_cap;
+            state.overflow(timestamp);
+            drop(state);
+            self.shared.log_overflow(cap);
             return;
         }
         state.pending_set.insert(
@@ -354,14 +360,15 @@ impl ReconcilerHandle {
     /// Asks for a full resync and wakes the reconciler, which may have nothing scheduled;
     /// `reason` is logged.
     pub fn request_resync(&self, reason: &str) {
+        let now = self.shared.clock.now();
         {
             let mut state = self.shared.lock();
-            self.shared
-                .logger
-                .debug("resync requested", &[Attr::string("reason", reason)]);
-            state.request_resync(self.shared.clock.now());
+            state.request_resync(now);
         }
         self.shared.signal();
+        self.shared
+            .logger
+            .debug("resync requested", &[Attr::string("reason", reason)]);
     }
 
     /// The resync counters, and since when a resync has been outstanding (none when none is).
@@ -622,7 +629,8 @@ impl<D: DockerApi> Reconciler<D> {
     /// Docker data that made a step panic usually makes the resync panic too, and without the
     /// backoff the reconciler would retry it in a tight loop.
     fn request_resync_after_panic(&mut self) {
-        self.shared.lock().request_resync(self.shared.clock.now());
+        let now = self.shared.clock.now();
+        self.shared.lock().request_resync(now);
         self.schedule_resync_retry(Instant::now());
     }
 
@@ -745,11 +753,14 @@ impl<D: DockerApi> Reconciler<D> {
     /// a resync once the delays are used up. A fresh event queued meanwhile wins.
     fn retry_service(&self, key: &DueKey, error: &CallError) {
         let now = Instant::now();
+        let timestamp = self.shared.clock.now();
         let mut state = self.shared.lock();
         if state.pending_set.contains_key(&key.service_id) {
             return;
         }
         let Some(&delay) = self.retry_delays.get(key.attempts) else {
+            state.request_resync(timestamp);
+            drop(state);
             self.logger().warn(
                 "service inspect keeps failing; leaving it to a resync",
                 &[
@@ -758,19 +769,13 @@ impl<D: DockerApi> Reconciler<D> {
                     Attr::error("err", error),
                 ],
             );
-            state.request_resync(self.shared.clock.now());
             return;
         };
-        self.logger().debug(
-            "service inspect failed; will retry",
-            &[
-                Attr::string("service_id", key.service_id.as_str()),
-                Attr::duration("backoff", duration_nanos(delay)),
-                Attr::error("err", error),
-            ],
-        );
         if state.pending_set.len() >= state.pending_cap {
-            self.shared.overflow(&mut state, self.shared.clock.now());
+            let cap = state.pending_cap;
+            state.overflow(timestamp);
+            drop(state);
+            self.shared.log_overflow(cap);
             return;
         }
         state.pending_set.insert(
@@ -781,6 +786,15 @@ impl<D: DockerApi> Reconciler<D> {
             },
         );
         state.pending_order.push(key.service_id.clone());
+        drop(state);
+        self.logger().debug(
+            "service inspect failed; will retry",
+            &[
+                Attr::string("service_id", key.service_id.as_str()),
+                Attr::duration("backoff", duration_nanos(delay)),
+                Attr::error("err", error),
+            ],
+        );
     }
 
     /// Stores the metadata of `service` and publishes its per-service families, with counts

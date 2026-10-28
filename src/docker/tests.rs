@@ -52,6 +52,89 @@ use super::pool::Pool;
 use super::version::validate_client_api_version;
 use super::{DEFAULT_DOCKER_HOST, ErrorKind, PathError, Settings, tls};
 
+fn find_source<T: std::error::Error + 'static>(error: &dyn std::error::Error) -> Option<&T> {
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if let Some(cause) = cause.downcast_ref::<T>() {
+            return Some(cause);
+        }
+        source = cause.source();
+    }
+    None
+}
+
+#[tokio::test]
+async fn request_decode_errors_keep_the_json_cause_when_cloned() {
+    use super::DockerApi as _;
+
+    let daemon = FakeDaemon::tcp(|_| ok(&[], r#"[{"ID":5}]"#)).await;
+    let client = daemon.client(&[("DOCKER_API_VERSION", "1.56")]);
+    let error = client.node_list().await.unwrap_err();
+    let cloned = error.clone();
+    assert_eq!(error.kind(), ErrorKind::Decode);
+    let cause = find_source::<serde_json::Error>(&error).expect("original JSON error");
+    let cloned_cause = find_source::<serde_json::Error>(&cloned).expect("shared JSON error");
+    assert!(cause.is_data());
+    assert!(std::ptr::eq(cause, cloned_cause));
+}
+
+#[tokio::test]
+async fn connection_errors_keep_the_original_io_cause() {
+    use super::DockerApi as _;
+
+    let dir = TempDir::new();
+    let host = format!("unix://{}/absent.sock", dir.str());
+    let client = Client::new(settings(&[
+        ("DOCKER_HOST", &host),
+        ("DOCKER_API_VERSION", "1.56"),
+    ]));
+    let error = client.node_list().await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ConnectionFailed);
+    let cause = find_source::<std::io::Error>(&error).expect("original connect error");
+    assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[tokio::test]
+async fn exchange_errors_keep_the_original_hyper_cause() {
+    use super::DockerApi as _;
+
+    let daemon = FakeDaemon::tcp(|_| Reply::Reset).await;
+    let client = daemon.client(&[("DOCKER_API_VERSION", "1.56")]);
+    let error = client.node_list().await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ConnectionFailed);
+    assert!(find_source::<hyper::Error>(&error).is_some());
+}
+
+#[tokio::test]
+async fn gzip_body_errors_keep_the_original_io_cause() {
+    use super::DockerApi as _;
+
+    let daemon = FakeDaemon::tcp(|_| ok(&[("Content-Encoding", "gzip")], "invalid gzip")).await;
+    let client = daemon.client(&[("DOCKER_API_VERSION", "1.56")]);
+    let error = client.node_list().await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Body);
+    assert!(error.to_string().starts_with("gzip: "));
+    assert!(find_source::<std::io::Error>(&error).is_some());
+}
+
+#[tokio::test]
+async fn response_decode_errors_keep_the_original_json_cause() {
+    use super::DockerApi as _;
+
+    let daemon =
+        FakeDaemon::tcp(|_| respond(500, &[("Content-Type", "application/json")], "{")).await;
+    let client = daemon.client(&[("DOCKER_API_VERSION", "1.56")]);
+    let error = client.node_list().await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Response);
+    assert_eq!(
+        error.status(),
+        Some(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+    );
+    assert!(error.to_string().starts_with("error reading JSON: "));
+    let cause = find_source::<serde_json::Error>(&error).expect("original response decode error");
+    assert!(cause.is_eof());
+}
+
 /// The environment the client reads, from pairs; anything else is unset.
 fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let vars: HashMap<String, String> = vars

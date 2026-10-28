@@ -29,6 +29,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::future::pending;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{OnceLock, Weak};
 
 use hyper::StatusCode;
 use jiff::Timestamp;
@@ -58,6 +59,119 @@ use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node}
 
 mod listener;
 mod poll;
+
+/// Checks the lock rather than re-entering it, so a regression fails instead of hanging.
+struct StateCheckingSink {
+    shared: Arc<OnceLock<Weak<Shared>>>,
+    writes: Arc<AtomicUsize>,
+}
+
+impl std::io::Write for StateCheckingSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let shared = self.shared.get().and_then(Weak::upgrade).unwrap();
+        assert!(
+            shared.state.try_lock().is_ok(),
+            "logging must not hold the reconciler state lock"
+        );
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn state_checking_reconciler() -> (Reconciler<TestDocker>, Arc<AtomicUsize>) {
+    let fixture = fixture(TestDocker::default());
+    let shared = Arc::new(OnceLock::<Weak<Shared>>::new());
+    let writes = Arc::new(AtomicUsize::new(0));
+    let checked_shared = Arc::clone(&shared);
+    let clock: Arc<dyn Clock> = Arc::new(move || {
+        if let Some(shared) = checked_shared.get().and_then(Weak::upgrade) {
+            assert!(
+                shared.state.try_lock().is_ok(),
+                "clock callbacks must not hold the reconciler state lock"
+            );
+        }
+        Timestamp::from_second(1_767_225_600).unwrap()
+    });
+    let logger = Logger::new(
+        crate::logger::Config {
+            format: crate::logger::Format::Plain,
+            level: Level::DEBUG,
+            include_time: false,
+        },
+        Box::new(StateCheckingSink {
+            shared: Arc::clone(&shared),
+            writes: Arc::clone(&writes),
+        }),
+        jiff::tz::TimeZone::UTC,
+        Arc::clone(&clock),
+    );
+    let reconciler = Reconciler::with_policy(
+        fixture.docker,
+        fixture.collectors,
+        clock,
+        logger,
+        &ReconcilerPolicy {
+            pending_cap: 1,
+            ..test_policy()
+        },
+    );
+    shared.set(Arc::downgrade(&reconciler.shared)).unwrap();
+    (reconciler, writes)
+}
+
+#[test]
+fn resync_and_overflow_release_state_before_logging_or_reading_the_clock() {
+    let (reconciler, writes) = state_checking_reconciler();
+    let handle = reconciler.handle();
+    let requested = handle.resync_state().0;
+    handle.request_resync("test");
+    handle.mark_service_dirty("first", Instant::now());
+    handle.mark_service_dirty("overflow", Instant::now());
+    assert_eq!(writes.load(Ordering::SeqCst), 2);
+    assert_eq!(handle.resync_state().0, requested + 2);
+}
+
+#[test]
+fn retry_paths_and_panic_recovery_release_state_before_callbacks() {
+    let (mut reconciler, writes) = state_checking_reconciler();
+    let handle = reconciler.handle();
+    let requested = handle.resync_state().0;
+    let error = CallError::new("service inspect", unavailable());
+    let key = DueKey {
+        service_id: "retry".to_owned(),
+        attempts: 0,
+    };
+    reconciler.retry_service(&key, &error);
+    assert!(handle.shared.lock().pending_set.contains_key("retry"));
+    reconciler.retry_service(
+        &DueKey {
+            service_id: "overflow".to_owned(),
+            attempts: 0,
+        },
+        &error,
+    );
+    assert!(handle.shared.lock().pending_set.is_empty());
+    reconciler.retry_service(
+        &DueKey {
+            service_id: key.service_id,
+            attempts: reconciler.retry_delays.len(),
+        },
+        &error,
+    );
+    reconciler.request_resync_after_panic();
+    assert_eq!(writes.load(Ordering::SeqCst), 3);
+    assert_eq!(handle.resync_state().0, requested + 3);
+    let mut wake = std::pin::pin!(handle.shared.wake.notified());
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(
+        wake.as_mut().poll(&mut context).is_pending(),
+        "reconciler-owned retry paths must not leave a self-wake permit"
+    );
+}
 
 /// A Docker call the test docker can hold forever, so only the caller's deadline or
 /// cancellation ends it.

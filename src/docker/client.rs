@@ -171,7 +171,7 @@ impl hyper::body::Body for Body {
                 Poll::Ready(frame) => frame,
             };
             let Some(decoder) = self.gzip.as_mut() else {
-                return Poll::Ready(frame.map(|frame| frame.map_err(|error| body_error(&error))));
+                return Poll::Ready(frame.map(|frame| frame.map_err(body_error)));
             };
             match frame {
                 None => {
@@ -182,16 +182,20 @@ impl hyper::body::Body for Body {
                     return Poll::Ready(match finished {
                         Ok(rest) if rest.is_empty() => None,
                         Ok(rest) => Some(Ok(Frame::data(Bytes::from(rest)))),
-                        Err(error) => Some(Err(Error::body(format!("gzip: {error}")))),
+                        Err(error) => {
+                            Some(Err(Error::body(format!("gzip: {error}")).with_source(error)))
+                        }
                     });
                 }
-                Some(Err(error)) => return Poll::Ready(Some(Err(body_error(&error)))),
+                Some(Err(error)) => return Poll::Ready(Some(Err(body_error(error)))),
                 Some(Ok(frame)) => {
                     let Ok(data) = frame.into_data() else {
                         continue;
                     };
                     if let Err(error) = decoder.write_all(&data) {
-                        return Poll::Ready(Some(Err(Error::body(format!("gzip: {error}")))));
+                        return Poll::Ready(Some(Err(
+                            Error::body(format!("gzip: {error}")).with_source(error)
+                        )));
                     }
                     let output = std::mem::take(decoder.get_mut());
                     if !output.is_empty() {
@@ -215,8 +219,8 @@ impl hyper::body::Body for Body {
     }
 }
 
-fn body_error(error: &hyper::Error) -> Error {
-    Error::body(http_error_text(error))
+fn body_error(error: hyper::Error) -> Error {
+    Error::body(http_error_text(&error)).with_source(error)
 }
 
 impl Client {
@@ -314,10 +318,10 @@ impl Client {
         let operation = format!("{}{}", &method[..1], method[1..].to_ascii_lowercase());
         let asked_gzip = probe.headers().contains_key(ACCEPT_ENCODING);
         drop(probe);
-        let response =
-            self.pool.send(build).await.map_err(|failure| {
-                self.connection_error(&operation, &self.url(target), &failure)
-            })?;
+        let response = self.pool.send(build).await.map_err(|failure| {
+            self.connection_error(&operation, &self.url(target), &failure)
+                .with_source(failure)
+        })?;
         let (mut parts, inner) = response.into_parts();
         let gzipped = asked_gzip
             && parts
@@ -456,9 +460,12 @@ impl Client {
                                  {ERROR_BODY_LIMIT} bytes) for API route and version {url}, \
                                  check if the server supports the requested API version"
                             ),
-                        ));
+                        )
+                        .with_source(error));
                     }
-                    Err(error) => return Err(Error::response(status, error.to_string())),
+                    Err(error) => {
+                        return Err(Error::response(status, error.to_string()).with_source(error));
+                    }
                 }
             }
         }
@@ -484,10 +491,10 @@ impl Client {
         let daemon_message = if content_type.as_deref() == Some("application/json") {
             match serde_json::from_slice::<ErrorResponse>(&body) {
                 Err(error) => {
-                    return Err(Error::response(
-                        status,
-                        format!("error reading JSON: {error}"),
-                    ));
+                    return Err(
+                        Error::response(status, format!("error reading JSON: {error}"))
+                            .with_source(error),
+                    );
                 }
                 Ok(ErrorResponse { message })
                     if message.as_deref().unwrap_or_default().is_empty() =>

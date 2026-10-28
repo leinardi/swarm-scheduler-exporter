@@ -33,7 +33,7 @@
 //! - after a response the read deadline is `now + IdleTimeout`, waiting for the next request's
 //!   first bytes, whose arrival is that request's `t0`; when they were already read with the
 //!   previous request (pipelining), `t0` is the end of the response, and the idle deadline is
-//!   skipped. hyper keeps such bytes in its own buffer, so [`Framer`] follows the request
+//!   skipped. hyper keeps such bytes in its own buffer, so `Framer` follows the request
 //!   framing to know they are there.
 //!
 //! hyper's own `header_read_timeout` cannot express this: hyper 1.12 arms it as soon as a

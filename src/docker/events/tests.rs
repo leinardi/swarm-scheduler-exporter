@@ -86,6 +86,69 @@ async fn drain(mut stream: JsonStream<ChunkBody>) -> (Vec<String>, StreamError) 
 const FIRST: &[u8] = br#"{"Type":"service","Action":"update","Actor":{"ID":"svc-a"},"time":1,"timeNano":1000000001}"#;
 const SECOND: &[u8] = br#"{"Type":"node","Action":"update","Actor":{"ID":"node-b"}}"#;
 
+#[tokio::test]
+async fn an_oversized_fragmented_record_is_refused_before_reading_the_whole_body() {
+    let chunk = vec![b'x'; 4096];
+    let mut chunks: Vec<&[u8]> = vec![br#"{"Type":""#];
+    chunks.extend(std::iter::repeat_n(chunk.as_slice(), 257));
+    let mut decoder = stream(None, &chunks);
+    let error = decoder.next::<Event>().await.unwrap_err();
+    assert_eq!(error.kind(), StreamErrorKind::Decode);
+    assert_eq!(error.to_string(), "event JSON exceeds 1048576 bytes");
+    assert!(
+        !decoder.body.chunks.is_empty(),
+        "oversized input must be rejected before exhausting the body"
+    );
+}
+
+#[tokio::test]
+async fn a_large_frame_of_small_records_is_not_an_oversized_record() {
+    let count = 1_048_576 / FIRST.len() + 1;
+    let body = FIRST.repeat(count);
+    let (actors, end) = drain(stream(None, &[&body])).await;
+    assert_eq!(actors.len(), count);
+    assert!(actors.iter().all(|actor| actor == "svc-a"));
+    assert!(end.is_eof());
+}
+
+#[tokio::test]
+async fn a_record_at_the_limit_is_accepted_with_leading_space_and_record_separators() {
+    let prefix = br#"{"Type":""#;
+    let suffix = br#""}"#;
+    let mut body = vec![b' '; 1_048_576];
+    body.extend_from_slice(prefix);
+    body.extend(std::iter::repeat_n(
+        b'x',
+        1_048_576 - prefix.len() - suffix.len(),
+    ));
+    body.extend_from_slice(suffix);
+    body.push(RS);
+    body.extend_from_slice(SECOND);
+    let (actors, end) = drain(stream(Some(MEDIA_TYPE_JSON_SEQUENCE), &[&body])).await;
+    assert_eq!(actors, ["", "node-b"]);
+    assert!(end.is_eof());
+}
+
+#[tokio::test]
+async fn a_complete_oversized_record_in_one_frame_is_refused() {
+    let mut body = br#"{"Type":""#.to_vec();
+    body.extend(std::iter::repeat_n(b'x', 1_048_576));
+    body.extend_from_slice(br#""}"#);
+    let mut decoder = stream(None, &[&body]);
+    let error = decoder.next::<Event>().await.unwrap_err();
+    assert_eq!(error.kind(), StreamErrorKind::Decode);
+    assert!(decoder.buffer.len() <= 1_048_576);
+}
+
+#[tokio::test]
+async fn ready_frames_yield_while_waiting_for_a_record() {
+    let mut decoder = stream(None, &[b" ", b"\t", b"\n"]);
+    let mut next = std::pin::pin!(decoder.next::<Event>());
+    let mut context = Context::from_waker(std::task::Waker::noop());
+    assert!(next.as_mut().poll(&mut context).is_pending());
+    assert!(next.await.unwrap_err().is_eof());
+}
+
 const PLAIN_TYPES: [Option<&str>; 5] = [
     Some("application/json"),
     Some("application/x-ndjson"),

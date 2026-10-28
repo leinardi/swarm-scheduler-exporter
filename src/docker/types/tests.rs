@@ -293,16 +293,22 @@ fn decode_first_reads_like_a_go_decoder() {
         decode_first::<Vec<Node>>(b"  [] trailing garbage").unwrap(),
         []
     );
-    assert_eq!(decode_first::<Node>(b"").unwrap_err(), "EOF");
-    assert_eq!(decode_first::<Node>(b" \n\t").unwrap_err(), "EOF");
+    assert_eq!(decode_first::<Node>(b"").unwrap_err().to_string(), "EOF");
     assert_eq!(
-        decode_first::<Node>(br#"{"ID":"n"#).unwrap_err(),
+        decode_first::<Node>(b" \n\t").unwrap_err().to_string(),
+        "EOF"
+    );
+    assert_eq!(
+        decode_first::<Node>(br#"{"ID":"n"#)
+            .unwrap_err()
+            .to_string(),
         "unexpected EOF"
     );
     assert!(decode_first::<Node>(br#"{"ID":5}"#).is_err());
     assert!(
         decode_first::<Task>(br#"{"CreatedAt":"yesterday"}"#)
             .unwrap_err()
+            .to_string()
             .contains("parsing time \"yesterday\"")
     );
 }
