@@ -13,6 +13,10 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # Wait a week after a release before proposing it (GitHub's default is
+    # 3 days), so a broken or compromised release has time to be yanked.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
@@ -25,6 +29,8 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     labels: ["dependencies", "ci"]
@@ -38,6 +44,8 @@ updates:
     registries: ["dhi"]
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5
@@ -58,6 +66,8 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
     # fix, not chore: the release version is derived from commit types, so a
     # crate bump (security fixes included) produces a patch release. The other
     # ecosystems stay chore(deps) and bump nothing. That includes the docker
