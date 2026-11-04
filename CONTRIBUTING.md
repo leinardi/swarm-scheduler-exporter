@@ -24,7 +24,7 @@ make rust-test       # cargo test --workspace, the meta-tests in meta/ included
 make rust-fmt        # format the code (rust-fmt-check only checks)
 make rust-clippy     # clippy over the workspace, warnings as errors
 make verify          # rust-build, rust-fmt-check, rust-clippy and rust-test in one go
-make rust-run ARGS="--containers --log-level debug"  # run against the local daemon, version-stamped
+make rust-run ARGS="--containers --log-level debug"  # run against the local Docker daemon, version-stamped
 make audit-deps      # cargo-deny against the RustSec advisories (network required)
 make rust-deny       # every cargo-deny check: advisories, licences, bans, sources (network required)
 make docker-build    # the container image, for the host's architecture

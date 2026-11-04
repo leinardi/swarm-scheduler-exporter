@@ -10,7 +10,7 @@
   registry and text encoder, the slog-compatible logger, Go library ports (`src/go_compat`).
 - Lint and audit: clippy (workspace lints), rustfmt, cargo-machete, cargo-deny (`deny.toml`).
 - Build/infra: Makefile + `.mk/*.mk`; make-common snippets (`.mk/{docker,help,password,
-  pre-commit}.mk`) are vendored from `leinardi/make-common`: never hand-edit, refresh with
+  pre-commit,rust}.mk`) are vendored from `leinardi/make-common`: never hand-edit, refresh with
   `make mk-common-update`.
 - Image: `dhi.io` hardened bases (`dhi.io/rust` build stage, `dhi.io/static` runtime, non-root,
   `HEALTHCHECK` via `--healthcheck`), multi-arch amd64/arm64, `# syntax` frontend pinned by digest.

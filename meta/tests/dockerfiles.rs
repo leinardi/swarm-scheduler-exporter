@@ -235,12 +235,24 @@ fn build_stage() {
 /// nothing would ship a binary reporting "dev".
 #[test]
 fn version_is_stamped() {
-    let fields = ["VERSION", "COMMIT", "DATE"];
     let version_rs = repo::read("src/version.rs");
     let build = stage("build").joined();
     let make = repo::read(".mk/rust.mk");
+    let makefile = repo::read("Makefile");
     let mut problems = Vec::new();
-    for field in fields {
+    if !makefile
+        .lines()
+        .any(|line| line == "RUST_STAMP_PREFIX := SWARM_SCHEDULER_EXPORTER")
+    {
+        problems.push(
+            "the Makefile does not set RUST_STAMP_PREFIX := SWARM_SCHEDULER_EXPORTER".to_owned(),
+        );
+    }
+    for (field, source) in [
+        ("VERSION", "GIT_VERSION"),
+        ("COMMIT", "GIT_COMMIT"),
+        ("DATE", "BUILD_DATE"),
+    ] {
         let variable = format!("SWARM_SCHEDULER_EXPORTER_{field}");
         if !version_rs.contains(&format!("option_env!(\x22{variable}\x22)")) {
             problems.push(format!("src/version.rs does not read {variable}"));
@@ -250,8 +262,10 @@ fn version_is_stamped() {
                 "the build stage does not stamp {variable} from ${field}"
             ));
         }
-        if !make.contains(&format!("{variable}=")) {
-            problems.push(format!(".mk/rust.mk does not stamp {variable}"));
+        if !make.contains(&format!("$(RUST_STAMP_PREFIX)_{field}=\x22$({source})\x22")) {
+            problems.push(format!(
+                ".mk/rust.mk does not stamp <prefix>_{field} from {source}"
+            ));
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));

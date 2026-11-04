@@ -31,10 +31,10 @@ MK_COMMON_VERSION     ?= v1
 MK_COMMON_DIR         := $(REPO_ROOT)/.mk
 
 # Shared snippets coming from make-common
-MK_COMMON_FILES       := docker.mk help.mk password.mk pre-commit.mk
+MK_COMMON_FILES       := docker.mk help.mk password.mk pre-commit.mk rust.mk
 
 # Repo-local snippets that are NOT in make-common
-MK_LOCAL_FILES        := docker-socket-run.mk audit-deps.mk integration-test.mk verify.mk rust.mk
+MK_LOCAL_FILES        := docker-socket-run.mk audit-deps.mk integration-test.mk verify.mk
 
 MK_COMMON_BOOTSTRAP_SCRIPT := $(REPO_ROOT)/scripts/bootstrap-mk-common.sh
 
@@ -57,6 +57,12 @@ DOCKER_CONTEXT ?= .
 IMAGE_NAME   ?= $(BIN_NAME)
 IMAGE_REPO   ?= $(IMAGE_NAME)
 IMAGE_TAG    ?= $(GIT_VERSION)
+
+# Rust settings (rust.mk): src/version.rs reads SWARM_SCHEDULER_EXPORTER_{VERSION,COMMIT,DATE} at
+# compile time; rust-run names the exporter's binary, so a binary added to any member cannot change
+# what it runs.
+RUST_STAMP_PREFIX := SWARM_SCHEDULER_EXPORTER
+RUST_RUN_BIN      := swarm-scheduler-exporter
 
 # Drop-in runtime defaults for rust-run and docker-run
 ARGS ?= --containers --log-level debug

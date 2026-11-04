@@ -70,7 +70,7 @@ const SHELL_HEADER: &str = r#"#!/usr/bin/env bash
 echo ok
 "#;
 
-const MAKEFILE: &str = "MK_COMMON_FILES       := docker.mk help.mk\n";
+const MAKEFILE: &str = "MK_COMMON_FILES       := docker.mk help.mk rust.mk\n";
 
 /// Scratch files under this prefix are written but never added: the check reads tracked files
 /// only.
@@ -268,8 +268,8 @@ fn header_cases_for_each_file_kind() {
             false,
         ),
         case(
-            "rust make fragment, no header",
-            &[(".mk/rust.mk", "x:\n")],
+            "make fragment make-common ships but MK_COMMON_FILES does not list, no header",
+            &[(".mk/go.mk", "x:\n")],
             false,
         ),
         case(
@@ -292,7 +292,11 @@ fn header_cases_for_the_exemptions() {
         ),
         case(
             "upstream make fragment",
-            &[(".mk/docker.mk", "x:\n"), (".mk/help.mk", "y:\n")],
+            &[
+                (".mk/docker.mk", "x:\n"),
+                (".mk/help.mk", "y:\n"),
+                (".mk/rust.mk", "z:\n"),
+            ],
             true,
         ),
         case(

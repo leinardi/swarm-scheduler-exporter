@@ -38,15 +38,23 @@ const RUST_TOOLCHAIN_ACTION: &str = "dtolnay/rust-toolchain";
 const DOCKERFILE: &str = "deployments/docker/Dockerfile";
 const SETUP_ZIGBUILD: &str = ".github/actions/setup-zigbuild/action.yaml";
 
-/// Rustdoc warnings must fail local verification and the required Rust CI job.
-fn rustdoc_gate_present(fragment: &str, workflow: &str) -> bool {
+/// Rustdoc warnings must fail local verification and the required Rust CI job, over every
+/// feature: make-common's rust.mk documents `$(RUST_FEATURES)`, which defaults to
+/// `--all-features`, and the Makefile must not narrow it.
+fn rustdoc_gate_present(fragment: &str, makefile: &str, workflow: &str) -> bool {
     let verify = fragment.lines().any(|line| {
         line.starts_with("verify-rust:")
             && line.split_whitespace().any(|target| target == "rust-doc")
     });
     let recipe = fragment.contains(
-        "rust-doc: ## Check Rust documentation, warnings as errors\n\tRUSTDOCFLAGS=\"$(RUSTDOCFLAGS) -D warnings\" $(CARGO) doc --workspace --all-features --no-deps --locked\n",
+        "rust-doc: ## Check the Rust documentation, warnings as errors\n\tRUSTDOCFLAGS=\"$(RUSTDOCFLAGS) -D warnings\" $(CARGO) doc --workspace $(RUST_FEATURES) --no-deps --locked\n",
     );
+    let features = fragment
+        .lines()
+        .any(|line| line == "RUST_FEATURES ?= --all-features")
+        && !makefile
+            .lines()
+            .any(|line| line.trim_start().starts_with("RUST_FEATURES"));
     let workflow: Value = serde_yaml_ng::from_str(workflow)
         .unwrap_or_else(|error| panic!("parse the CI workflow: {error}"));
     let ci = workflow
@@ -61,28 +69,35 @@ fn rustdoc_gate_present(fragment: &str, workflow: &str) -> bool {
                     && step.get("continue-on-error").is_none()
             })
         });
-    verify && recipe && ci
+    verify && recipe && features && ci
 }
 
 #[test]
 fn rust_documentation_is_a_required_gate() {
     assert!(rustdoc_gate_present(
         &repo::read(".mk/rust.mk"),
+        &repo::read("Makefile"),
         &repo::read(".github/workflows/ci.yaml"),
     ));
 }
 
-/// Negative controls reject gates missing from verify or CI, or allowing warnings.
+/// Negative controls reject gates missing from verify or CI, allowing warnings, or documenting
+/// fewer than every feature.
 #[test]
 fn weakened_rustdoc_gates_are_refused() {
     let fragment = repo::read(".mk/rust.mk");
+    let makefile = repo::read("Makefile");
     let workflow = repo::read(".github/workflows/ci.yaml");
     for broken in [
         fragment.replace("rust-test rust-doc", "rust-test"),
         fragment.replace(" -D warnings", ""),
+        fragment.replace("RUST_FEATURES ?= --all-features", "RUST_FEATURES ?="),
     ] {
-        assert!(!rustdoc_gate_present(&broken, &workflow));
+        assert_ne!(broken, fragment, "a negative control changed nothing");
+        assert!(!rustdoc_gate_present(&broken, &makefile, &workflow));
     }
+    let narrowed = format!("{makefile}\nRUST_FEATURES := --features x\n");
+    assert!(!rustdoc_gate_present(&fragment, &narrowed, &workflow));
     for broken in [
         workflow.replace("run: make rust-doc", "run: echo missing documentation gate"),
         workflow.replace(
@@ -94,7 +109,8 @@ fn weakened_rustdoc_gates_are_refused() {
             "continue-on-error: true\n        run: make rust-doc",
         ),
     ] {
-        assert!(!rustdoc_gate_present(&fragment, &broken));
+        assert_ne!(broken, workflow, "a negative control changed nothing");
+        assert!(!rustdoc_gate_present(&fragment, &makefile, &broken));
     }
 }
 
