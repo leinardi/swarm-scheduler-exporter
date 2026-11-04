@@ -21,7 +21,7 @@ make rust-build           # cargo build --workspace --all-targets --all-features
 make rust-test            # cargo test --workspace: every test but the integration suite, meta-tests included
 make rust-clippy          # clippy over every target and feature, warnings as errors
 make rust-fmt             # cargo fmt --all (rust-fmt-check only checks)
-make rust-run ARGS='--containers --log-level debug'  # run the exporter against the local daemon
+make rust-run ARGS='--containers --log-level debug'  # run the exporter against the local Docker daemon
 make rust-deny            # cargo-deny: advisories, licences, bans and sources (network required)
 make audit-deps           # cargo-deny advisories only (network required); CI and the cargo-deny hook (on Cargo.toml/Cargo.lock/deny.toml changes) run every check
 make check                # pre-commit on all files: the authoritative local gate, the same as CI's pre-commit-all
@@ -54,9 +54,10 @@ cargo test --lib collector::reconciler -- --nocapture
 cargo test --test engine_wire
 ```
 
-The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on first run. To
-refresh: `make mk-common-update`. Project targets live in the local `.mk/*.mk` files listed in
-`MK_LOCAL_FILES`, never as recipes in the Makefile.
+The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on first run,
+`rust.mk` (the `rust-*` targets and `verify-rust`) among them; the Makefile sets its knobs
+(`RUST_STAMP_PREFIX`, `RUST_RUN_BIN`). To refresh: `make mk-common-update`. Project targets live
+in the local `.mk/*.mk` files listed in `MK_LOCAL_FILES`, never as recipes in the Makefile.
 
 ## Layout
 
@@ -95,7 +96,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 
 ### Generated or vendored: never hand-edit
 
-- `.mk/{docker,help,password,pre-commit}.mk`, `.mk/.mk-common-version` and
+- `.mk/{docker,help,password,pre-commit,rust}.mk`, `.mk/.mk-common-version` and
   `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
   `make mk-common-update` and port a change upstream.
 - `tests/testdata/**` and `testenv/tests/integration/testdata/**`: byte-for-byte Engine API

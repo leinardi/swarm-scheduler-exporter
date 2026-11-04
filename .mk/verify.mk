@@ -26,7 +26,7 @@ ifndef MK_LOCAL_VERIFY_INCLUDED
 MK_LOCAL_VERIFY_INCLUDED := 1
 
 # Local snippet (NOT part of make-common): one command that runs every check a change has to pass,
-# the way CI does. verify-rust lives in rust.mk. The integration suite needs Docker with privileged
+# the way CI does. verify-rust lives in make-common's rust.mk. The integration suite needs Docker with privileged
 # containers, so it stays a separate target (test-integration); its code is still built and linted
 # here, through --all-features.
 

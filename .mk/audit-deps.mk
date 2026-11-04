@@ -30,12 +30,12 @@ MK_LOCAL_AUDIT_DEPS_INCLUDED := 1
 # advisory against a crate in the graph counts, which is why every ignore in deny.toml carries a
 # reason. It needs the network for the database, so it runs when Cargo.toml, Cargo.lock or
 # deny.toml change (the cargo-deny hook, with every check), on every pull request (CI's rust job)
-# and every week (scheduled-scan), and deliberately here. --workspace: the root is a package as
-# well as the workspace, and cargo-deny would otherwise check its graph alone. CARGO comes from
-# rust.mk.
+# and every week (scheduled-scan), and deliberately here. RUST_DENY_ARGS (--workspace): the root
+# is a package as well as the workspace, and cargo-deny would otherwise check its graph alone.
+# CARGO and RUST_DENY_ARGS come from make-common's rust.mk.
 
 .PHONY: audit-deps
 audit-deps: ## Check every Rust dependency against the RustSec advisories (cargo-deny; network required)
-	$(CARGO) deny --workspace check advisories
+	$(CARGO) deny $(RUST_DENY_ARGS) check advisories
 
 endif  # MK_LOCAL_AUDIT_DEPS_INCLUDED
