@@ -645,6 +645,50 @@ async fn a_failed_connect_is_not_a_connection() {
     assert!(!fixture.logs.has("event stream connected"));
 }
 
+/// A connect cut short by the shutdown is a cancellation, not a failed connect: the outcome says
+/// so, whether the client reports `Cancelled` or the engine's own error races the token.
+#[tokio::test]
+async fn a_cancelled_connect_is_a_cancellation_not_a_failed_connect() {
+    let fixture = listener_fixture().await;
+    fixture
+        .docker
+        .push_connect_error(Error::new(ErrorKind::Cancelled, "cancelled"));
+    let outcome = follow_event_stream(
+        &*fixture.docker,
+        &fixture.handle,
+        &super::super::listener::event_filters(),
+        anchor(),
+        true,
+        &CancellationToken::new(),
+    )
+    .await;
+    assert!(!outcome.connected);
+    assert!(
+        matches!(outcome.end, StreamEnd::Canceled),
+        "{}",
+        outcome.end
+    );
+
+    fixture.docker.push_connect_error(unavailable());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let outcome = follow_event_stream(
+        &*fixture.docker,
+        &fixture.handle,
+        &super::super::listener::event_filters(),
+        anchor(),
+        true,
+        &cancel,
+    )
+    .await;
+    assert!(
+        matches!(outcome.end, StreamEnd::Canceled),
+        "{}",
+        outcome.end
+    );
+    assert!(!fixture.logs.has("event stream connected"));
+}
+
 /// Q6: failed connects go to the reconnect warning, with a growing backoff since nothing
 /// connected (Q7's flip side), and the first successful connect after them is a reconnect,
 /// which requests the resync.

@@ -342,7 +342,15 @@ impl DockerApi for Client {
         filters: &Filters,
         cancel: &CancellationToken,
     ) -> Result<ClientEventStream, Error> {
-        let (_, config) = self.connection().await?;
+        // The first call negotiates, which a silent engine can hold for a long time: a shutdown
+        // interrupts that too.
+        let (_, config) = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                return Err(Error::new(ErrorKind::Cancelled, "context canceled"));
+            }
+            connection = self.connection() => connection?,
+        };
         let since = since_parameter(since);
         let mut options = EventsOptionsBuilder::new().since(&since);
         if !filters.is_empty() {

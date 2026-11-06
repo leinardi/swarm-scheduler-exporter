@@ -419,6 +419,27 @@ async fn a_cancelled_events_request_is_cancelled_not_a_timeout() {
     assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
 }
 
+/// A shutdown during the first call's version negotiation (an engine that accepts the connection
+/// and never answers `/version`) interrupts it: `Cancelled`, well before any response timeout.
+#[tokio::test]
+async fn a_cancel_interrupts_the_negotiation_of_the_first_events_call() {
+    let engine = FakeEngine::start(&[("/version", Reply::Silent)]).unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
+    let cancel = CancellationToken::new();
+    let canceller = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        canceller.cancel();
+    });
+    let started = tokio::time::Instant::now();
+    let error = client
+        .events(Timestamp::UNIX_EPOCH, &Filters::new(), &cancel)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
 /// The events request carries the negotiated version, as the client's other calls do.
 #[tokio::test]
 async fn events_carry_the_negotiated_version() {
