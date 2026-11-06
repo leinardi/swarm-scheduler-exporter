@@ -322,7 +322,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -444,6 +444,15 @@ version = "0.1.0"
 source = "git+https://github.com/leinardi/rust-common?rev=7c3e4336087e31e166e2fe6be4f5562669d91df2#7c3e4336087e31e166e2fe6be4f5562669d91df2"
 dependencies = [
  "jiff",
+]
+
+[[package]]
+name = "go-prom"
+version = "0.1.0"
+source = "git+https://github.com/leinardi/rust-common?rev=7c3e4336087e31e166e2fe6be4f5562669d91df2#7c3e4336087e31e166e2fe6be4f5562669d91df2"
+dependencies = [
+ "flate2",
+ "go-compat",
 ]
 
 [[package]]
@@ -1060,7 +1069,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1306,6 +1315,7 @@ dependencies = [
  "flate2",
  "go-clock",
  "go-compat",
+ "go-prom",
  "go-slog",
  "http-body-util",
  "hyper",
@@ -1377,7 +1387,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

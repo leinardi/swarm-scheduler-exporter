@@ -82,6 +82,9 @@ go-clock.workspace = true
 # Go's log/slog handlers and the plain format, byte for byte (rust-common), in the Quoted
 # plain style with the strict level and format parsers.
 go-slog.workspace = true
+# The Prometheus Go client's registry and text exposition, byte for byte (rust-common), with
+# prometheus/common v0.71.0's content negotiation (ExpfmtVersion::V0_71_0).
+go-prom.workspace = true
 # Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
 # the way Go does (go-compat), so none of jiff's tzdb or system features is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
@@ -109,8 +112,8 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # CancellationToken, Go's context cancellation for the long-lived tasks.
 tokio-util = { version = "0.7.20", default-features = false }
-# gzip for /metrics, as promhttp offers it, and the Docker client's transparent gunzip on TCP;
-# the pure-Rust backend, so no C zlib.
+# The Docker client's transparent gunzip on TCP (go-prom brings its own for /metrics); the
+# pure-Rust backend, so no C zlib.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 # The Docker client (S1): HTTP/1 only, on connections it dials and pools itself. The metrics and
 # health endpoints (S3): hyper's HTTP/1 server with hyper-util's graceful drain. The healthcheck
@@ -138,6 +141,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
 [dev-dependencies]
+# The Go tests' gatherSeries and seriesID, for the collectors' tests.
+go-prom = { workspace = true, features = ["testing"] }
 # The paused clock (start_paused) needs the test runtime.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",

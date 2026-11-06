@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::docker::types::{Node, Placement, Task};
 use crate::docker::{DockerApi, with_docker_timeout};
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
-use crate::metrics::{
+use go_prom::{
     BuildError, Collector, Desc, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotCollector,
     constant_desc,
 };

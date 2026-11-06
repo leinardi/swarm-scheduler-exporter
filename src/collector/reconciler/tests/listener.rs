@@ -465,7 +465,7 @@ async fn a_lost_remove_is_recovered_on_reconnect() {
     listening.stop().await;
     let reconciler = running.stop().await;
     assert!(reconciler.metadata().get("svc2").is_none());
-    let registry = crate::metrics::Registry::new();
+    let registry = go_prom::Registry::new();
     gauges.register(&registry).unwrap();
     let desired_series: usize = registry
         .gather()

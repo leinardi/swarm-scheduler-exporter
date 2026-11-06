@@ -36,9 +36,9 @@ use crate::collector::reconciler::{Collectors, Reconciler};
 use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
-use crate::metrics::testing::{gather_series, series_id};
 use crate::test_support::{FakeDocker, capture_logs};
 use go_clock::FakeClock;
+use go_prom::testing::{gather_series, series_id};
 use go_slog::Level;
 
 const NOW_SECONDS: i64 = 1_767_225_600;

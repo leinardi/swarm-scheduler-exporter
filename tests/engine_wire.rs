@@ -47,6 +47,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use go_clock::{Clock as _, SystemClock};
+use go_prom::{Gathered, GatheredSeries, Registry, Value, text};
 use go_slog::{Config as LogConfig, Format, Level, Logger};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::reconciler::{
@@ -59,7 +60,6 @@ use swarm_scheduler_exporter::docker::{
     with_docker_timeout,
 };
 use swarm_scheduler_exporter::labels::validate_and_sanitize_label_names;
-use swarm_scheduler_exporter::metrics::{Gathered, GatheredSeries, Registry, Value, text};
 use swarm_scheduler_exporter::run::{Metrics, MetricsOptions, register_metrics};
 
 use support::OrPanic as _;

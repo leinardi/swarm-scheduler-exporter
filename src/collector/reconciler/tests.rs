@@ -668,7 +668,7 @@ impl Fixture {
     }
 
     fn desired_series(&self) -> usize {
-        let registry = crate::metrics::Registry::new();
+        let registry = go_prom::Registry::new();
         self.collectors.replica_gauges.register(&registry).unwrap();
         registry
             .gather()

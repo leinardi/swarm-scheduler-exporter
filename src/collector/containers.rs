@@ -37,10 +37,10 @@ use crate::docker::{
     CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, DockerApi, with_deadline, with_timeout,
 };
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
-use crate::metrics::{
+use go_compat::strings::{equal_fold, to_lower, trim_space};
+use go_prom::{
     Collector, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotFamily, constant_desc,
 };
-use go_compat::strings::{equal_fold, to_lower, trim_space};
 use go_slog::{Attr, Logger};
 
 use super::error::CallError;

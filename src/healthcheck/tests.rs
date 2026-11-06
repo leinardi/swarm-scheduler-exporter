@@ -393,7 +393,7 @@ async fn the_probe_reads_the_exporter_s_answer() {
     let address = listener.local_addr().unwrap().to_string();
     let app = crate::server::App::new(
         Box::new(|| (false, "last poll too old".to_owned())),
-        Box::new(|_| crate::metrics::exposition::Exposition {
+        Box::new(|_| go_prom::exposition::Exposition {
             content_type: String::new(),
             content_encoding: None,
             body: Vec::new(),

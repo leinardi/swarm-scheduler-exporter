@@ -49,13 +49,14 @@ use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::docker::{self, Client, DockerApi, Settings};
 use crate::healthcheck::run_healthcheck;
-use crate::metrics::exposition::render;
-use crate::metrics::process::ProcessCollector;
-use crate::metrics::promhttp::HandlerMetrics;
-use crate::metrics::{Collector, RegisterError, Registry};
 use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
 use go_clock::{Clock, SystemClock};
+use go_prom::ExpfmtVersion;
+use go_prom::exposition::render;
+use go_prom::process::ProcessCollector;
+use go_prom::promhttp::HandlerMetrics;
+use go_prom::{Collector, RegisterError, Registry};
 use go_slog::{Attr, Logger};
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
@@ -359,6 +360,7 @@ pub fn app(
         let accept_encoding: Vec<&str> =
             request.accept_encoding.iter().map(String::as_str).collect();
         let exposition = render(
+            ExpfmtVersion::V0_71_0,
             &families,
             request.accept.as_deref(),
             &accept_encoding,

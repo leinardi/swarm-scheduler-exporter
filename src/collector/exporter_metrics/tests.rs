@@ -25,7 +25,7 @@
 use jiff::Timestamp;
 
 use super::*;
-use crate::metrics::text::encode;
+use go_prom::text::encode;
 
 fn exposition(metrics: &ExporterMetrics) -> String {
     let registry = Registry::new();

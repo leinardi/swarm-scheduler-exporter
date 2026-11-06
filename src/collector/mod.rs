@@ -38,7 +38,7 @@ pub mod replicas_state;
 pub mod service_update;
 pub mod types;
 
-use crate::metrics::LabelsMismatch;
+use go_prom::LabelsMismatch;
 
 /// The Prometheus Go client's `With` and `WithLabelValues` panic on label values that do not fit
 /// the family; so does this, which the reconciler's step recovery then catches as Go's does.
