@@ -12,15 +12,13 @@ publish = false
 [lints]
 workspace = true
 
-# The Dockerfile reader and the Markdown link checker.
+# The repository checks the meta-tests run (repo-meta, rust-common) and the repository root
+# (testenv-core's repo_root!, rust-common).
 [dependencies]
-regex = "1.13.1"
-
-# The pre-commit configuration (YAML), the scratch repositories, and the workspace manifests.
-[dev-dependencies]
-serde_yaml_ng = "0.10"
-tempfile = "3.27.0"
-toml = "1.1.8"
-# gitenv: git commands that cannot reach the repository being committed (rust-common), for the
-# scratch repositories.
+repo-meta.workspace = true
 testenv-core.workspace = true
+
+# The Docker SDK boundary's own rules: the manifests (toml) and the source scans (regex).
+[dev-dependencies]
+regex = "1.13.1"
+toml = "1.1.8"

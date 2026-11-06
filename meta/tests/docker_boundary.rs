@@ -40,13 +40,16 @@
 //!   there, calls no write, and asks only for paths the shipped socket-proxy allowlist grants,
 //!   `/_ping` included.
 //!
-//! Each rule is a function over the files' text, so each has a negative control.
+//! Each rule is a function over the files' text, so each has a negative control. They are this
+//! repository's own: repo-meta's `docker_drivers`, which `integration_targets.rs` runs, sees a
+//! client only where code imports or calls it, and these rules see the name anywhere on a line, a
+//! comment and `extern crate` included.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use meta::repo;
 use regex::Regex;
+use repo_meta::workspace::{member_manifest, members};
 use toml::{Table, Value};
 
 const SDK: &str = "bollard";
@@ -340,33 +343,20 @@ fn client_violations(sources: &[(&str, &str)], env: &str) -> Vec<String> {
 
 /// The workspace manifests: the root, then each member's.
 fn workspace_manifests() -> Vec<(String, String)> {
-    let root = repo::read("Cargo.toml");
+    let repo = meta::repo();
+    let root = repo.read("Cargo.toml");
     let parsed: Table = root
         .parse()
         .unwrap_or_else(|error| panic!("parse Cargo.toml: {error}"));
-    let members: Vec<String> = parsed
-        .get("workspace")
-        .and_then(|workspace| workspace.get("members"))
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("the root Cargo.toml lists no [workspace] members"))
+    let members: Vec<String> = members(&parsed)
+        .unwrap_or_else(|problem| panic!("{problem}"))
         .iter()
-        .filter_map(Value::as_str)
         .filter(|member| *member != ".")
-        .map(|member| format!("{member}/Cargo.toml"))
+        .map(|member| member_manifest(member))
         .collect();
     let mut manifests = vec![("Cargo.toml".to_owned(), root)];
-    for member in members {
-        let text = repo::read(&member);
-        manifests.push((member, text));
-    }
+    manifests.extend(repo.read_all(&members));
     manifests
-}
-
-fn read_all(paths: &[String]) -> Vec<(String, String)> {
-    paths
-        .iter()
-        .map(|path| (path.clone(), repo::read(path)))
-        .collect()
 }
 
 fn borrowed(files: &[(String, String)]) -> Vec<(&str, &str)> {
@@ -378,11 +368,13 @@ fn borrowed(files: &[(String, String)]) -> Vec<(&str, &str)> {
 
 /// The non-test sources of the exporter.
 fn client_sources() -> Vec<(String, String)> {
-    let paths: Vec<String> = repo::files_under("src", &[".rs"])
+    let repo = meta::repo();
+    let paths: Vec<String> = repo
+        .files_under("src", &[".rs"])
         .into_iter()
         .filter(|path| !path.ends_with("/tests.rs") && !path.contains("/tests/"))
         .collect();
-    read_all(&paths)
+    repo.read_all(&paths)
 }
 
 #[test]
@@ -401,7 +393,8 @@ fn the_docker_client_is_docker_engine_without_writes() {
 
 #[test]
 fn src_names_neither_the_sdk_nor_the_harness() {
-    let sources = read_all(&repo::files_under("src", &[".rs"]));
+    let repo = meta::repo();
+    let sources = repo.read_all(&repo.files_under("src", &[".rs"]));
     assert!(!sources.is_empty(), "no source under src");
     let violations = source_violations(&borrowed(&sources));
     assert!(violations.is_empty(), "{}", violations.join("\n"));
@@ -412,7 +405,7 @@ fn the_docker_client_only_reads_allowlisted_paths() {
     let sources = client_sources();
     let violations = client_violations(
         &borrowed(&sources),
-        &repo::read("deployments/docker/socket-proxy.env"),
+        &meta::repo().read("deployments/docker/socket-proxy.env"),
     );
     assert!(violations.is_empty(), "{}", violations.join("\n"));
 }

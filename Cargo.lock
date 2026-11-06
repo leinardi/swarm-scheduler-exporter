@@ -18,16 +18,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "annotate-snippets"
+version = "0.12.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a5b0a5ab8561c603f16c3b78c24a386b1f70e7fc1b1b1e8c15738828e4a176"
+dependencies = [
+ "anstyle",
+ "memchr",
+ "unicode-width",
+]
+
+[[package]]
 name = "anstyle"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "autocfg"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "base64"
@@ -173,6 +196,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,7 +255,7 @@ dependencies = [
 [[package]]
 name = "docker-engine"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "bytes",
  "flate2",
@@ -244,6 +273,29 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89253175e704ab869b04f9db224d38630e0211a53841a79181deae0889e169f5"
+dependencies = [
+ "cfg-if",
+ "core_detect",
+ "multiversion_no_op",
+ "rustversion",
+ "scopeguard",
+ "simdutf8",
+]
+
+[[package]]
+name = "encoding_rs_io"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba3fe847045ecff794b9c138293a80db914678c453ad63fbf0c6a9eb6e00b22"
+dependencies = [
+ "encoding_rs",
 ]
 
 [[package]]
@@ -369,7 +421,7 @@ dependencies = [
 [[package]]
 name = "go-clock"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "jiff",
  "tokio",
@@ -378,7 +430,7 @@ dependencies = [
 [[package]]
 name = "go-compat"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "jiff",
 ]
@@ -386,7 +438,7 @@ dependencies = [
 [[package]]
 name = "go-http"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "bytes",
  "go-clock",
@@ -403,7 +455,7 @@ dependencies = [
 [[package]]
 name = "go-prom"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "flate2",
  "go-compat",
@@ -412,11 +464,21 @@ dependencies = [
 [[package]]
 name = "go-slog"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "go-clock",
  "go-compat",
  "jiff",
+]
+
+[[package]]
+name = "granit-parser"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05f05586d4d4df3d47123207826c40b252728b438a1a07bad3c01ee6bea401df"
+dependencies = [
+ "arraydeque",
+ "smallvec",
 ]
 
 [[package]]
@@ -482,7 +544,7 @@ dependencies = [
 [[package]]
 name = "http-framing"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 
 [[package]]
 name = "httparse"
@@ -773,8 +835,7 @@ name = "meta"
 version = "0.0.0"
 dependencies = [
  "regex",
- "serde_yaml_ng",
- "tempfile",
+ "repo-meta",
  "testenv-core",
  "toml",
 ]
@@ -798,6 +859,21 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
+
+[[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]
@@ -902,6 +978,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "repo-meta"
+version = "0.1.0"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
+dependencies = [
+ "go-compat",
+ "regex",
+ "serde-saphyr",
+ "serde_json",
+ "tempfile",
+ "testenv-core",
+ "toml",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -975,6 +1065,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustversion"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -988,6 +1084,12 @@ checksum = "9cb23c424d8ee841bb4d813677ca237e2a610067d594fec130f87d6093495ab5"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "security-framework"
@@ -1020,6 +1122,20 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-saphyr"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43fb82d550b07e6f929a58d7d0935182602f48ddead875f5ee313c41c8f07fe"
+dependencies = [
+ "annotate-snippets",
+ "encoding_rs_io",
+ "granit-parser",
+ "num-traits",
+ "serde_core",
+ "smallvec",
 ]
 
 [[package]]
@@ -1088,19 +1204,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml_ng"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4db627b98b36d4203a7b458cf3573730f2bb591b28871d916dfa9efabfd41f"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1121,6 +1224,12 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "simdutf8"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "slab"
@@ -1258,7 +1367,7 @@ dependencies = [
 [[package]]
 name = "testenv-core"
 version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+source = "git+https://github.com/leinardi/rust-common?rev=6d7bf52c92c8114a13dee785df4a17a90df2300f#6d7bf52c92c8114a13dee785df4a17a90df2300f"
 dependencies = [
  "bollard",
  "go-compat",
@@ -1428,10 +1537,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
+name = "unicode-width"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "untrusted"

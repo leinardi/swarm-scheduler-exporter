@@ -23,9 +23,15 @@
  */
 
 //! Repository meta-tests: checks on the repository itself rather than on the exporter. The tests
-//! live under `tests/`; this library holds what they share: the repository's files and the
-//! Dockerfile and Markdown readers. The isolated git environment is testenv-core's `gitenv`.
+//! live under `tests/` and run the checks of rust-common's `repo-meta` crate on this repository,
+//! each with this repository's parameters, beside the rules that are this repository's own; this
+//! library holds only the repository the tests read.
 
-pub mod dockerfile;
-pub mod links;
-pub mod repo;
+use repo_meta::Repo;
+
+/// This repository: the meta crate sits one level below its root. Its git commands keep the
+/// process's environment, so under the commit hook its listings name the index being committed.
+#[must_use]
+pub fn repo() -> Repo {
+    Repo::new(testenv_core::repo_root!())
+}

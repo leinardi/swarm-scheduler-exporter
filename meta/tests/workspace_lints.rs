@@ -25,77 +25,75 @@
 //! The shared lint set is declared once, in the root `[workspace.lints]`, and a package only obeys
 //! it when its own manifest opts in: `[lints]` is not inherited by workspace members. A member that
 //! forgets `[lints] workspace = true` builds and passes clippy with the default lints, silently.
+//! The check is `repo_meta::workspace::lint_opt_in`; the negative controls run it on scratch
+//! repositories.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use repo_meta::scratch::ScratchRepo;
+use repo_meta::workspace::lint_opt_in;
+use repo_meta::{report, strings};
 
-use toml::Table;
-
-fn repo_root() -> PathBuf {
-    // The meta crate sits one level below the repository root. A plain join rather than parent():
-    // clippy's allow-expect-in-tests covers #[test] functions, not the helpers beside them.
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
-}
-
-fn read_manifest(path: &Path) -> Table {
-    let text =
-        fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    text.parse::<Table>()
-        .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
-}
-
-#[test]
-fn root_manifest_declares_workspace_lints() {
-    let root = read_manifest(&repo_root().join("Cargo.toml"));
-    let lints = root
-        .get("workspace")
-        .and_then(|workspace| workspace.get("lints"))
-        .and_then(toml::Value::as_table)
-        .expect("the root Cargo.toml has a [workspace.lints] table");
-
-    assert!(
-        lints.contains_key("rust"),
-        "[workspace.lints.rust] is missing"
-    );
-    assert!(
-        lints.contains_key("clippy"),
-        "[workspace.lints.clippy] is missing"
-    );
-}
-
+/// The root manifest declares `[workspace.lints.rust]` and `[workspace.lints.clippy]`, lists its
+/// members explicitly (no glob), and every member declares `[lints] workspace = true`.
 #[test]
 fn every_workspace_member_opts_into_the_workspace_lints() {
-    let root_dir = repo_root();
-    let root = read_manifest(&root_dir.join("Cargo.toml"));
-    let members = root
-        .get("workspace")
-        .and_then(|workspace| workspace.get("members"))
-        .and_then(toml::Value::as_array)
-        .expect("the root Cargo.toml lists [workspace] members");
+    let problems = lint_opt_in(&meta::repo(), None);
+    assert!(problems.is_empty(), "{}", report(&problems));
+}
 
-    assert!(!members.is_empty(), "the workspace lists no members");
+const ROOT: &str = "[workspace]\nmembers = [\".\", \"meta\"]\n\n[workspace.lints.rust]\n\
+                    unsafe_code = \"forbid\"\n\n[workspace.lints.clippy]\nall = \"deny\"\n\n\
+                    [lints]\nworkspace = true\n";
+const MEMBER: &str = "[package]\nname = \"meta\"\n\n[lints]\nworkspace = true\n";
 
-    for member in members {
-        let member = member
-            .as_str()
-            .expect("a workspace member is a path string");
+/// The lint opt-in of a scratch workspace whose root manifest is `root` and whose `meta` member's
+/// is `member`.
+fn scratch_problems(root: &str, member: &str) -> Vec<String> {
+    let scratch = ScratchRepo::new();
+    scratch.write("Cargo.toml", root);
+    scratch.write("meta/Cargo.toml", member);
+    strings(&lint_opt_in(&scratch.repo(), None))
+}
+
+/// The negative controls: each manifest below breaks one rule, and the clean workspace passes.
+#[test]
+fn lint_opt_in_rejects_each_escape() {
+    assert_eq!(scratch_problems(ROOT, MEMBER), Vec::<String>::new());
+    for (name, root, member, want) in [
+        (
+            "a member without the opt-in",
+            ROOT,
+            "[package]\nname = \"meta\"\n",
+            "meta/Cargo.toml",
+        ),
+        (
+            "the root package without the opt-in",
+            &*ROOT.replace("[lints]\nworkspace = true\n", ""),
+            MEMBER,
+            "Cargo.toml",
+        ),
+        (
+            "a glob member",
+            &*ROOT.replace("\"meta\"", "\"crates/*\""),
+            MEMBER,
+            "is a glob",
+        ),
+        (
+            "no clippy lints",
+            &*ROOT.replace("[workspace.lints.clippy]\nall = \"deny\"\n", ""),
+            MEMBER,
+            "[workspace.lints.clippy] is missing",
+        ),
+        (
+            "no workspace lints",
+            "[workspace]\nmembers = [\"meta\"]\n",
+            MEMBER,
+            "no [workspace.lints] table",
+        ),
+    ] {
+        let problems = scratch_problems(root, member);
         assert!(
-            !member.contains('*'),
-            "member {member:?} is a glob; list members explicitly so this check sees each one"
-        );
-
-        let manifest_path = root_dir.join(member).join("Cargo.toml");
-        let manifest = read_manifest(&manifest_path);
-        let opts_in = manifest
-            .get("lints")
-            .and_then(|lints| lints.get("workspace"))
-            .and_then(toml::Value::as_bool);
-
-        assert_eq!(
-            opts_in,
-            Some(true),
-            "{} does not declare [lints] workspace = true",
-            manifest_path.display()
+            problems.iter().any(|problem| problem.contains(want)),
+            "{name}: want a problem containing {want:?}, got {problems:?}"
         );
     }
 }
