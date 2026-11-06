@@ -30,8 +30,9 @@ use tokio::time::Instant;
 use super::*;
 use crate::docker::Error;
 use crate::docker::types::{ContainerConfig, ContainerState, ContainerSummary, Health, Present};
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
 use crate::test_support::{FakeDocker, capture_logs};
-use go_prom::testing::{gather_series, series_id};
 use tracing::level_filters::LevelFilter;
 
 fn names(names: &[&str]) -> Vec<String> {
@@ -604,7 +605,7 @@ fn expected_series(rows: &[ContainerRow]) -> BTreeMap<String, f64> {
 }
 
 fn gathered(state: &ContainersState) -> BTreeMap<String, f64> {
-    gather_series(Arc::clone(state.family()) as Arc<dyn Collector>)
+    gather_series(state.family())
 }
 
 /// Go: `TestUpdateContainersStateGauge_OneHotPerContainer`
@@ -691,7 +692,8 @@ fn family_carries_go_name_help_and_labels() {
             "exit_code"
         ]
     );
-    let registry = Registry::new();
-    state.register(&registry).unwrap();
-    assert!(state.register(&registry).is_err());
+    let mut registry = Registry::default();
+    state.register(&mut registry);
+    state.family().collector().publish(Vec::new());
+    assert!(crate::metrics::render(&registry).ends_with("# EOF\n"));
 }

@@ -6,7 +6,7 @@
 # changing this file, so raising a count is a visible act rather than a side effect.
 #
 # Regenerate with: scripts/check-suppressions.sh --update
-# reviewed 14, 2026-11-06
+# reviewed 15, 2026-11-06
 expect/clippy::match_same_arms	1
 expect/clippy::struct_excessive_bools	1
 expect/clippy::zero_sized_map_values	1

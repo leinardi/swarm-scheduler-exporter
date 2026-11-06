@@ -37,13 +37,3 @@ pub mod reconciler;
 pub mod replicas_state;
 pub mod service_update;
 pub mod types;
-
-use go_prom::LabelsMismatch;
-
-/// The Prometheus Go client's `With` and `WithLabelValues` panic on label values that do not fit
-/// the family; so does this, which the reconciler's step recovery then catches as Go's does.
-pub(crate) fn must(result: Result<(), LabelsMismatch>) {
-    if let Err(error) = result {
-        panic!("{error}");
-    }
-}

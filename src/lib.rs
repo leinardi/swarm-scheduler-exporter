@@ -29,6 +29,7 @@ pub mod collector;
 pub mod docker;
 pub mod healthcheck;
 pub mod labels;
+pub mod metrics;
 pub mod run;
 pub mod server;
 pub mod version;

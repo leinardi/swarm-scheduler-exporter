@@ -37,8 +37,9 @@ use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::test_support::FakeDocker;
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
 use clock::FakeClock;
-use go_prom::testing::{gather_series, series_id};
 
 const NOW_SECONDS: i64 = 1_767_225_600;
 
@@ -144,7 +145,7 @@ fn the_health_gauge_is_evaluated_at_scrape() {
     let fixture = fixture(Duration::from_secs(10));
     let gauges = HealthGauges::new(fixture.health.clone(), "v1.2.3", "abc", "2026-01-01");
     let health = || {
-        let series = gather_series(Arc::clone(gauges.health()) as Arc<dyn Collector>);
+        let series = gather_series(gauges.health());
         series["swarm_exporter_health{}"]
     };
     assert_eq!(Some(health()), Some(0.0), "before any poll");
@@ -218,7 +219,7 @@ fn unbound_health_waits_for_its_reconciler() {
 fn build_info_is_one_with_the_build() {
     let fixture = fixture(Duration::from_secs(10));
     let gauges = HealthGauges::new(fixture.health, "v1.2.3", "abc", "2026-01-01");
-    let series = gather_series(Arc::clone(gauges.build_info()) as Arc<dyn Collector>);
+    let series = gather_series(gauges.build_info());
     let id = series_id(
         "swarm_exporter_build_info",
         &[
@@ -228,16 +229,12 @@ fn build_info_is_one_with_the_build() {
         ],
     );
     assert_eq!(series.get(&id), Some(&1.0));
-    let registry = Registry::new();
-    gauges.register(&registry).unwrap();
-    let help: Vec<(String, String)> = registry
-        .gather()
-        .into_iter()
-        .map(|family| (family.name, family.help))
-        .collect();
+    let mut registry = Registry::default();
+    gauges.register(&mut registry);
+    let text = crate::test_support::openmetrics::parse(&crate::metrics::render(&registry));
     assert_eq!(
-        help,
-        [
+        text.help,
+        std::collections::BTreeMap::from([
             (
                 "swarm_exporter_build_info".to_owned(),
                 "Build information for this exporter.".to_owned()
@@ -246,8 +243,10 @@ fn build_info_is_one_with_the_build() {
                 "swarm_exporter_health".to_owned(),
                 "Exporter health status: 1=healthy, 0=unhealthy.".to_owned()
             ),
-        ]
+        ])
     );
+    assert_eq!(text.types["swarm_exporter_build_info"], "gauge");
+    assert_eq!(text.types["swarm_exporter_health"], "gauge");
 }
 
 /// The timestamps are unix nanoseconds, 0 until marked.

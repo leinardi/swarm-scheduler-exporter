@@ -56,11 +56,11 @@ use tracing::{debug, error, warn};
 use super::desired::{ReplicaGauges, labels_for_metadata, replica_counts};
 use super::error::CallError;
 use super::exporter_metrics::{ExporterMetrics, ResyncResult};
-use super::must;
 use super::nodes::NodesByState;
 use super::replicas_state::{ReplicasState, ServiceCounter};
 use super::service_update::ServiceUpdateMetrics;
 use super::types::{CustomLabels, MetadataCache, NodeCache, ServiceMetadata, build_metadata};
+use crate::metrics::must;
 
 use self::poll::{PollReceivers, PollSenders, poll_channels};
 use self::recover::{PanicReport, recover};

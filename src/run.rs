@@ -50,14 +50,12 @@ use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::docker::{self, Client, DockerApi};
 use crate::healthcheck::run_healthcheck;
-use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
+use crate::metrics;
+use crate::server::{self, App, Exposition, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
 use clock::{Clock, SystemClock};
-use go_prom::ExpfmtVersion;
-use go_prom::exposition::render;
-use go_prom::process::ProcessCollector;
-use go_prom::promhttp::HandlerMetrics;
-use go_prom::{Collector, RegisterError, Registry};
+use prometheus_client::registry::Registry;
+use service_kit::process::ProcessCollector;
 use service_kit::runtime::Exit;
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
@@ -89,14 +87,6 @@ pub struct Metrics {
     pub containers: Option<Arc<ContainersState>>,
 }
 
-/// The Prometheus Go client's `MustRegister`: the exporter registers each family once, so a refusal
-/// is a programming error.
-fn must_register(result: Result<(), RegisterError>) {
-    if let Err(error) = result {
-        panic!("{error}");
-    }
-}
-
 /// Go's `registerMetrics`: builds every family and registers it on `registry` in Go's order
 /// (desired and schedulable replicas, replicas state, health and build info, nodes, the
 /// exporter's own families, service update, then the containers when enabled). The health check
@@ -104,28 +94,28 @@ fn must_register(result: Result<(), RegisterError>) {
 /// initial resync, as Go's is before the reconciler runs.
 #[must_use]
 pub fn register_metrics(
-    registry: &Registry,
+    registry: &mut Registry,
     options: &MetricsOptions,
     clock: Arc<dyn Clock>,
 ) -> Metrics {
     let custom = &options.custom_labels;
     let timestamps = Arc::new(Timestamps::default());
     let replica_gauges = Arc::new(ReplicaGauges::new(custom));
-    must_register(replica_gauges.register(registry));
+    replica_gauges.register(registry);
     let replicas_state = Arc::new(ReplicasState::new(custom));
-    must_register(replicas_state.register(registry));
+    replicas_state.register(registry);
     let health = Health::unbound(Arc::clone(&timestamps), options.poll_delay, clock);
     let [version, commit, date] = &options.build;
-    must_register(HealthGauges::new(health.clone(), version, commit, date).register(registry));
+    HealthGauges::new(health.clone(), version, commit, date).register(registry);
     let nodes_by_state = Arc::new(NodesByState::new());
-    must_register(nodes_by_state.register(registry));
+    nodes_by_state.register(registry);
     let exporter_metrics = Arc::new(ExporterMetrics::new(timestamps));
-    must_register(exporter_metrics.register(registry));
+    exporter_metrics.register(registry);
     let service_update = Arc::new(ServiceUpdateMetrics::new(custom));
-    must_register(service_update.register(registry));
+    service_update.register(registry);
     let containers = options.containers.enabled.then(|| {
         let containers = Arc::new(ContainersState::new(options.containers.clone()));
-        must_register(containers.register(registry));
+        containers.register(registry);
         containers
     });
     Metrics {
@@ -142,14 +132,10 @@ pub fn register_metrics(
     }
 }
 
-/// What Go's default registry and `promhttp.Handler` add besides the exporter's families: the
-/// process collector, and the scrape handler's own counters (Q1: no `go_*`).
-#[must_use]
-pub fn register_runtime_metrics(registry: &Registry) -> HandlerMetrics {
-    must_register(registry.register(Arc::new(ProcessCollector::new()) as Arc<dyn Collector>));
-    let handler = HandlerMetrics::new();
-    must_register(handler.register(registry));
-    handler
+/// What Go's default registry added besides the exporter's families: the process collector (Q1:
+/// no `go_*`, and no `promhttp_metric_handler_*`).
+pub fn register_runtime_metrics(registry: &mut Registry) {
+    registry.register_collector(Box::new(ProcessCollector::new()));
 }
 
 /// The running workers.
@@ -299,34 +285,17 @@ impl<D: DockerApi> Poller<D> {
 }
 
 /// The endpoints Go's `server.NewMuxWithHealth` serves: `/healthz` from `health`, and
-/// `/metrics` from `registry`, counted by `handler` as promhttp's `InstrumentMetricHandler`
-/// counts it (in flight while the families are gathered and encoded, then one more request under
-/// its status code), with `Date` from `clock` and the server's errors through the log.
+/// `/metrics` from `registry` as OpenMetrics text, with `Date` from `clock` and the server's
+/// errors through the log.
 #[must_use]
-pub fn app(
-    health: Health,
-    registry: Arc<Registry>,
-    handler: HandlerMetrics,
-    clock: Arc<dyn Clock>,
-) -> App {
+pub fn app(health: Health, registry: Arc<Registry>, clock: Arc<dyn Clock>) -> App {
     let health: HealthFn = Box::new(move || {
         let (healthy, reason) = health.snapshot_now();
         (healthy, reason.to_owned())
     });
-    let metrics: MetricsFn = Box::new(move |request: &MetricsRequest| {
-        let in_flight = handler.begin();
-        let families = registry.gather();
-        let accept_encoding: Vec<&str> =
-            request.accept_encoding.iter().map(String::as_str).collect();
-        let exposition = render(
-            ExpfmtVersion::V0_71_0,
-            &families,
-            request.accept.as_deref(),
-            &accept_encoding,
-            request.names.as_ref(),
-        );
-        in_flight.finish(200);
-        exposition
+    let metrics: MetricsFn = Box::new(move |_: &MetricsRequest| Exposition {
+        content_type: metrics::CONTENT_TYPE.to_owned(),
+        body: metrics::render(&registry).into_bytes(),
     });
     App::new(health, metrics, clock)
 }
@@ -420,9 +389,9 @@ where
     };
     // Checked by check_poll_delay: at least one second.
     let poll_delay = Duration::from_nanos(u64::try_from(args.poll_delay).unwrap_or_default());
-    let registry = Arc::new(Registry::new());
+    let mut registry = Registry::default();
     let metrics = register_metrics(
-        &registry,
+        &mut registry,
         &MetricsOptions {
             custom_labels,
             poll_delay,
@@ -451,8 +420,8 @@ where
 
     let workers = start_workers(&root, docker, &metrics, poll_delay, &clock);
 
-    let handler = register_runtime_metrics(&registry);
-    let app = Arc::new(app(metrics.health.clone(), registry, handler, clock));
+    register_runtime_metrics(&mut registry);
+    let app = Arc::new(app(metrics.health.clone(), Arc::new(registry), clock));
     let deadline: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
     let code = server::serve_until_done(&root, workers.join(), &args.listen_addr, app, {
         let deadline = Arc::clone(&deadline);

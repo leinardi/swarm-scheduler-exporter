@@ -79,8 +79,14 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   - `src/labels.rs` — sanitizing and validating custom label keys; `src/version.rs` — the build
     stamps (`service_kit::buildinfo!`).
   - `tests/` — the black-box tests: the Engine API wire captures (`engine_wire.rs`, against
-    `tests/support/fake_engine.rs`), the exposition, the registry, the run lifecycle. The unit tests
-    capture logs with `test_support::capture_logs` (a scoped `tracing_setup` subscriber).
+    `tests/support/fake_engine.rs`), the metrics (`tests/metrics.rs`: the inventory against
+    `tests/testdata/metrics/inventory.txt`, values, buckets, removal, scrape atomicity), the run
+    lifecycle. The unit tests capture logs with `test_support::capture_logs` (a scoped
+    `tracing_setup` subscriber).
+  - `src/metrics.rs` — the building blocks over prometheus-client: `GaugeVec`, the snapshot
+    collector and builder (families built whole per poll and swapped in at once), `ScrapeGauge`,
+    and `render` (OpenMetrics text). The fixed families use prometheus-client's counters and
+    histogram directly.
 - `testenv/` — the DinD Swarm harness: the cluster, its bring-up and teardown and the suite's
   names (`config.rs`) over testenv-core, with bollard behind its `integration` feature (the
   exporter package names none of testenv, testenv-core and bollard in any table;
@@ -99,11 +105,10 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
 dependency pinned by commit (`rev = "..."`, while the upstream-stack work is in flight) in
 `[workspace.dependencies]`: go-compat (the Go library ports), clock (the `Clock` trait),
-tracing-setup (the logger's subscriber; the code logs with `tracing` macros), go-prom (the registry,
-the text exposition, the `process_*` collector and promhttp), go-http (the server), docker-engine
-(the Engine API client), service-kit (the runtime, the signals, the stamps), testenv-core (the
-harness's generic half) and repo-meta (the meta-tests' checks). The exporter keeps only what is
-its own.
+tracing-setup (the logger's subscriber; the code logs with `tracing` macros), go-http (the
+server), docker-engine (the Engine API client), service-kit (the runtime, the signals, the stamps,
+the `process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
+meta-tests' checks). The exporter keeps only what is its own.
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
@@ -112,7 +117,8 @@ its own.
   `git diff Cargo.lock` touches only the rust-common lines.
 - The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
   otherwise:
-  `ExpfmtVersion::V0_71_0` (prometheus/common v0.71.0's negotiation); go-http's `TIMEOUTS`
+  the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
+  `process-metrics`; Q2); go-http's `TIMEOUTS`
   (read header 5s, read 10s, write 15s, idle 60s) and the `http listen:` prefix;
   docker-engine's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
   response-header timeout (`RESPONSE_HEADER_TIMEOUT`); the log flags (Q4:

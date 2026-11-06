@@ -26,16 +26,51 @@
 //! `tracing` subscriber, and a bounded [`eventually`].
 
 mod fake_docker;
+pub(crate) mod openmetrics;
 
 use std::time::Duration;
 
 pub(crate) use fake_docker::{FakeDocker, FakeEvent};
 
 use crate::docker::types::{Node, NodeDescription, NodeSpec, NodeStatus, Platform};
+use std::sync::Arc;
+
 use serde_json::Value;
 use tracing::dispatcher::DefaultGuard;
 use tracing::level_filters::LevelFilter;
 use tracing_setup::testing::Capture;
+
+/// The series of `collector` by [`openmetrics::series_id`]: registered on a fresh registry,
+/// encoded and read back.
+///
+/// # Panics
+///
+/// A family that is not scalar.
+pub(crate) fn gather_series(
+    collector: &Arc<impl prometheus_client::collector::Collector>,
+) -> std::collections::BTreeMap<String, f64> {
+    let mut registry = prometheus_client::registry::Registry::default();
+    crate::metrics::register(&mut registry, collector);
+    openmetrics::parse(&crate::metrics::render(&registry)).series()
+}
+
+/// A counter's value as the float the tests compare.
+///
+/// # Panics
+///
+/// A count above `u32::MAX`, which no test reaches.
+pub(crate) fn count(value: u64) -> f64 {
+    f64::from(u32::try_from(value).expect("a small count"))
+}
+
+/// The series of what `register` registers, by [`openmetrics::series_id`].
+pub(crate) fn gather_registered(
+    register: impl FnOnce(&mut prometheus_client::registry::Registry),
+) -> std::collections::BTreeMap<String, f64> {
+    let mut registry = prometheus_client::registry::Registry::default();
+    register(&mut registry);
+    openmetrics::parse(&crate::metrics::render(&registry)).series()
+}
 
 /// How often [`eventually`] checks its condition.
 const EVENTUALLY_INTERVAL: Duration = Duration::from_millis(10);

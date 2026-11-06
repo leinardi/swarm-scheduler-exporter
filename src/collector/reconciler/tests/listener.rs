@@ -126,7 +126,7 @@ impl Fixture {
     }
 
     fn reconnects(&self) -> f64 {
-        self.collectors.metrics.events_reconnects().get()
+        crate::test_support::count(self.collectors.metrics.events_reconnects())
     }
 }
 
@@ -484,14 +484,11 @@ async fn a_lost_remove_is_recovered_on_reconnect() {
     listening.stop().await;
     let reconciler = running.stop().await;
     assert!(reconciler.metadata().get("svc2").is_none());
-    let registry = go_prom::Registry::new();
-    gauges.register(&registry).unwrap();
-    let desired_series: usize = registry
-        .gather()
-        .iter()
-        .filter(|family| family.name == "swarm_service_desired_replicas")
-        .map(|family| family.series.len())
-        .sum();
+    let desired_series =
+        crate::test_support::gather_registered(|registry| gauges.register(registry))
+            .keys()
+            .filter(|series| series.starts_with("swarm_service_desired_replicas{"))
+            .count();
     assert_eq!(desired_series, 1);
 }
 

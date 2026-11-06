@@ -510,7 +510,7 @@ fn replica_gauges_carry_go_names_help_and_labels() {
             SCHEDULABLE_REPLICAS_HELP,
         ),
     ] {
-        let desc = &family.descs()[0];
+        let desc = family.desc();
         assert_eq!(desc.name(), name);
         assert_eq!(desc.help(), help);
         assert_eq!(
@@ -535,9 +535,8 @@ fn replica_gauges_carry_go_names_help_and_labels() {
          placement constraints (replicated: min(configured, eligible_nodes); global: eligible \
          nodes; jobs and restart-condition none services: 0)."
     );
-    let registry = Registry::new();
-    gauges.register(&registry).unwrap();
-    assert!(gauges.register(&registry).is_err(), "registered once");
+    let mut registry = Registry::default();
+    gauges.register(&mut registry);
 }
 
 #[test]

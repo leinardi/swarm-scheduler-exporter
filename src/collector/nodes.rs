@@ -29,9 +29,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::docker::types::Node;
-use go_prom::{
-    Collector, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotFamily, constant_desc,
-};
+use crate::metrics::{self, Desc, SnapshotBuilder, SnapshotFamily};
+use prometheus_client::registry::Registry;
 use tracing::error;
 
 /// The `role` label.
@@ -64,10 +63,9 @@ impl NodesByState {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            family: Arc::new(SnapshotFamily::new(constant_desc(
+            family: Arc::new(SnapshotFamily::new(Desc::new(
                 NODES_BY_STATE_NAME,
                 NODES_BY_STATE_HELP,
-                Kind::Gauge,
                 &[LABEL_NODE_ROLE, LABEL_NODE_AVAILABILITY, LABEL_NODE_STATUS],
             ))),
         }
@@ -75,11 +73,8 @@ impl NodesByState {
 
     /// Registers the family.
     ///
-    /// # Errors
-    ///
-    /// The registry's refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        registry.register(Arc::clone(&self.family) as Arc<dyn Collector>)
+    pub fn register(&self, registry: &mut Registry) {
+        metrics::register(registry, &self.family);
     }
 
     /// The family.

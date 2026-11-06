@@ -38,10 +38,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::docker::types::{Node, Placement, Task};
 use crate::docker::{DockerApi, with_docker_timeout};
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
-use go_prom::{
-    BuildError, Collector, Desc, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotCollector,
-    constant_desc,
-};
+use crate::metrics::{self, BuildError, Desc, SnapshotBuilder, SnapshotCollector};
+use prometheus_client::registry::Registry;
 use tracing::{debug, warn};
 
 use super::desired::{node_eligible, placement_from_metadata};
@@ -464,12 +462,7 @@ impl ReplicasState {
         };
         let desc = |subsystem: &str, name: &str, help: &str, labels: &[String]| {
             let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-            constant_desc(
-                &format!("{NAMESPACE}_{subsystem}_{name}"),
-                help,
-                Kind::Gauge,
-                &labels,
-            )
+            Desc::new(&format!("{NAMESPACE}_{subsystem}_{name}"), help, &labels)
         };
         let state_desc = desc(
             TASK_SUBSYSTEM,
@@ -503,12 +496,8 @@ impl ReplicasState {
     }
 
     /// Registers the three families.
-    ///
-    /// # Errors
-    ///
-    /// The registry's refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        registry.register(Arc::clone(&self.collector) as Arc<dyn Collector>)
+    pub fn register(&self, registry: &mut Registry) {
+        metrics::register(registry, &self.collector);
     }
 
     /// The snapshot collector.

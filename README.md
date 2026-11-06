@@ -195,22 +195,23 @@ For example:
 
 ### Runtime metrics
 
-Beside the `swarm_*` families, `/metrics` carries the process and handler metrics the Prometheus Go
-client exports by default, with the same names, types and help texts:
+Beside the `swarm_*` families, `/metrics` carries the process metrics the Prometheus Go client
+exports by default, with the same names, types and help texts:
 
 - `process_cpu_seconds_total`, `process_open_fds`, `process_max_fds`,
   `process_virtual_memory_bytes`, `process_virtual_memory_max_bytes`,
   `process_resident_memory_bytes`, `process_start_time_seconds`,
-  `process_network_receive_bytes_total` and `process_network_transmit_bytes_total` (Linux);
-- `promhttp_metric_handler_requests_total{code}` (`200`, `500` and `503` from startup) and
-  `promhttp_metric_handler_requests_in_flight`.
+  `process_network_receive_bytes_total` and `process_network_transmit_bytes_total` (Linux).
 
-There are no `go_*` metrics: the exporter has no Go runtime.
+There are no `go_*` metrics (the exporter has no Go runtime) and no `promhttp_metric_handler_*`
+ones (the scrape handler is not promhttp).
 
-The exposition is always the text format (`text/plain; version=0.0.4; charset=utf-8; escaping=…`),
-gzip-compressed when the scraper accepts it. A scraper asking for protobuf gets text too, which
-Prometheus reads without a setting: it scrapes protobuf only for native histograms, and the exporter
-has none.
+The exposition is always OpenMetrics text
+(`application/openmetrics-text; version=1.0.0; charset=utf-8`), uncompressed and ending with
+`# EOF`, whatever the scraper's `Accept` and `Accept-Encoding`. Prometheus reads it without a
+setting. In it a counter's family is named without `_total` (`# TYPE swarm_exporter_polls counter`),
+and its sample carries it (`swarm_exporter_polls_total`): the metric names a query uses are the
+same.
 
 ### Container-level (opt-in)
 
@@ -640,13 +641,10 @@ scrape_configs:
 
 2.0 is the same exporter rewritten in Rust: every `swarm_*` metric keeps its name, type, help text,
 labels and values, and `/metrics`, `/healthz`, the health rules, the flags' names and defaults and
-the Docker access (read-only, the same endpoints) are unchanged. The `/metrics` output of the two
-was diffed against a capture of 1.3.2 over the same Engine API fixtures: for the text exposition
-and for Prometheus 3's request (gzip included) the headers and bodies are identical once the `go_*`
-families are left out and the process values, the poll-duration samples and the two success
-timestamps are masked; a protobuf request differs only in the `Content-Type`, the body being 1.3.2's
-protobuf content as text; and across all 24 captured `Accept` and `Accept-Encoding` combinations
-the encoding is identical and the `Content-Type` too, except where 1.3.2 chose protobuf.
+the Docker access (read-only, the same endpoints) are unchanged. The set of
+metric names, types and label names is pinned against the 1.3.2 exposition (minus the `go_*` and
+`promhttp_*` families), and the series the Docker fixtures feed are compared with 1.3.2's, value
+for value. The wire format is the one thing that changed (Q2): `/metrics` is OpenMetrics text.
 
 What to change when upgrading:
 
@@ -667,8 +665,8 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 
 | # | Area | 1.x | 2.0 |
 | --- | --- | --- | --- |
-| Q1 | Runtime metrics | `go_*`, `process_*` and `promhttp_metric_handler_*` | No `go_*`; `process_*` (the same Linux families, names, types and help texts) and `promhttp_metric_handler_*` unchanged |
-| Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always text 0.0.4, with the `escaping=` value and the gzip choice computed as 1.x does; only the body format differs where 1.x picked protobuf |
+| Q1 | Runtime metrics | `go_*`, `process_*` and `promhttp_metric_handler_*` | No `go_*` and no `promhttp_metric_handler_*`; `process_*` keeps the same Linux families, names, types and help texts |
+| Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always OpenMetrics text (`application/openmetrics-text; version=1.0.0; charset=utf-8`), never compressed; a counter's family has no `_total` (its sample has); `?name[]=` filtering is gone |
 | Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false` and every `strconv.ParseBool` spelling, Go durations for `--poll-delay`, repeatable `--label`, exit 2 on parse errors |
 | Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2), the message naming the accepted values; `plain` (format) and `fatal`, `panic` (level) are no longer accepted, `warning` stays an alias of `warn` |
 | Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | Startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |

@@ -33,8 +33,9 @@ use crate::labels::{maybe_warn_high_cardinality, sanitize_label_names, sanitize_
 use go_compat::float::from_int;
 use go_compat::net_ip::{ip_equal, parse_cidr, parse_ip};
 use go_compat::strings::{equal_fold, to_lower, trim_space};
-use go_prom::{Collector, Kind, RegisterError, Registry, constant_desc};
-use go_prom::{GaugeVec, LabelsMismatch};
+use prometheus_client::registry::Registry;
+
+use crate::metrics::{self, Desc, GaugeVec, LabelsMismatch};
 
 use super::metrics_ids::{
     LABEL_DISPLAY_NAME, LABEL_SERVICE, LABEL_SERVICE_MODE, LABEL_STACK, NAMESPACE,
@@ -93,10 +94,9 @@ impl ReplicaGauges {
         let names = sanitize_label_names(&names);
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let family = |name: &str, help: &str| {
-            Arc::new(GaugeVec::new(constant_desc(
+            Arc::new(GaugeVec::new(Desc::new(
                 &format!("{NAMESPACE}_{SERVICE_SUBSYSTEM}_{name}"),
                 help,
-                Kind::Gauge,
                 &names,
             )))
         };
@@ -107,13 +107,9 @@ impl ReplicaGauges {
     }
 
     /// Registers both families.
-    ///
-    /// # Errors
-    ///
-    /// The registry's refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        registry.register(Arc::clone(&self.desired) as Arc<dyn Collector>)?;
-        registry.register(Arc::clone(&self.schedulable) as Arc<dyn Collector>)
+    pub fn register(&self, registry: &mut Registry) {
+        metrics::register(registry, &self.desired);
+        metrics::register(registry, &self.schedulable);
     }
 
     /// The desired replicas family.

@@ -38,7 +38,6 @@ use std::time::Duration;
 
 use clock::Clock;
 use go_http::{Drained, ListenError, Mux, Reply, Served, Server, TEXT_PLAIN, Timeouts};
-use go_prom::exposition::Exposition;
 use hyper::StatusCode;
 use hyper::header::{CONTENT_TYPE, HeaderValue};
 use tokio::net::TcpListener;
@@ -67,6 +66,15 @@ const LISTEN_ERROR_PREFIX: &str = "http listen: ";
 
 /// The health answer: healthy, or why not.
 pub type HealthFn = Box<dyn Fn() -> (bool, String) + Send + Sync>;
+
+/// What `/metrics` answers: the body and its `Content-Type`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exposition {
+    /// The `Content-Type` header.
+    pub content_type: String,
+    /// The body.
+    pub body: Vec<u8>,
+}
 
 /// The `/metrics` answer for a request.
 pub type MetricsFn = Box<dyn Fn(&MetricsRequest) -> Exposition + Send + Sync>;
@@ -98,11 +106,7 @@ fn mux(health: HealthFn, metrics: MetricsFn) -> Mux {
     Mux::new()
         .route(METRICS_PATH, move |request| {
             let exposition = metrics(&MetricsRequest::of(request));
-            Reply::metrics(
-                &exposition.content_type,
-                exposition.content_encoding,
-                exposition.body,
-            )
+            Reply::metrics(&exposition.content_type, None, exposition.body)
         })
         .route(HEALTHZ_PATH, move |_| healthz(&health))
 }

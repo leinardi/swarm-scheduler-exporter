@@ -40,8 +40,8 @@ use super::*;
 use crate::collector::desired::labels_for_metadata;
 use crate::collector::health::Timestamps;
 use crate::collector::metrics_ids::{
-    RESYNC_RESULT_FAILURE, RESYNC_RESULT_SUCCESS, SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB,
-    SERVICE_MODE_REPLICATED, SERVICE_MODE_REPLICATED_JOB,
+    SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB, SERVICE_MODE_REPLICATED,
+    SERVICE_MODE_REPLICATED_JOB,
 };
 use crate::collector::poll_snapshot::{PollService, PollSnapshot};
 use crate::collector::replicas_state::poll_replicas_state;
@@ -53,8 +53,8 @@ use crate::docker::types::{
 use crate::docker::{
     DOCKER_REQUEST_TIMEOUT, Error, EventStream, Filters, StreamError, StreamErrorKind,
 };
-use crate::test_support::Logs;
 use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
+use crate::test_support::{Logs, count};
 use clock::FakeClock;
 use tracing::dispatcher::DefaultGuard;
 use tracing::level_filters::LevelFilter;
@@ -673,14 +673,12 @@ impl Fixture {
     }
 
     fn desired_series(&self) -> usize {
-        let registry = go_prom::Registry::new();
-        self.collectors.replica_gauges.register(&registry).unwrap();
-        registry
-            .gather()
-            .iter()
-            .filter(|family| family.name == "swarm_service_desired_replicas")
-            .map(|family| family.series.len())
-            .sum()
+        crate::test_support::gather_registered(|registry| {
+            self.collectors.replica_gauges.register(registry);
+        })
+        .keys()
+        .filter(|series| series.starts_with("swarm_service_desired_replicas{"))
+        .count()
     }
 
     fn desired(&self, labels: &BTreeMap<String, String>) -> Option<f64> {
@@ -695,10 +693,10 @@ impl Fixture {
     }
 
     fn resyncs(&self) -> (Option<f64>, Option<f64>) {
-        let resyncs = self.collectors.metrics.resyncs();
+        let resyncs = &self.collectors.metrics;
         (
-            resyncs.get(&[RESYNC_RESULT_SUCCESS]),
-            resyncs.get(&[RESYNC_RESULT_FAILURE]),
+            Some(count(resyncs.resyncs(ResyncResult::Success))),
+            Some(count(resyncs.resyncs(ResyncResult::Failure))),
         )
     }
 
@@ -1158,7 +1156,7 @@ async fn an_event_without_actor_id_is_dropped_and_counted() {
     assert_eq!(fixture.pending_lengths().0, 0);
     assert!(!fixture.reconciler.nodes_due(Instant::now()));
     assert_eq!(
-        Some(fixture.collectors.metrics.events_dropped().get()),
+        Some(count(fixture.collectors.metrics.events_dropped())),
         Some(2.0)
     );
     assert_eq!(
@@ -1186,7 +1184,7 @@ async fn events_of_other_types_are_ignored() {
     assert_eq!(fixture.pending_lengths(), (0, 0));
     assert!(!fixture.reconciler.nodes_due(Instant::now()));
     assert_eq!(
-        Some(fixture.collectors.metrics.events_dropped().get()),
+        Some(count(fixture.collectors.metrics.events_dropped())),
         Some(0.0)
     );
 }
@@ -1523,10 +1521,9 @@ async fn a_cancellation_ends_a_blocked_call() {
     tokio::time::timeout(DOCKER_REQUEST_TIMEOUT / 3, running.stop())
         .await
         .unwrap_or_else(|_| panic!("run did not return after cancellation"));
-    let resyncs = metrics.resyncs();
     let counts = (
-        resyncs.get(&[RESYNC_RESULT_SUCCESS]),
-        resyncs.get(&[RESYNC_RESULT_FAILURE]),
+        Some(count(metrics.resyncs(ResyncResult::Success))),
+        Some(count(metrics.resyncs(ResyncResult::Failure))),
     );
     assert_eq!(
         counts,

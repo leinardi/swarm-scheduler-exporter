@@ -37,8 +37,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use clock::{Clock, SystemClock};
-use go_prom::promhttp::HandlerMetrics;
-use go_prom::{Registry, Value};
+use prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
@@ -162,9 +161,9 @@ fn clock() -> Arc<dyn Clock> {
 
 /// Go's `configureMetrics`: every family registered the way `run` does, on a private registry.
 fn configure_metrics(poll_delay: Duration) -> (Arc<Registry>, Metrics) {
-    let registry = Arc::new(Registry::new());
+    let mut registry = Registry::default();
     let metrics = register_metrics(
-        &registry,
+        &mut registry,
         &MetricsOptions {
             custom_labels: CustomLabels::default(),
             poll_delay,
@@ -173,7 +172,7 @@ fn configure_metrics(poll_delay: Duration) -> (Arc<Registry>, Metrics) {
         },
         clock(),
     );
-    (registry, metrics)
+    (Arc::new(registry), metrics)
 }
 
 /// Go's `runWorkers`: the workers as `run` starts them, polling every hour.
@@ -220,12 +219,7 @@ async fn serve_endpoints(
     let addr = listener
         .local_addr()
         .unwrap_or_else(|error| panic!("local address: {error}"));
-    let app = Arc::new(app(
-        metrics.health.clone(),
-        Arc::clone(registry),
-        HandlerMetrics::new(),
-        clock(),
-    ));
+    let app = Arc::new(app(metrics.health.clone(), Arc::clone(registry), clock()));
     let shutdown = cancel.clone().cancelled_owned();
     tokio::spawn(server::serve(
         listener,
@@ -265,15 +259,20 @@ async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
 
 /// Go's `gatheredValue`: the value of the single series of the gauge `name`.
 fn gathered_value(registry: &Registry, name: &str) -> f64 {
-    let families = registry.gather();
-    let family = families
-        .iter()
-        .find(|family| family.name == name && family.series.len() == 1)
-        .unwrap_or_else(|| panic!("no single-series gauge {name} gathered"));
-    match family.series[0].value {
-        Value::Scalar(value) => value,
-        Value::Histogram { .. } => panic!("{name} is a histogram"),
-    }
+    let mut body = String::new();
+    prometheus_client::encoding::text::encode(&mut body, registry)
+        .unwrap_or_else(|error| panic!("encode: {error}"));
+    let values: Vec<f64> = body
+        .lines()
+        .filter_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
+        .map(|value| {
+            value
+                .parse()
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+        })
+        .collect();
+    assert_eq!(values.len(), 1, "no single-series gauge {name} gathered");
+    values[0]
 }
 
 /// Go: `TestWorkers_FirstResyncRetryThenPollAndListenOnce`

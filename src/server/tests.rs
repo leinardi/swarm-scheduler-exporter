@@ -39,7 +39,6 @@ use crate::test_support::capture_logs;
 use clock::FakeClock;
 use go_compat::errno::io_error_text;
 use go_http::{ConnState, TimedIo};
-use go_prom::exposition;
 use tracing::level_filters::LevelFilter;
 
 mod parity;
@@ -51,11 +50,14 @@ fn capture_time() -> Timestamp {
     "2026-10-25T08:44:07Z".parse().unwrap()
 }
 
-/// An exposition of `body` in the text format, as promhttp answers a scrape with no `Accept`.
+/// The `Content-Type` of the Go captures' scrapes, so the replayed responses compare exactly;
+/// the exporter's own is the OpenMetrics one.
+const CAPTURE_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8; escaping=underscores";
+
+/// An exposition of `body` with the captures' `Content-Type`.
 fn text_exposition(body: &'static [u8]) -> Exposition {
     Exposition {
-        content_type: exposition::content_type(go_prom::ExpfmtVersion::V0_71_0, None),
-        content_encoding: None,
+        content_type: CAPTURE_CONTENT_TYPE.to_owned(),
         body: body.to_vec(),
     }
 }
@@ -143,8 +145,8 @@ async fn health_handler_unhealthy_empty_reason() {
     assert!(response.ends_with("\r\n\r\nunhealthy\n"), "{response}");
 }
 
-/// promhttp reads the first `Accept`, every `Accept-Encoding` and the `name[]` filter; a gzip
-/// answer carries its `Content-Encoding` ahead of the `Content-Type`.
+/// The server reads the first `Accept`, every `Accept-Encoding` and the `name[]` filter of a
+/// scrape, which the exporter's own metrics function ignores.
 #[tokio::test(start_paused = true)]
 async fn the_scrape_request_reaches_the_metrics_function() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -154,8 +156,7 @@ async fn the_scrape_request_reaches_the_metrics_function() {
         Box::new(move |scrape: &MetricsRequest| {
             recorded.lock().unwrap().push(scrape.clone());
             Exposition {
-                content_type: exposition::content_type(go_prom::ExpfmtVersion::V0_71_0, None),
-                content_encoding: Some("gzip"),
+                content_type: CAPTURE_CONTENT_TYPE.to_owned(),
                 body: b"z".to_vec(),
             }
         }),
@@ -170,8 +171,8 @@ async fn the_scrape_request_reaches_the_metrics_function() {
     .await;
     assert!(
         response.starts_with(
-            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: text/plain; \
-             version=0.0.4; charset=utf-8; escaping=underscores\r\nDate: "
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8; \
+             escaping=underscores\r\nDate: "
         ),
         "{response}"
     );

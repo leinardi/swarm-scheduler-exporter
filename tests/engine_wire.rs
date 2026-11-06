@@ -35,6 +35,13 @@
 
 mod support;
 
+#[path = "../src/test_support/openmetrics.rs"]
+#[expect(
+    dead_code,
+    reason = "the reader is shared with the unit tests and tests/metrics.rs, which use more of it"
+)]
+mod openmetrics;
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,7 +53,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use clock::{Clock as _, SystemClock};
-use go_prom::{Gathered, GatheredSeries, Registry, Value, text};
+use prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::reconciler::{
     BACKOFF_INITIAL_DELAY, ListenerStopped, Reconciler, ReconcilerHandle, listen_swarm_events,
@@ -329,7 +336,7 @@ fn excluded(family: &str) -> bool {
 /// Go's `configureCollectorsLikeMain`: every family registered as `run` registers it with
 /// `--containers --containers-include-swarm` and `--label com.example.team`, on a private
 /// registry.
-fn configure_collectors_like_main(registry: &Registry) -> Metrics {
+fn configure_collectors_like_main(registry: &mut Registry) -> Metrics {
     let raw = [CUSTOM_LABEL.to_owned()];
     let sanitized = validate_and_sanitize_label_names(&raw).or_panic();
     register_metrics(
@@ -400,30 +407,45 @@ impl Listener {
     }
 }
 
+/// The registry's exposition, parsed.
+fn scrape(registry: &Registry) -> openmetrics::Exposition {
+    openmetrics::parse(&swarm_scheduler_exporter::metrics::render(registry))
+}
+
 /// The value of the `swarm_service_desired_replicas` series of `stack` and `service`.
 fn desired_replicas(registry: &Registry, stack: &str, service: &str) -> Option<f64> {
-    let families = registry.gather();
-    let family = families
+    scrape(registry)
+        .samples
         .iter()
-        .find(|family| family.name == "swarm_service_desired_replicas")?;
-    let label = |series: &GatheredSeries, name: &str| {
-        series
-            .labels
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.clone())
-    };
-    family
-        .series
-        .iter()
-        .find(|series| {
-            label(series, "stack").as_deref() == Some(stack)
-                && label(series, "service").as_deref() == Some(service)
+        .find(|sample| {
+            let label = |name: &str| {
+                sample
+                    .labels
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.as_str())
+            };
+            sample.name == "swarm_service_desired_replicas"
+                && label("stack") == Some(stack)
+                && label("service") == Some(service)
         })
-        .and_then(|series| match series.value {
-            Value::Scalar(value) => Some(value),
-            Value::Histogram { .. } => None,
+        .map(|sample| sample.value)
+}
+
+/// The registered families, by the names the Go exporter gave them: a counter's carries its
+/// `_total`, which OpenMetrics leaves off the family.
+fn registered_families(registry: &Registry) -> BTreeSet<String> {
+    scrape(registry)
+        .types
+        .into_iter()
+        .map(|(family, kind)| {
+            if kind == "counter" {
+                format!("{family}_total")
+            } else {
+                family
+            }
         })
+        .collect()
 }
 
 /// Go's `pinnedFamilies`: every registered `swarm_` family not excluded.
@@ -439,21 +461,30 @@ fn golden_path() -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), GOLDEN_FILE].iter().collect()
 }
 
-/// Go's `GatherAndCompare` of the pinned families against the golden file, which holds them in
-/// expfmt's text format, as Go's `MetricFamilyToText` wrote them.
+/// Go's `GatherAndCompare` of the pinned families against the golden file: every series with its
+/// value, and each family's type. The golden file is Go's text format; the values and the series
+/// are the same in the OpenMetrics text, which is what is compared.
 fn assert_golden(registry: &Registry, pinned: &BTreeSet<String>) {
-    let families: Vec<Gathered> = registry
-        .gather()
+    let got = scrape(registry);
+    let want = openmetrics::parse(&std::fs::read_to_string(golden_path()).or_panic());
+    let in_pinned = |name: &String| pinned.contains(name);
+    let got_series: std::collections::BTreeMap<String, f64> = got
+        .series()
         .into_iter()
-        .filter(|family| pinned.contains(&family.name))
+        .filter(|(series, _)| in_pinned(&series.split('{').next().unwrap_or_default().to_owned()))
         .collect();
-    let mut got = String::new();
-    text::encode(&mut got, &families);
-    let want = std::fs::read_to_string(golden_path()).or_panic();
     assert!(
-        got == want,
-        "metrics differ from {GOLDEN_FILE}:\n got:\n{got}\nwant:\n{want}"
+        got_series == want.series(),
+        "metrics differ from {GOLDEN_FILE}:\n got:\n{got_series:#?}\nwant:\n{:#?}",
+        want.series()
     );
+    for family in pinned {
+        assert_eq!(
+            got.types.get(family),
+            want.types.get(family),
+            "the type of {family}"
+        );
+    }
 }
 
 /// Go's `assertCoverage`: every registered `swarm_` family is excluded on purpose or has at least
@@ -506,8 +537,8 @@ fn assert_coverage(registered: &BTreeSet<String>) {
 async fn pins_requests_and_metrics(set_index: usize) {
     let engine = FakeEngine::start(FIXTURE_SETS[set_index], HashMap::new()).await;
     let client = Arc::new(engine.client());
-    let registry = Registry::new();
-    let metrics = configure_collectors_like_main(&registry);
+    let mut registry = Registry::default();
+    let metrics = configure_collectors_like_main(&mut registry);
     let cancel = CancellationToken::new();
 
     // Phase 1: the reconciler's first resync. Sequential: services, then nodes.
@@ -598,7 +629,7 @@ async fn events_happy_path(
         "events-happy.jsonl",
         StreamEnd::Hold,
     )]);
-    let reconnects = metrics.collectors.metrics.events_reconnects().get();
+    let reconnects = metrics.collectors.metrics.events_reconnects();
     let want = [
         "GET /events?filters={type:[node,service]}&since=<time>".to_owned(),
         service_inspect_request(expectations.service_inspect_query, "svc-api"),
@@ -631,15 +662,15 @@ async fn events_happy_path(
         anchor.checked_sub(EVENTS_SINCE_MARGIN).or_panic(),
         "the anchor minus the margin, to the ns"
     );
-    let reconnects_after = metrics.collectors.metrics.events_reconnects().get();
+    let reconnects_after = metrics.collectors.metrics.events_reconnects();
     assert!(
-        (reconnects_after - reconnects).abs() < f64::EPSILON,
+        reconnects_after == reconnects,
         "happy path: events_reconnects_total = {reconnects_after}, want {reconnects}"
     );
 
     // The computed output of every Docker-fed family, after the resync, both polls and the
     // events.
-    let registered = registry.described_names();
+    let registered = registered_families(registry);
     assert_golden(registry, &pinned_families(&registered));
     assert_coverage(&registered);
 }
@@ -663,7 +694,7 @@ async fn events_reconnect(
             end: StreamEnd::Hold,
         },
     ]);
-    let reconnects = metrics.collectors.metrics.events_reconnects().get();
+    let reconnects = metrics.collectors.metrics.events_reconnects();
     let want = [
         "GET /events?filters={type:[node,service]}&since=<time>".to_owned(),
         service_inspect_request(expectations.service_inspect_query, "svc-db"),
@@ -690,11 +721,11 @@ async fn events_reconnect(
         Some("1789902299.700000000")
     );
     assert_eq!(events_since(connections[1]), resume);
-    let reconnects_after = metrics.collectors.metrics.events_reconnects().get();
+    let reconnects_after = metrics.collectors.metrics.events_reconnects();
     assert!(
-        (reconnects_after - reconnects - 1.0).abs() < f64::EPSILON,
+        reconnects_after == reconnects + 1,
         "reconnect: events_reconnects_total = {reconnects_after}, want {}",
-        reconnects + 1.0
+        reconnects + 1
     );
 }
 

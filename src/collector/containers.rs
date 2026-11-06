@@ -38,10 +38,9 @@ use crate::docker::{
     with_bare_timeout,
 };
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
+use crate::metrics::{self, Desc, SnapshotBuilder, SnapshotFamily};
 use go_compat::strings::{equal_fold, to_lower, trim_space};
-use go_prom::{
-    Collector, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotFamily, constant_desc,
-};
+use prometheus_client::registry::Registry;
 use tracing::{debug, error, warn};
 
 use super::error::CallError;
@@ -195,10 +194,9 @@ impl ContainersState {
             .map(str::to_owned),
         );
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let desc = constant_desc(
+        let desc = Desc::new(
             &format!("{NAMESPACE}_{LABEL_CONTAINER}_{LABEL_STATE}"),
             CONTAINER_STATE_HELP,
-            Kind::Gauge,
             &names,
         );
         Self {
@@ -208,12 +206,8 @@ impl ContainersState {
     }
 
     /// Registers the family.
-    ///
-    /// # Errors
-    ///
-    /// The registry's refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        registry.register(Arc::clone(&self.family) as Arc<dyn Collector>)
+    pub fn register(&self, registry: &mut Registry) {
+        metrics::register(registry, &self.family);
     }
 
     /// The family.

@@ -30,8 +30,8 @@ use std::sync::mpsc as std_mpsc;
 use crate::collector::replicas_state::TaskCounter;
 use crate::docker::types::{GoTime, Placement};
 use crate::test_support::FakeDocker;
-use go_prom::Collector;
-use go_prom::testing::{gather_series, series_id};
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
 
 use super::*;
 
@@ -116,7 +116,7 @@ impl Fixture {
     }
 
     fn replicas_state_series(&self) -> BTreeMap<String, f64> {
-        gather_series(Arc::clone(self.collectors.replicas_state.collector()) as Arc<dyn Collector>)
+        gather_series(self.collectors.replicas_state.collector())
     }
 
     /// The published value of `name` with `labels`, none when not published.
@@ -125,7 +125,7 @@ impl Fixture {
     }
 
     fn rejections(&self) -> f64 {
-        self.collectors.metrics.poll_rejections().get()
+        crate::test_support::count(self.collectors.metrics.poll_rejections())
     }
 
     fn last_poll_success(&self) -> i64 {

@@ -36,8 +36,9 @@ use crate::collector::nodes::{
 use crate::collector::types::display_name;
 use crate::docker::Error;
 use crate::docker::types::{GoTime, NodeSpec, NodeStatus, TaskStatus, Version};
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
 use crate::test_support::{FakeDocker, Logs, capture_logs, schedulable_node};
-use go_prom::testing::{gather_series, series_id};
 use tracing::level_filters::LevelFilter;
 
 const REPLICAS_STATE_NAME: &str = "swarm_task_replicas_state";
@@ -122,7 +123,7 @@ fn replicas_state() -> ReplicasState {
 }
 
 fn gathered(state: &ReplicasState) -> BTreeMap<String, f64> {
-    gather_series(Arc::clone(state.collector()) as Arc<dyn Collector>)
+    gather_series(state.collector())
 }
 
 fn labelled(name: &str, labels: &BTreeMap<String, String>) -> String {
@@ -951,7 +952,7 @@ async fn concurrent_scrapes_see_whole_snapshots() {
             series == expected_a || series == expected_b,
             "replicas scrape saw {series:?}, want exactly snapshot A or B"
         );
-        let node_series = gather_series(Arc::clone(nodes.family()) as Arc<dyn Collector>);
+        let node_series = gather_series(nodes.family());
         assert!(
             node_series == expected_nodes_a || node_series == expected_nodes_b,
             "nodes scrape saw {node_series:?}"
@@ -1429,7 +1430,6 @@ fn families_carry_go_names_help_and_label_order() {
             ),
         ]
     );
-    let registry = Registry::new();
-    state.register(&registry).unwrap();
-    assert!(state.register(&registry).is_err());
+    let mut registry = Registry::default();
+    state.register(&mut registry);
 }
