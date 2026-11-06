@@ -440,6 +440,37 @@ async fn a_cancel_interrupts_the_negotiation_of_the_first_events_call() {
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
+/// With the version unpinned and `/version` silent, the events connect deadline covers the
+/// negotiation too: `Timeout` within the bound, and no events request is ever sent.
+#[tokio::test]
+async fn a_silent_negotiation_is_bounded_by_the_events_timeout() {
+    let engine = FakeEngine::start(&[("/version", Reply::Silent)]).unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy()))
+        .unwrap()
+        .with_events_timeout(Duration::from_millis(300));
+    let started = tokio::time::Instant::now();
+    let error = client
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Timeout, "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        engine
+            .requests()
+            .iter()
+            .all(|request| request.path() != "/events")
+    );
+}
+
 /// The events request carries the negotiated version, as the client's other calls do.
 #[tokio::test]
 async fn events_carry_the_negotiated_version() {

@@ -342,22 +342,26 @@ impl DockerApi for Client {
         filters: &Filters,
         cancel: &CancellationToken,
     ) -> Result<ClientEventStream, Error> {
-        // The first call negotiates, which a silent engine can hold for a long time: a shutdown
-        // interrupts that too.
+        // One deadline covers the whole establishment, the first call's version negotiation
+        // included (a silent engine can hold that for a long time), and a shutdown interrupts
+        // both.
+        let deadline = tokio::time::Instant::now() + self.events_timeout;
         let (_, config) = tokio::select! {
             biased;
             () = cancel.cancelled() => {
                 return Err(Error::new(ErrorKind::Cancelled, "context canceled"));
             }
-            connection = self.connection() => connection?,
+            connection = tokio::time::timeout_at(deadline, self.connection()) => {
+                connection.map_err(|_elapsed| Error::deadline_exceeded())??
+            }
         };
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let since = since_parameter(since);
         let mut options = EventsOptionsBuilder::new().since(&since);
         if !filters.is_empty() {
             options = options.filters(&filters.to_map());
         }
-        let stream =
-            events_established(config, Some(options.build()), self.events_timeout, cancel).await?;
+        let stream = events_established(config, Some(options.build()), remaining, cancel).await?;
         Ok(ClientEventStream { stream })
     }
 }
