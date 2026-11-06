@@ -99,6 +99,9 @@ service-kit = { workspace = true, features = ["runtime", "process-metrics", "htt
 # The HTTP/1 server on hyper (`http`, rust-common): the header-read and write-stall timeouts and
 # the tracked drain; the routes are axum's.
 axum = { version = "0.8.9", default-features = false }
+# The listener's IPV6_V6ONLY (the wildcard bind is dual-stack whatever the sysctl says), and its
+# socket options in the server tests.
+socket2 = "0.6.5"
 # Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
 # the way Go does (go-compat), so none of jiff's tzdb or system features is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
@@ -154,8 +157,6 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # The gzip exposition's decoding (tests/exposition.rs); the pure-Rust backend, so no C zlib.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
-# The listener's socket options in the server tests.
-socket2 = { version = "0.6.5", features = ["all"] }
 # The Engine API fixtures of tests/run.rs.
 serde_json = "1.0.154"
 # The captured logs of the tests: a scoped subscriber and a writer that keeps what was logged.

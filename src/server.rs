@@ -196,6 +196,10 @@ fn listen_on(address: SocketAddr) -> std::io::Result<TcpListener> {
         TcpSocket::new_v4()?
     };
     socket.set_reuseaddr(true)?;
+    if address.is_ipv6() {
+        // Dual-stack whatever net.ipv6.bindv6only says, so IPv4 clients reach `[::]` too.
+        socket2::SockRef::from(&socket).set_only_v6(false)?;
+    }
     socket.bind(address)?;
     socket.listen(BACKLOG)
 }
@@ -256,19 +260,30 @@ async fn serve_listener(
     tokio::pin!(serving);
     let mut stopped_at = None;
     let mut cut = false;
-    let outcome = tokio::select! {
-        outcome = &mut serving => outcome,
+    // The stop is the caller's (`root`), or the server's own: a failed accept makes the server
+    // stop its lifecycle and start draining, which is just as much the moment the shared deadline
+    // is computed from.
+    let finished = tokio::select! {
+        outcome = &mut serving => Some(outcome),
         () = root.cancelled() => {
             lifecycle.stop();
-            let at = deadline.take().map_or_else(Instant::now, |compute| compute());
-            stopped_at = Some(at);
-            tokio::select! {
-                outcome = &mut serving => outcome,
-                () = tokio::time::sleep_until(at) => {
-                    cut = true;
-                    lifecycle.cut_token().cancel();
-                    serving.await
-                }
+            None
+        }
+        () = lifecycle.stop_token().cancelled() => None,
+    };
+    let outcome = if let Some(outcome) = finished {
+        outcome
+    } else {
+        let at = deadline
+            .take()
+            .map_or_else(Instant::now, |compute| compute());
+        stopped_at = Some(at);
+        tokio::select! {
+            outcome = &mut serving => outcome,
+            () = tokio::time::sleep_until(at) => {
+                cut = true;
+                lifecycle.cut_token().cancel();
+                serving.await
             }
         }
     };

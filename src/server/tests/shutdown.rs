@@ -240,13 +240,13 @@ async fn serve_until_done_warns_about_a_drain_past_the_deadline() {
     );
 }
 
-/// The worker wait shares the drain's deadline: workers that never return are abandoned at it,
-/// measured from the stop, not from the end of the drain.
+/// The drain and the worker wait share one deadline, measured from the stop: a request that
+/// never finishes holds the drain to the deadline, and workers that never return then get no
+/// more time, so the whole takes the budget once, not twice.
 #[tokio::test(start_paused = true)]
 async fn the_worker_wait_shares_the_deadline() {
     let address = free_address();
     let root = CancellationToken::new();
-    let start = Instant::now();
     let serving = {
         let root = root.clone();
         tokio::spawn(async move {
@@ -254,19 +254,72 @@ async fn the_worker_wait_shares_the_deadline() {
                 &root,
                 std::future::pending::<()>(),
                 &address.to_string(),
-                healthy_app(),
+                slow_app(Duration::from_secs(300)),
                 || Instant::now() + Duration::from_secs(10),
             )
             .await
         })
     };
     wait_listening(address).await;
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let stopped = Instant::now();
     root.cancel();
     let exit_code = serving.await.unwrap();
     assert_eq!(exit_code, 0);
-    let elapsed = start.elapsed();
+    let elapsed = stopped.elapsed();
     assert!(
-        elapsed >= Duration::from_secs(10) && elapsed < Duration::from_secs(11),
-        "{elapsed:?}"
+        elapsed >= Duration::from_secs(10) && elapsed < Duration::from_secs(12),
+        "the drain and the worker wait took {elapsed:?}, one 10s budget from the stop"
+    );
+}
+
+/// A server that fails on its own (an accept error, with a request in flight) computes the
+/// deadline when it fails and drains within it: the total is the budget from the failure, not the
+/// drain's full length and then the budget again.
+#[tokio::test]
+async fn an_accept_failure_drains_within_the_deadline() {
+    use std::os::fd::AsFd as _;
+    let listener = bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let breaker = socket2::Socket::from(listener.as_fd().try_clone_to_owned().unwrap());
+    let root = CancellationToken::new();
+    let serving = tokio::spawn({
+        let root = root.clone();
+        async move {
+            // The server's own drain allows the shutdown budget; the deadline allows 300ms.
+            serve_listener(&root, listener, slow_app(Duration::from_secs(30)), || {
+                Instant::now() + Duration::from_millis(300)
+            })
+            .await
+        }
+    });
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let failed = Instant::now();
+    breaker.shutdown(std::net::Shutdown::Read).unwrap();
+    let (at, failure) = tokio::time::timeout(BOUND, serving)
+        .await
+        .expect("serve_listener did not return after the accept failure")
+        .unwrap();
+    assert!(failure.is_some(), "the accept error is the failure");
+    assert!(!root.is_cancelled());
+    assert!(
+        at >= failed && at < failed + Duration::from_secs(1),
+        "the deadline is computed at the failure"
+    );
+    assert!(
+        failed.elapsed() < Duration::from_secs(3),
+        "the drain took {:?}, not the {:?} budget",
+        failed.elapsed(),
+        crate::run::SHUTDOWN_BUDGET
     );
 }

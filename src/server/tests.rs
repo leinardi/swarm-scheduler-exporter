@@ -246,5 +246,19 @@ async fn an_empty_host_is_the_wildcard() {
         Ipv4Addr::LOCALHOST.into(),
         listener.local_addr().unwrap().port(),
     );
-    assert!(TcpStream::connect(loopback).await.is_ok());
+    assert!(
+        TcpStream::connect(loopback).await.is_ok(),
+        "IPv4 reaches the wildcard"
+    );
+}
+
+/// The wildcard socket is dual-stack on its own: `IPV6_V6ONLY` is off, so a host with
+/// `net.ipv6.bindv6only=1` still takes IPv4 clients. Skipped where the wildcard fell back to IPv4.
+#[tokio::test]
+async fn the_wildcard_socket_is_not_v6_only() {
+    let listener = bind("[::]:0").await.unwrap();
+    if listener.local_addr().unwrap().is_ipv4() {
+        return;
+    }
+    assert!(!socket2::SockRef::from(&listener).only_v6().unwrap());
 }
