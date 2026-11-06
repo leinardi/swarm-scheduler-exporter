@@ -32,6 +32,8 @@ integration = [
 swarm-scheduler-exporter = { path = ".." }
 # Go's quoting, float and duration formatting and the local zone, as the exporter writes them.
 go-compat.workspace = true
+# The wall clock the harness and its logs read.
+go-clock.workspace = true
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The run filter: Go's -run patterns are regular expressions.
 regex = "1.13.1"

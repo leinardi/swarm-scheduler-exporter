@@ -48,10 +48,10 @@ use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::clock::Clock;
 use crate::docker::types::{Event, Node, Service};
 use crate::docker::{DockerApi, with_docker_timeout};
 use crate::logger::{Attr, Logger};
+use go_clock::Clock;
 
 use super::desired::{ReplicaGauges, labels_for_metadata, replica_counts};
 use super::error::CallError;

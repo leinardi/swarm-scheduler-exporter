@@ -33,8 +33,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use go_clock::SystemClock;
 use go_compat::local_zone::local_zone;
-use swarm_scheduler_exporter::clock::SystemClock;
 use swarm_scheduler_exporter::logger::{Attr, Config, Format, Level, Logger, Sink, Value};
 
 /// What a redacted value is written as.

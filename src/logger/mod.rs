@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use jiff::tz::TimeZone;
 
-use crate::clock::{Clock, SystemClock};
+use go_clock::{Clock, SystemClock};
 use go_compat::{local_zone, time_layout};
 
 use plain_handler::PlainHandler;

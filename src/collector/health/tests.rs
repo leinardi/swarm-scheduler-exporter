@@ -29,7 +29,6 @@
 use jiff::SignedDuration;
 
 use super::*;
-use crate::clock::FakeClock;
 use crate::collector::desired::ReplicaGauges;
 use crate::collector::exporter_metrics::ExporterMetrics;
 use crate::collector::nodes::NodesByState;
@@ -40,6 +39,7 @@ use crate::collector::types::CustomLabels;
 use crate::logger::Level;
 use crate::metrics::testing::{gather_series, series_id};
 use crate::test_support::{FakeDocker, capture_logs};
+use go_clock::FakeClock;
 
 const NOW_SECONDS: i64 = 1_767_225_600;
 

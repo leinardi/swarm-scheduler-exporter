@@ -37,7 +37,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::*;
-use crate::clock::FakeClock;
 use crate::collector::desired::labels_for_metadata;
 use crate::collector::health::Timestamps;
 use crate::collector::metrics_ids::{
@@ -56,6 +55,7 @@ use crate::docker::{
 };
 use crate::logger::{Level, MemorySink};
 use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
+use go_clock::FakeClock;
 
 mod listener;
 mod poll;

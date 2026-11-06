@@ -46,7 +46,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use swarm_scheduler_exporter::clock::{Clock as _, SystemClock};
+use go_clock::{Clock as _, SystemClock};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::reconciler::{
     BACKOFF_INITIAL_DELAY, ListenerStopped, Reconciler, ReconcilerHandle, listen_swarm_events,

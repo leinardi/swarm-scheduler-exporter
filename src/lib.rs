@@ -25,7 +25,6 @@
 //! swarm-scheduler-exporter: a Prometheus exporter for the Docker Swarm scheduler.
 
 pub mod cli;
-pub mod clock;
 pub mod collector;
 pub mod docker;
 pub mod healthcheck;

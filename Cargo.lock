@@ -430,6 +430,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "go-clock"
+version = "0.1.0"
+source = "git+https://github.com/leinardi/rust-common?rev=7c3e4336087e31e166e2fe6be4f5562669d91df2#7c3e4336087e31e166e2fe6be4f5562669d91df2"
+dependencies = [
+ "jiff",
+ "tokio",
+]
+
+[[package]]
 name = "go-compat"
 version = "0.1.0"
 source = "git+https://github.com/leinardi/rust-common?rev=7c3e4336087e31e166e2fe6be4f5562669d91df2#7c3e4336087e31e166e2fe6be4f5562669d91df2"
@@ -1285,6 +1294,7 @@ dependencies = [
  "bytes",
  "clap",
  "flate2",
+ "go-clock",
  "go-compat",
  "http-body-util",
  "hyper",
@@ -1366,6 +1376,7 @@ dependencies = [
  "bollard",
  "bytes",
  "futures-util",
+ "go-clock",
  "go-compat",
  "http-body-util",
  "hyper",

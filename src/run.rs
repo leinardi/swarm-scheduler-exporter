@@ -36,7 +36,6 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{self, Args};
-use crate::clock::{Clock, SystemClock};
 use crate::collector::containers::{ContainersConfig, ContainersState};
 use crate::collector::desired::ReplicaGauges;
 use crate::collector::exporter_metrics::ExporterMetrics;
@@ -57,6 +56,7 @@ use crate::metrics::promhttp::HandlerMetrics;
 use crate::metrics::{Collector, RegisterError, Registry};
 use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
+use go_clock::{Clock, SystemClock};
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
 /// runtime's shutdown all come out of it. 10s is Docker's default stop grace period.

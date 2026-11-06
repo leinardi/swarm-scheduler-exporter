@@ -37,7 +37,7 @@ use jiff::tz::TimeZone;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use swarm_scheduler_exporter::clock::{Clock, SystemClock};
+use go_clock::{Clock, SystemClock};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
