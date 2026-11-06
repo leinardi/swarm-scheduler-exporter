@@ -406,7 +406,7 @@ async fn the_probe_reads_the_exporter_s_answer() {
     let served = tokio::spawn(crate::server::serve(
         listener,
         Arc::new(app),
-        crate::server::Timeouts::EXPORTER,
+        crate::server::TIMEOUTS,
         shutdown.cancelled_owned(),
         || Instant::now() + Duration::from_secs(1),
     ));

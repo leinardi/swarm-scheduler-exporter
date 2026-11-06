@@ -85,6 +85,9 @@ go-slog.workspace = true
 # The Prometheus Go client's registry and text exposition, byte for byte (rust-common), with
 # prometheus/common v0.71.0's content negotiation (ExpfmtVersion::V0_71_0).
 go-prom.workspace = true
+# Go's net/http server on hyper (rust-common): the mux's answers, header order and framing, the
+# four server deadlines, net.Listen's bind and the drain.
+go-http.workspace = true
 # Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
 # the way Go does (go-compat), so none of jiff's tzdb or system features is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
@@ -116,14 +119,12 @@ tokio-util = { version = "0.7.20", default-features = false }
 # pure-Rust backend, so no C zlib.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 # The Docker client (S1): HTTP/1 only, on connections it dials and pools itself. The metrics and
-# health endpoints (S3): hyper's HTTP/1 server with hyper-util's graceful drain. The healthcheck
-# (S3): hyper-util's legacy client, which reads no proxy variable and follows no redirect.
-hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "server"] }
+# health endpoints' status and header types (their server is go-http's). The healthcheck (S3):
+# hyper-util's legacy client, which reads no proxy variable and follows no redirect.
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", default-features = false, features = [
     "tokio",
     "http1",
-    "server",
-    "server-graceful",
     "client-legacy",
 ] }
 http-body-util = "0.1.5"
@@ -143,6 +144,8 @@ serde_json = "1.0.154"
 [dev-dependencies]
 # The Go tests' gatherSeries and seriesID, for the collectors' tests.
 go-prom = { workspace = true, features = ["testing"] }
+# The Go wire captures' replay (read_captures, replay, exchange).
+go-http = { workspace = true, features = ["testing"] }
 # The paused clock (start_paused) needs the test runtime.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",

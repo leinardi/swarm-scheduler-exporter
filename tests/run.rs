@@ -50,7 +50,7 @@ use swarm_scheduler_exporter::docker::{DockerApi, Error, EventStream, Filters, S
 use swarm_scheduler_exporter::run::{
     Metrics, MetricsOptions, SHUTDOWN_BUDGET, Workers, app, register_metrics, start_workers,
 };
-use swarm_scheduler_exporter::server::{self, Timeouts};
+use swarm_scheduler_exporter::server::{self, TIMEOUTS};
 
 /// How long a lifecycle test waits for what it expects, as Go's `waitUntil` and `waitWorkers`.
 const WAIT: Duration = Duration::from_secs(5);
@@ -249,7 +249,7 @@ async fn serve_endpoints(
     tokio::spawn(server::serve(
         listener,
         app,
-        Timeouts::EXPORTER,
+        TIMEOUTS,
         shutdown,
         Instant::now,
     ));
