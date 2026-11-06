@@ -18,15 +18,15 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 # `[patch."https://github.com/leinardi/rust-common"]` table naming each crate with
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
-clock = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-go-compat = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-go-http = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-go-slog = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-service-kit = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
-tracing-setup = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
+clock = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+go-compat = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+go-http = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+go-slog = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+service-kit = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+tracing-setup = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
@@ -87,7 +87,7 @@ tracing-setup.workspace = true
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The exposition: the registry, the OpenMetrics text encoder, the histogram and the counters.
 # No features: the exporter encodes text only (no protobuf, no derive macros).
-prometheus-client = { version = "0.25.1", default-features = false }
+prometheus-client = { version = "0.25.2", default-features = false }
 # The Docker Engine client (rust-common): moby client v0.6.0's requests over HTTP/1, its API
 # version negotiation, error wording and event stream, on unix sockets, TCP (`tcp`: DOCKER_HOST,
 # Go's keep-alive, the transparent gunzip) and TLS (`tls`: rustls on ring, Q5). No `write` or
