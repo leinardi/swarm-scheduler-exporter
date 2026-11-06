@@ -402,19 +402,26 @@ where
     let (root, signalled) = watch_shutdown(shutdown);
 
     // Configured from DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY.
-    // The API version is negotiated lazily, on the first request.
-    let settings = match docker::settings_from_env(&getenv) {
-        Ok(settings) => settings,
+    // The API version is negotiated lazily, on the first request, unless DOCKER_API_VERSION pins
+    // it.
+    let config = match docker::settings_from_env(&getenv) {
+        Ok(config) => config,
+        Err(error @ docker::SettingsError::Version(_)) => {
+            error!(error = %error, "unsupported Docker API version");
+            return Exit::early(1);
+        }
         Err(error) => {
             error!(error = %error, "docker client init failed");
             return Exit::early(1);
         }
     };
-    if let Err(error) = docker::version::validate_client_api_version(settings.client_version()) {
-        error!(error = %error, "unsupported Docker API version");
-        return Exit::early(1);
-    }
-    let docker = Arc::new(Client::new(settings));
+    let docker = match Client::new(config) {
+        Ok(client) => Arc::new(client),
+        Err(error) => {
+            error!(error = %error, "docker client init failed");
+            return Exit::early(1);
+        }
+    };
 
     let workers = start_workers(&root, docker, &metrics, poll_delay, &clock);
 

@@ -42,7 +42,8 @@ use service_kit::http::Lifecycle;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
-    ContainerInspect, ContainerSummary, Event, Node, Service, Task,
+    ContainerInspect, ContainerSummary, Event, Node, ReplicatedService, Service, ServiceMode,
+    ServiceSpec, Task,
 };
 use swarm_scheduler_exporter::docker::{DockerApi, Error, EventStream, Filters, StreamError};
 use swarm_scheduler_exporter::run::{
@@ -94,10 +95,18 @@ impl EventStream for Quiet {
 }
 
 fn one_service() -> Vec<Service> {
-    serde_json::from_str(
-        r#"[{"ID":"svc1","Spec":{"Name":"web","Mode":{"Replicated":{"Replicas":1}}}}]"#,
-    )
-    .unwrap_or_else(|error| panic!("service fixture: {error}"))
+    vec![Service {
+        id: "svc1".to_owned(),
+        spec: ServiceSpec {
+            name: "web".to_owned(),
+            mode: ServiceMode {
+                replicated: Some(ReplicatedService { replicas: Some(1) }),
+                ..ServiceMode::default()
+            },
+            ..ServiceSpec::default()
+        },
+        ..Service::default()
+    }]
 }
 
 impl DockerApi for LifecycleDocker {

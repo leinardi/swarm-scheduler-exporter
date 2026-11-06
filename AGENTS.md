@@ -70,8 +70,9 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
     `--healthcheck` (the image is distroless: there is no shell or curl a `HEALTHCHECK` could run
     instead).
   - `src/docker/` — `DockerApi`, the read-only trait all collector code reaches Docker through, on
-    a `Client` newtype over docker-engine's client (features `tcp` and `tls`), the exporter's API
-    types and the timeouts its callers put around them.
+    a `Client` over `docker-client`'s bollard connection (features `tcp` and `tls`), the exporter's
+    API types (mapped from bollard's models in `convert.rs`) and the timeouts its callers put
+    around them.
   - `src/collector/` — the collectors and the reconciler (`reconciler/`), which is the one owner of
     the service and node caches and of every gauge derived from them.
   - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` as an axum router on service-kit's
@@ -106,9 +107,9 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
 dependency pinned by commit (`rev = "..."`, while the upstream-stack work is in flight) in
 `[workspace.dependencies]`: go-compat (the Go library ports), clock (the `Clock` trait),
-tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-engine (the
-Engine API client), service-kit (the runtime, the signals, the stamps, the HTTP server, the
-`process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
+tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
+Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
+server, the `process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
 meta-tests' checks). The exporter keeps only what is its own.
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
@@ -121,7 +122,7 @@ meta-tests' checks). The exporter keeps only what is its own.
   the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
   `process-metrics`; Q2); the server's header-read (5s) and write-stall (15s) timeouts and the
   `http listen:` prefix (Q13);
-  docker-engine's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
+  docker-client's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
   response-header timeout (`RESPONSE_HEADER_TIMEOUT`); the log flags (Q4:
   `--log-format` text|json, `--log-level` debug|info|warn|error, an unknown value refused by clap),
   installed once through `tracing_setup::build` and `install_global`; `lazy_shutdown_signal`, whose
@@ -146,12 +147,14 @@ The full list, with what counts as a finding, is in `.agents/skills/adversarial-
 The ones to keep in mind while writing code:
 
 - **Read-only against Docker, enforced in code.** A `:ro` socket bind does not make the API
-  read-only. `DockerApi` exposes list, inspect and events calls only, and docker-engine, built
-  without its `write` and `attach` features, sends `GET` only, plus one `HEAD /_ping`.
-  `meta/tests/docker_boundary.rs` holds it there: no manifest enables those features, only
-  `src/docker` names the crate and builds no request of its own, the paths are only those the
-  shipped socket-proxy allowlist grants, and bollard (which the harness creates and removes things
-  with) stays out of the exporter package.
+  read-only. `DockerApi` exposes list, inspect and events calls only, and `src/docker` makes
+  only the bollard read calls (the version negotiation's `GET /version` included), with
+  `docker-client`'s `attach` feature off.
+  `meta/tests/docker_boundary.rs` holds it there: no manifest enables that feature, only
+  `src/docker` names the crate (and bollard, as `docker_client::bollard`) and builds no request of
+  its own, the calls are only reads whose sections the shipped socket-proxy allowlist grants, and
+  bollard (which the harness creates and removes things with) is declared directly only by the
+  harness, outside the exporter package.
 - **Metrics are the public contract.** A renamed metric or a changed label set updates the README's
   Metrics section (and any alert example) in the same change. No label fed by an unbounded value.
 - **Series lifecycle.** A removed resource's series are deleted, never set to 0; known state sets

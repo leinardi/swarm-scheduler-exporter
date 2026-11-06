@@ -22,16 +22,14 @@
  * SOFTWARE.
  */
 
-//! What the exporter sends a daemon, and the metrics it computes from the answers, pinned per
-//! phase against a fake Engine that replays the engine-wire captures of API 1.51 and 1.56: the
-//! port of the Go engine-wire test.
+//! What the collectors do with the Docker answers, end to end, against `docker-client`'s fake
+//! engine serving the engine-wire captures of API 1.51 and 1.56: the requests they make, in the
+//! order the exporter makes them, and the metrics they compute from the answers, against the
+//! golden file the Go exporter's test pinned (the port of the Go engine-wire test).
 //!
-//! The requests are compared in a normalised form. Go's test relaxes the moby client v0.6.0 wire
-//! against its v28 baseline through the allowances W1–W5; this one starts from v0.6.0's
-//! expectations (all five applied) and relaxes them only through [`ALLOWANCES`], R1…, each a
-//! difference of the Rust client within Q11. The collectors are driven as `run` drives them, one
-//! phase at a time, and the families the Docker answers feed are compared against the golden
-//! file Go's test pins.
+//! The bytes of the requests are not pinned any more: they are `docker-client`'s and bollard's,
+//! tested there. What is checked is the calls (which paths, in which order, with which `since`
+//! and filters) and the values that come out.
 
 mod support;
 
@@ -53,24 +51,20 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use clock::{Clock as _, SystemClock};
+use docker_client::Config;
+use docker_client::test_util::{FakeEngine, Reply};
 use prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::reconciler::{
-    BACKOFF_INITIAL_DELAY, ListenerStopped, Reconciler, ReconcilerHandle, listen_swarm_events,
+    ListenerStopped, Reconciler, ReconcilerHandle, listen_swarm_events,
     poll_and_publish_replicas_state,
 };
 use swarm_scheduler_exporter::collector::types::CustomLabels;
-use swarm_scheduler_exporter::docker::{
-    Client, ClientEventStream, DockerApi, ErrorKind, EventStream, Filters, StreamErrorKind,
-    with_docker_timeout,
-};
+use swarm_scheduler_exporter::docker::{Client, since_parameter};
 use swarm_scheduler_exporter::labels::validate_and_sanitize_label_names;
 use swarm_scheduler_exporter::run::{Metrics, MetricsOptions, register_metrics};
 
 use support::OrPanic as _;
-use support::fake_engine::{
-    EventsConnection, FIXTURE_SETS, FakeEngine, RecordedRequest, StreamEnd,
-};
 
 /// Bounds a whole test, so a hung stream fails it instead of hanging it.
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -78,202 +72,106 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The Go listener's `eventsSinceMargin`: every event-stream anchor starts this much earlier.
 const EVENTS_SINCE_MARGIN: SignedDuration = SignedDuration::from_millis(500);
 
-/// The `timeNano` of the reconnect fixture's event. Its fraction (.2) is below half a second, so
-/// the resume point crosses a second boundary (…299.7), which only nanosecond resolution keeps.
-const RECONNECT_EVENT_TIME_NANO: i128 = 1_789_902_300_200_000_000;
+/// The `since` the reconnect fixture's event leads to: its `timeNano` is 1789902300.2 s, so the
+/// resume point crosses a second boundary (…299.7), which only nanosecond resolution keeps.
+const RECONNECT_SINCE: &str = "1789902299.700000000";
 
-/// The request properties a client version may change; everything else is compared through the
-/// normalised requests.
-#[derive(Debug, Clone)]
-struct WireExpectations {
-    /// W1: the `/vX.YY` prefix of every versioned request.
-    version_prefix: &'static str,
-    /// W2: the method and path of the first request of a run, the version negotiation.
-    first_request: &'static str,
-    /// W2: how many pings a run sends.
-    pings: usize,
-    /// W3: the `Accept` lines of `GET /events`, joined with `, `.
-    events_accept: &'static str,
-    /// W4: the prefix of the `User-Agent`.
-    user_agent_prefix: &'static str,
-    /// W5: the query of `GET /services/{id}`.
-    service_inspect_query: &'static str,
+/// The fixture sets: the same cluster in two API versions' shapes.
+const FIXTURE_SETS: [&str; 2] = ["api-1.51", "api-1.56"];
+
+fn fixture_path(set: &str, name: &str) -> PathBuf {
+    [
+        env!("CARGO_MANIFEST_DIR"),
+        "tests/testdata/engine_wire",
+        set,
+        name,
+    ]
+    .iter()
+    .collect()
 }
 
-/// What moby client v0.6.0 sends: Go's v28 baseline with W1–W5 applied.
-const GO_WIRE: WireExpectations = WireExpectations {
-    version_prefix: "/v1.56",
-    first_request: "HEAD /_ping",
-    pings: 1,
-    events_accept: "application/jsonl, application/x-ndjson;q=0.9, application/json-seq;q=0.5",
-    user_agent_prefix: "moby-client/",
-    service_inspect_query: "",
-};
-
-/// One difference of the Rust client from moby client v0.6.0, and why the daemon treats the
-/// requests the same.
-struct Allowance {
-    id: &'static str,
-    relaxes: &'static str,
-    evidence: &'static str,
-    apply: fn(&mut WireExpectations),
+fn fixture(set: &str, name: &str) -> String {
+    std::fs::read_to_string(fixture_path(set, name)).or_panic()
 }
 
-/// The allowance table.
-const ALLOWANCES: [Allowance; 2] = [
-    Allowance {
-        id: "R1",
-        relaxes: "W4",
-        evidence: "Q11: the client sends User-Agent swarm-scheduler-exporter/<version> instead of \
-                   moby-client/<version> <os>/<arch>, to identify the exporter in daemon and \
-                   proxy logs; the daemon only logs it and changes none of these responses on it.",
-        apply: |expectations| expectations.user_agent_prefix = "swarm-scheduler-exporter/",
-    },
-    Allowance {
-        id: "R2",
-        relaxes: "W2",
-        evidence: "Q11: concurrent first requests share one in-flight ping, where moby sends one \
-                   per concurrent first request (8 for 8 in S1). This run's requests are \
-                   sequential, so both send exactly one HEAD /_ping first and the assertion \
-                   stays as it is; src/docker/tests.rs pins the concurrent case.",
-        apply: |_| {},
-    },
-];
-
-fn expectations() -> WireExpectations {
-    let mut expectations = GO_WIRE;
-    for allowance in &ALLOWANCES {
-        assert!(
-            !allowance.evidence.is_empty() && allowance.relaxes.starts_with('W'),
-            "allowance {} has no evidence or relaxes nothing named",
-            allowance.id
-        );
-        (allowance.apply)(&mut expectations);
+/// The engine serving `set`: every list and inspect the collectors make, and `/events` streaming
+/// the lines of `events` then closing.
+fn engine(set: &str, events: &str) -> FakeEngine {
+    let mut routes: Vec<(String, Reply)> = vec![
+        (
+            "/services".into(),
+            Reply::ok(&fixture(set, "services.json")),
+        ),
+        ("/nodes".into(), Reply::ok(&fixture(set, "nodes.json"))),
+        ("/tasks".into(), Reply::ok(&fixture(set, "tasks.json"))),
+        (
+            "/containers/json".into(),
+            Reply::ok(&fixture(set, "containers.json")),
+        ),
+    ];
+    for service in ["svc-agent", "svc-api", "svc-db"] {
+        routes.push((
+            format!("/services/{service}"),
+            Reply::ok(&fixture(set, &format!("service-{service}.json"))),
+        ));
     }
-    expectations
-}
-
-fn service_inspect_request(query: &str, service_id: &str) -> String {
-    if query.is_empty() {
-        format!("GET /services/{service_id}")
-    } else {
-        format!("GET /services/{service_id}?{query}")
+    for container in [
+        "c-compose-web",
+        "c-compose-worker",
+        "c-plain",
+        "c-swarm-api",
+    ] {
+        routes.push((
+            format!("/containers/{container}/json"),
+            Reply::ok(&fixture(set, &format!("container-{container}.json"))),
+        ));
     }
-}
-
-fn normalized(entries: &[RecordedRequest]) -> Vec<String> {
-    entries
+    let events = fixture(set, events);
+    let lines: Vec<&str> = events.lines().filter(|line| !line.is_empty()).collect();
+    routes.push(("/events".into(), Reply::events(&lines)));
+    let routes: Vec<(&str, Reply)> = routes
         .iter()
-        .map(|entry| entry.normalized.clone())
+        .map(|(path, reply)| (path.as_str(), reply.clone()))
+        .collect();
+    FakeEngine::start(&routes).or_panic()
+}
+
+fn client(engine: &FakeEngine) -> Arc<Client> {
+    let config = Config::unix(engine.socket().to_string_lossy())
+        .api_version("1.51")
+        .or_panic();
+    Arc::new(Client::new(config).or_panic())
+}
+
+/// The requests so far as `METHOD target`, oldest first.
+fn wire(engine: &FakeEngine) -> Vec<String> {
+    engine
+        .requests()
+        .iter()
+        .map(|request| format!("{} {}", request.method, request.target))
         .collect()
 }
 
-fn assert_sequence(phase: &str, got: &[RecordedRequest], want: &[&str]) {
-    assert_eq!(normalized(got), want, "{phase} requests");
+/// How many requests went to `path`.
+fn count(engine: &FakeEngine, path: &str) -> usize {
+    engine
+        .requests()
+        .iter()
+        .filter(|request| request.path() == path)
+        .count()
 }
 
-fn assert_multiset(phase: &str, got: &[RecordedRequest], want: &[String]) {
-    let mut got = normalized(got);
-    let mut want = want.to_vec();
-    got.sort();
-    want.sort();
-    assert_eq!(got, want, "{phase} requests (as a multiset)");
-}
-
-fn requests_to<'entries>(
-    entries: &'entries [RecordedRequest],
-    path: &str,
-) -> Vec<&'entries RecordedRequest> {
-    entries.iter().filter(|entry| entry.path == path).collect()
-}
-
-/// The `since` of an `/events` request: `<seconds>` or `<seconds>.<nanoseconds>`.
-fn events_since(entry: &RecordedRequest) -> Timestamp {
-    let raw = entry.query_value("since").unwrap_or_default();
-    let (seconds, nanos) = raw.split_once('.').unwrap_or((raw, "0"));
-    Timestamp::new(
-        seconds.parse::<i64>().or_panic(),
-        nanos.parse::<i32>().or_panic(),
-    )
-    .or_panic()
-}
-
-/// W1, W3, W4 and W5 on every request of the run, W2 on its order and its pings, the `Host`
-/// header, and the method: `HEAD` only for the ping, `GET` for everything else.
-fn assert_wire_properties(engine: &FakeEngine, entries: &[RecordedRequest]) {
-    let expectations = expectations();
-    let first = entries
-        .first()
-        .map(|entry| format!("{} {}", entry.method, entry.path));
-    assert_eq!(
-        first.as_deref(),
-        Some(expectations.first_request),
-        "W2: first request"
-    );
-    let pings = requests_to(entries, "/_ping");
-    assert_eq!(pings.len(), expectations.pings, "W2: pings in the run");
-    let host = engine.addr().to_string();
-    for entry in entries {
-        assert_eq!(
-            entry.host, host,
-            "Host of {} {}",
-            entry.method, entry.raw_path
-        );
-        assert!(
-            entry.user_agent.starts_with(expectations.user_agent_prefix),
-            "W4: {} {} User-Agent = {:?}",
-            entry.method,
-            entry.raw_path,
-            entry.user_agent
-        );
-        if entry.path == "/_ping" {
-            assert_eq!(
-                entry.method, "HEAD",
-                "the ping, answered with 200, is never retried as GET"
-            );
-            assert_eq!(entry.version_prefix, "", "the ping is unversioned");
-            continue;
-        }
-        assert_eq!(entry.method, "GET", "{}", entry.raw_path);
-        assert_eq!(
-            entry.version_prefix, expectations.version_prefix,
-            "W1: {}",
-            entry.raw_path
-        );
-        if entry.path == "/events" {
-            assert_eq!(
-                entry.accept, expectations.events_accept,
-                "W3: GET /events Accept"
-            );
-        }
-        if entry.path.starts_with("/services/") {
-            assert_eq!(
-                entry.raw_query, expectations.service_inspect_query,
-                "W5: {}",
-                entry.raw_path
-            );
-        }
-    }
-    assert_eq!(engine.unexpected_requests(), Vec::<String>::new());
-}
-
-fn swarm_filters() -> Filters {
-    Filters::new().add("type", &["service", "node"])
-}
-
-fn fixture_connection(engine: &FakeEngine, fixture: &str, end: StreamEnd) -> EventsConnection {
-    EventsConnection {
-        chunks: vec![engine.fixture(fixture)],
-        end,
-    }
-}
-
-/// Opens the stream from `since`, as the Go listener opens it.
-async fn open_events(client: &Client, since: Timestamp) -> ClientEventStream {
-    client
-        .events(since, &swarm_filters())
-        .await
-        .unwrap_or_else(|error| panic!("events: {error}"))
+/// The value of the query parameter `name` of the `index`-th request to `path`, as sent.
+fn query_of(engine: &FakeEngine, path: &str, index: usize, name: &str) -> Option<String> {
+    let requests = engine.requests();
+    let request = requests
+        .iter()
+        .filter(|request| request.path() == path)
+        .nth(index)?;
+    request
+        .query()
+        .split('&')
+        .find_map(|pair| pair.strip_prefix(&format!("{name}=")).map(str::to_owned))
 }
 
 /// The custom label exported through `--label`, so the pin covers the custom-label path of every
@@ -282,9 +180,6 @@ const CUSTOM_LABEL: &str = "com.example.team";
 
 /// The golden metrics, captured from the Go exporter against the same fixtures.
 const GOLDEN_FILE: &str = "tests/testdata/engine_wire/metrics.golden";
-
-/// How long a reconnect gets to show up on the happy path, after the listener's first backoff.
-const RECONNECT_MARGIN: Duration = Duration::from_millis(250);
 
 /// The registered families the golden file deliberately does not pin, because their values
 /// depend on timing or do not come from the Docker API: Go's `engineWireExcludedFamilies`.
@@ -356,21 +251,6 @@ async fn wait_for(what: &str, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + TEST_TIMEOUT;
     while !condition() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-/// Go's `assertNoSecondEventsConnection`: watches the phase for `window`, failing as soon as a
-/// second `GET /events` appears.
-async fn assert_no_second_events_connection(engine: &FakeEngine, window: Duration) {
-    let deadline = Instant::now() + window;
-    while Instant::now() < deadline {
-        let connections = requests_to(&engine.phase_requests(), "/events").len();
-        assert!(
-            connections <= 1,
-            "happy path: the event stream reconnected ({connections} /events requests, want \
-             exactly 1)"
-        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -531,18 +411,17 @@ fn assert_coverage(registered: &BTreeSet<String>) {
     }
 }
 
-/// Go's `testEngineWire`: the collectors driven against the fake engine as `run` drives them,
-/// one phase at a time, pinning each phase's requests; the metrics computed from the answers
-/// against the golden file; and the wire properties of the whole run.
-async fn pins_requests_and_metrics(set_index: usize) {
-    let engine = FakeEngine::start(FIXTURE_SETS[set_index], HashMap::new()).await;
-    let client = Arc::new(engine.client());
+/// The collectors driven against the fake engine as `run` drives them, one phase at a time,
+/// pinning each phase's calls; then the metrics computed from the answers against the golden
+/// file.
+async fn pins_requests_and_metrics(set: &str) {
+    let engine = engine(set, "events-happy.jsonl");
+    let client = client(&engine);
     let mut registry = Registry::default();
     let metrics = configure_collectors_like_main(&mut registry);
     let cancel = CancellationToken::new();
 
     // Phase 1: the reconciler's first resync. Sequential: services, then nodes.
-    engine.reset();
     let reconciler = Reconciler::new(
         Arc::clone(&client),
         metrics.collectors.clone(),
@@ -553,16 +432,70 @@ async fn pins_requests_and_metrics(set_index: usize) {
     let anchor = SystemClock.now();
     let reconciler_task = tokio::spawn(reconciler.run(cancel.clone()));
     handle.ready().await;
-    assert_sequence(
-        "first resync",
-        &engine.phase_requests(),
-        &["GET /services", "GET /nodes"],
+    assert_eq!(
+        wire(&engine),
+        ["GET /services", "GET /nodes"],
+        "first resync"
     );
 
-    polls(&engine, &client, &handle, &metrics, &cancel).await;
-    events_happy_path(&engine, &client, &handle, &registry, &metrics, anchor).await;
-    events_reconnect(&engine, &client, &handle, &metrics, anchor).await;
-    assert_wire_properties(&engine, &engine.all_requests());
+    // Phase 2: the task poll against the polling snapshot, one unfiltered list (the task of
+    // svc-gone, a service the snapshot does not hold, is skipped without an inspect).
+    poll_and_publish_replicas_state(&*client, &handle, &cancel)
+        .await
+        .or_panic();
+    assert_eq!(&wire(&engine)[2..], ["GET /tasks"], "task poll");
+
+    // Phase 3: the container poll, the list and one inspect per running or exited container, in
+    // list order (the paused one is not inspected).
+    let containers = metrics
+        .containers
+        .as_ref()
+        .unwrap_or_else(|| panic!("container metrics are enabled"));
+    let rows = containers.poll(&*client).await.or_panic();
+    containers.update(&rows);
+    assert_eq!(
+        &wire(&engine)[3..],
+        [
+            "GET /containers/json?all=true&size=false",
+            "GET /containers/c-compose-web/json",
+            "GET /containers/c-compose-worker/json",
+            "GET /containers/c-plain/json",
+            "GET /containers/c-swarm-api/json",
+        ],
+        "container poll"
+    );
+
+    // Phase 4: the events. One connection streams a service and a node update and closes; the
+    // reconciler inspects the updated service and refreshes the nodes, recomputing every service
+    // from the cached placement. The listener is stopped as soon as the update shows, well
+    // inside its first backoff, so the reconnect's resync does not overwrite it.
+    let listener = Listener::start(&client, &handle, anchor);
+    wait_for("the events' effects", || {
+        count(&engine, "/services/svc-api") == 1
+            && count(&engine, "/nodes") == 2
+            && desired_replicas(&registry, "web", "api") == Some(5.0)
+    })
+    .await;
+    listener.stop().await;
+    assert_eq!(count(&engine, "/events"), 1, "one connection");
+    assert_eq!(
+        query_of(&engine, "/events", 0, "since"),
+        Some(since_parameter(
+            anchor.checked_sub(EVENTS_SINCE_MARGIN).or_panic()
+        )),
+        "the anchor minus the margin, to the ns"
+    );
+    let filters = query_of(&engine, "/events", 0, "filters").unwrap_or_default();
+    assert_eq!(
+        filters, "%7B%22type%22%3A%5B%22node%22%2C%22service%22%5D%7D",
+        "the swarm types only"
+    );
+
+    // The computed output of every Docker-fed family, after the resync, both polls and the
+    // events.
+    let registered = registered_families(&registry);
+    assert_golden(&registry, &pinned_families(&registered));
+    assert_coverage(&registered);
 
     cancel.cancel();
     tokio::time::timeout(Duration::from_secs(5), reconciler_task)
@@ -571,374 +504,75 @@ async fn pins_requests_and_metrics(set_index: usize) {
         .or_panic();
 }
 
-/// Phases 2 and 3: the task poll against the reconciler's polling snapshot, one unfiltered list
-/// (the task of svc-gone, a service the snapshot does not hold, is skipped without an inspect);
-/// then the container poll, the list and one inspect per running or exited container, in list
-/// order (the paused one is not inspected).
-async fn polls(
-    engine: &FakeEngine,
-    client: &Arc<Client>,
-    handle: &ReconcilerHandle,
-    metrics: &Metrics,
-    cancel: &CancellationToken,
-) {
-    engine.reset();
-    poll_and_publish_replicas_state(&**client, handle, cancel)
+/// A stream the engine closes is reconnected from the margin before its last event, which a
+/// resync follows: the connection count, the resume point and the reconnect counter.
+async fn reconnects_from_the_last_event(set: &str) {
+    let engine = engine(set, "events-reconnect.jsonl");
+    let client = client(&engine);
+    let mut registry = Registry::default();
+    let metrics = configure_collectors_like_main(&mut registry);
+    let cancel = CancellationToken::new();
+    let reconciler = Reconciler::new(
+        Arc::clone(&client),
+        metrics.collectors.clone(),
+        Arc::new(SystemClock),
+    );
+    let handle = reconciler.handle();
+    let anchor = SystemClock.now();
+    let reconciler_task = tokio::spawn(reconciler.run(cancel.clone()));
+    handle.ready().await;
+
+    let listener = Listener::start(&client, &handle, anchor);
+    wait_for("a second connection and its resync", || {
+        count(&engine, "/events") >= 2 && count(&engine, "/services") >= 2
+    })
+    .await;
+    listener.stop().await;
+
+    assert_eq!(
+        query_of(&engine, "/events", 0, "since"),
+        Some(since_parameter(
+            anchor.checked_sub(EVENTS_SINCE_MARGIN).or_panic()
+        ))
+    );
+    assert_eq!(
+        query_of(&engine, "/events", 1, "since").as_deref(),
+        Some(RECONNECT_SINCE),
+        "the margin before the event the first stream carried"
+    );
+    assert!(
+        count(&engine, "/services/svc-db") >= 1,
+        "the event's inspect"
+    );
+    assert!(metrics.collectors.metrics.events_reconnects() >= 1);
+
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(5), reconciler_task)
         .await
+        .or_panic()
         .or_panic();
-    assert_sequence("task poll", &engine.phase_requests(), &["GET /tasks"]);
-
-    engine.reset();
-    let containers = metrics
-        .containers
-        .as_ref()
-        .unwrap_or_else(|| panic!("container metrics are enabled"));
-    let rows = containers.poll(&**client).await.or_panic();
-    containers.update(&rows);
-    assert_sequence(
-        "container poll",
-        &engine.phase_requests(),
-        &[
-            "GET /containers/json?all=1",
-            "GET /containers/c-compose-web/json",
-            "GET /containers/c-compose-worker/json",
-            "GET /containers/c-plain/json",
-            "GET /containers/c-swarm-api/json",
-        ],
-    );
 }
 
-/// Phase 4, events, happy path: one connection streams a service and a node update, then stays
-/// open. The reconciler inspects the updated service and refreshes the nodes, recomputing every
-/// service from the cached placement; when the two events land in the same cycle is timing, so
-/// their requests are compared as a multiset, and only "/events first" is an ordering the code
-/// guarantees. Then the metrics of every family the Docker answers feed, against the golden
-/// file.
-async fn events_happy_path(
-    engine: &FakeEngine,
-    client: &Arc<Client>,
-    handle: &ReconcilerHandle,
-    registry: &Registry,
-    metrics: &Metrics,
-    anchor: Timestamp,
-) {
-    let expectations = expectations();
-    engine.reset();
-    engine.script_events(vec![fixture_connection(
-        engine,
-        "events-happy.jsonl",
-        StreamEnd::Hold,
-    )]);
-    let reconnects = metrics.collectors.metrics.events_reconnects();
-    let want = [
-        "GET /events?filters={type:[node,service]}&since=<time>".to_owned(),
-        service_inspect_request(expectations.service_inspect_query, "svc-api"),
-        "GET /nodes".to_owned(),
-    ];
-    let listener = Listener::start(client, handle, anchor);
-    wait_for(
-        "every request the two events trigger, and web api desired replicas = 5",
-        || {
-            engine.phase_requests().len() >= want.len()
-                && desired_replicas(registry, "web", "api") == Some(5.0)
-        },
-    )
-    .await;
-    // Nothing signals "the stream will not reconnect", so a reconnect gets one full initial
-    // backoff (plus margin) to show up.
-    assert_no_second_events_connection(engine, BACKOFF_INITIAL_DELAY + RECONNECT_MARGIN).await;
-    listener.stop().await;
-
-    let event_requests = engine.phase_requests();
-    assert_multiset("events", &event_requests, &want);
-    assert_eq!(
-        event_requests[0].path, "/events",
-        "the stream is opened first"
-    );
-    let connections = requests_to(&event_requests, "/events");
-    assert_eq!(connections.len(), 1, "happy path: /events requests");
-    assert_eq!(
-        events_since(connections[0]),
-        anchor.checked_sub(EVENTS_SINCE_MARGIN).or_panic(),
-        "the anchor minus the margin, to the ns"
-    );
-    let reconnects_after = metrics.collectors.metrics.events_reconnects();
-    assert!(
-        reconnects_after == reconnects,
-        "happy path: events_reconnects_total = {reconnects_after}, want {reconnects}"
-    );
-
-    // The computed output of every Docker-fed family, after the resync, both polls and the
-    // events.
-    let registered = registered_families(registry);
-    assert_golden(registry, &pinned_families(&registered));
-    assert_coverage(&registered);
-}
-
-/// Phase 5, events, reconnect: the first connection streams one event and ends cleanly; the
-/// listener counts a reconnect, resumes the margin before that event on a second connection,
-/// which stays open, and requests a resync, which lists services and nodes.
-async fn events_reconnect(
-    engine: &FakeEngine,
-    client: &Arc<Client>,
-    handle: &ReconcilerHandle,
-    metrics: &Metrics,
-    anchor: Timestamp,
-) {
-    let expectations = expectations();
-    engine.reset();
-    engine.script_events(vec![
-        fixture_connection(engine, "events-reconnect.jsonl", StreamEnd::Close),
-        EventsConnection {
-            chunks: Vec::new(),
-            end: StreamEnd::Hold,
-        },
-    ]);
-    let reconnects = metrics.collectors.metrics.events_reconnects();
-    let want = [
-        "GET /events?filters={type:[node,service]}&since=<time>".to_owned(),
-        service_inspect_request(expectations.service_inspect_query, "svc-db"),
-        "GET /events?filters={type:[node,service]}&since=<time>".to_owned(),
-        "GET /services".to_owned(),
-        "GET /nodes".to_owned(),
-    ];
-    let listener = Listener::start(client, handle, anchor);
-    wait_for(
-        "the event's inspect, a second /events connection and the resync",
-        || engine.phase_requests().len() >= want.len(),
-    )
-    .await;
-    listener.stop().await;
-
-    let reconnect_requests = engine.phase_requests();
-    assert_multiset("events reconnect", &reconnect_requests, &want);
-    let connections = requests_to(&reconnect_requests, "/events");
-    assert_eq!(connections.len(), 2, "reconnect: /events requests");
-    let last_event = Timestamp::from_nanosecond(RECONNECT_EVENT_TIME_NANO).or_panic();
-    let resume = last_event.checked_sub(EVENTS_SINCE_MARGIN).or_panic();
-    assert_eq!(
-        connections[1].query_value("since"),
-        Some("1789902299.700000000")
-    );
-    assert_eq!(events_since(connections[1]), resume);
-    let reconnects_after = metrics.collectors.metrics.events_reconnects();
-    assert!(
-        reconnects_after == reconnects + 1,
-        "reconnect: events_reconnects_total = {reconnects_after}, want {}",
-        reconnects + 1
-    );
-}
-
-/// Go: `TestEngineWire_PinsRequestsAndMetrics`, for API 1.51.
 #[tokio::test(flavor = "multi_thread")]
 async fn engine_wire_pins_requests_and_metrics_api_1_51() {
-    tokio::time::timeout(TEST_TIMEOUT, Box::pin(pins_requests_and_metrics(0)))
+    tokio::time::timeout(TEST_TIMEOUT, pins_requests_and_metrics(FIXTURE_SETS[0]))
         .await
         .or_panic();
 }
 
-/// Go: `TestEngineWire_PinsRequestsAndMetrics`, for API 1.56.
 #[tokio::test(flavor = "multi_thread")]
 async fn engine_wire_pins_requests_and_metrics_api_1_56() {
-    tokio::time::timeout(TEST_TIMEOUT, Box::pin(pins_requests_and_metrics(1)))
+    tokio::time::timeout(TEST_TIMEOUT, pins_requests_and_metrics(FIXTURE_SETS[1]))
         .await
         .or_panic();
 }
 
-/// A scoped IPv6 `DOCKER_HOST` dials the loopback through its zone, `%25` decoded as Go's
-/// `url.Parse` decodes it, and sends the `Host` header without the zone, as net/http does.
 #[tokio::test(flavor = "multi_thread")]
-async fn engine_wire_dials_a_scoped_ipv6_host() {
-    let engine = FakeEngine::start_ipv6(FIXTURE_SETS[1]).await;
-    let port = engine.addr().port();
-    let client = FakeEngine::client_for(&format!("tcp://[::1%25lo]:{port}"));
-    let services = tokio::time::timeout(TEST_TIMEOUT, with_docker_timeout(client.service_list()))
-        .await
-        .or_panic()
-        .or_panic();
-    assert!(!services.is_empty(), "the services fixture, listed");
-    let requests = engine.all_requests();
-    let sent: Vec<_> = requests
-        .iter()
-        .map(|entry| format!("{} {}", entry.method, entry.path))
-        .collect();
-    assert_eq!(sent, ["HEAD /_ping", "GET /services"]);
-    for entry in &requests {
-        assert_eq!(
-            entry.host,
-            format!("[::1]:{port}"),
-            "Host of {}",
-            entry.path
-        );
-    }
-}
-
-/// Socket proxies such as `HAProxy` reject a request line past their buffer (16 KB by default);
-/// 8 KB leaves room for the headers that share it.
-const MAX_TASK_LIST_REQUEST_URI: usize = 8 << 10;
-
-/// Go: `TestEngineWire_TaskListHasNoFilter`. Go's test fills the service cache with 10001
-/// services first, to show that none of them reaches the request; here `task_list` takes no
-/// filter at all, so the request cannot grow with the cache, and this pins its wire form.
-#[tokio::test(flavor = "multi_thread")]
-async fn engine_wire_task_list_has_no_filter() {
-    let overrides = HashMap::from([("/tasks".to_owned(), b"[]".to_vec())]);
-    let engine = FakeEngine::start(FIXTURE_SETS[0], overrides).await;
-    let client = engine.client();
-    engine.reset();
-    let tasks = tokio::time::timeout(TEST_TIMEOUT, with_docker_timeout(client.task_list()))
-        .await
-        .or_panic()
-        .or_panic();
-    assert!(tasks.is_empty());
-    let requests = engine.phase_requests();
-    assert_eq!(requests.len(), 1, "exactly one GET /tasks");
-    assert_eq!(
-        (requests[0].method.as_str(), requests[0].path.as_str()),
-        ("GET", "/tasks")
-    );
-    assert_eq!(requests[0].query_value("filters"), None);
-    let mut request_uri = requests[0].raw_path.clone();
-    if !requests[0].raw_query.is_empty() {
-        request_uri.push('?');
-        request_uri.push_str(&requests[0].raw_query);
-    }
-    assert!(
-        request_uri.len() < MAX_TASK_LIST_REQUEST_URI,
-        "{request_uri}"
-    );
-    assert_wire_properties(&engine, &engine.all_requests());
-}
-
-/// Every event of `stream` until it ends, and how it ended.
-async fn drain(stream: &mut ClientEventStream) -> (Vec<String>, StreamErrorKind) {
-    let mut actors = Vec::new();
-    loop {
-        match stream.next().await {
-            Ok(event) => actors.push(event.actor.id),
-            Err(end) => return (actors, end.kind()),
-        }
-    }
-}
-
-fn record_separated(lines: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for line in lines.split_inclusive(|byte| *byte == b'\n') {
-        out.push(0x1E);
-        out.extend_from_slice(line);
-    }
-    out
-}
-
-/// A daemon streaming JSON text sequences: the client filters the record separators wherever
-/// the chunks split them, and a tail of separators alone is still a clean end.
-#[tokio::test(flavor = "multi_thread")]
-async fn events_stream_json_seq_end_to_end() {
-    let engine =
-        FakeEngine::start_with_events_type(FIXTURE_SETS[1], "application/json-seq", HashMap::new())
-            .await;
-    let body = record_separated(&engine.fixture("events-happy.jsonl"));
-    // The second record's separator ends the first chunk, and its JSON is split again.
-    let second = body
-        .iter()
-        .rposition(|byte| *byte == 0x1E)
-        .unwrap_or_default();
-    let (first, rest) = body.split_at(second + 1);
-    let (middle, last) = rest.split_at(15);
-    engine.script_events(vec![EventsConnection {
-        chunks: vec![
-            first.to_vec(),
-            middle.to_vec(),
-            last.to_vec(),
-            vec![0x1E],
-            vec![0x1E, b'\n'],
-        ],
-        end: StreamEnd::Close,
-    }]);
-    let client = engine.client();
-    let mut stream = open_events(&client, Timestamp::UNIX_EPOCH).await;
-    assert!(stream.filters_rs());
-    let (actors, end) = tokio::time::timeout(TEST_TIMEOUT, drain(&mut stream))
-        .await
-        .or_panic();
-    assert_eq!(actors, ["svc-api", "node-w1"]);
-    assert_eq!(end, StreamErrorKind::Eof);
-}
-
-/// A connection closed without the terminating chunk, between values or inside one, is never a
-/// clean end: what a proxy's timeout or a killed daemon does (S1). Nor is a body that ends
-/// inside a value, terminating chunk or not.
-#[tokio::test(flavor = "multi_thread")]
-async fn events_stream_cut_is_an_unexpected_eof() {
-    let engine = FakeEngine::start(FIXTURE_SETS[1], HashMap::new()).await;
-    let happy = engine.fixture("events-happy.jsonl");
-    engine.script_events(vec![
-        EventsConnection {
-            chunks: vec![happy.clone()],
-            end: StreamEnd::Cut,
-        },
-        EventsConnection {
-            chunks: vec![happy[..40].to_vec()],
-            end: StreamEnd::Cut,
-        },
-        EventsConnection {
-            chunks: vec![happy[..40].to_vec()],
-            end: StreamEnd::Close,
-        },
-    ]);
-    let client = engine.client();
-    for want in [
-        (
-            vec!["svc-api".to_owned(), "node-w1".to_owned()],
-            StreamErrorKind::UnexpectedEof,
-        ),
-        (Vec::new(), StreamErrorKind::UnexpectedEof),
-        (Vec::new(), StreamErrorKind::UnexpectedEof),
-    ] {
-        let mut stream = open_events(&client, Timestamp::UNIX_EPOCH).await;
-        let got = tokio::time::timeout(TEST_TIMEOUT, drain(&mut stream))
-            .await
-            .or_panic();
-        assert_eq!(got, want);
-    }
-}
-
-/// An events request the daemon refuses yields no stream at all (Q6): the connect failed.
-#[tokio::test(flavor = "multi_thread")]
-async fn events_refused_yields_no_stream() {
-    let engine = FakeEngine::start(FIXTURE_SETS[1], HashMap::new()).await;
-    let client = engine.client();
-    let error = client
-        .events(Timestamp::UNIX_EPOCH, &swarm_filters())
-        .await
-        .or_panic_err();
-    assert_eq!(error.kind(), ErrorKind::Response);
-    assert_eq!(
-        error.to_string(),
-        "Error response from daemon: unexpected extra events request"
-    );
-}
-
-/// The daemon's 404 for a removed service is containerd's `NotFound`, which the reconciler
-/// tells apart from other failures.
-#[tokio::test(flavor = "multi_thread")]
-async fn service_inspect_of_a_removed_service_is_not_found() {
-    let engine = FakeEngine::start(FIXTURE_SETS[1], HashMap::new()).await;
-    let client = engine.client();
-    let error = with_docker_timeout(client.service_inspect("svc-gone"))
-        .await
-        .or_panic_err();
-    assert!(error.is_not_found());
-    assert_eq!(
-        error.to_string(),
-        "Error response from daemon: service svc-gone not found"
-    );
-    let found = with_docker_timeout(client.service_inspect(" svc-db "))
-        .await
-        .or_panic();
-    assert_eq!(found.id, "svc-db");
-    let missing = with_docker_timeout(client.container_inspect("c-gone"))
-        .await
-        .or_panic_err();
-    assert!(missing.is_not_found());
+async fn a_closed_event_stream_reconnects_from_the_last_event() {
+    tokio::time::timeout(
+        TEST_TIMEOUT,
+        reconnects_from_the_last_event(FIXTURE_SETS[1]),
+    )
+    .await
+    .or_panic();
 }

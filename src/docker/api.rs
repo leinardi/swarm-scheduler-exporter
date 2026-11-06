@@ -23,23 +23,34 @@
  */
 
 //! The read-only Docker API the exporter uses: the seven calls of [`DockerApi`] and nothing else,
-//! with moby client v0.6.0's requests, and the timeouts the callers put around them.
+//! made through `docker-client` and bollard, and the timeouts the callers put around them.
 //!
-//! The requests are the ones the Go exporter sends with the options it uses: `GET /services`,
-//! `GET /nodes` and `GET /tasks` without filters, `GET /services/{id}` without
-//! `insertDefaults`, `GET /containers/json?all=1`, `GET /containers/{id}/json`, and
-//! `GET /events` with `filters` (moby's JSON, keys sorted) and `since` (`<seconds>.<9 digits>`),
-//! the query keys sorted and escaped as Go's `url.Values.Encode` does.
+//! The requests: `GET /services`, `GET /nodes` and `GET /tasks` without filters,
+//! `GET /services/{id}`, `GET /containers/json?all=true`, `GET /containers/{id}/json`, and
+//! `GET /events` with `filters` (`{"type":["node","service"]}`) and `since`
+//! (`<seconds>.<9 digits>`). bollard's models are mapped to the exporter's [`types`](super::types)
+//! by [`convert`](super::convert).
 
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
-use docker_engine::{
-    Body, Error, Filters, JsonStream, Settings, StreamError, encode_query, since_parameter,
-    trim_id, with_bare_timeout,
+use docker_client::bollard::Docker;
+use docker_client::bollard::errors::Error as BollardError;
+use docker_client::bollard::models::EventMessage;
+use docker_client::bollard::query_parameters::{
+    EventsOptionsBuilder, ListContainersOptionsBuilder, ListNodesOptions, ListServicesOptions,
+    ListTasksOptions,
 };
+use docker_client::{Config, ConnectError, connect, negotiate};
+use futures_util::{Stream, StreamExt as _};
 use jiff::Timestamp;
+use tokio::sync::OnceCell;
+use tracing::warn;
 
+use super::convert;
+use super::error::{Error, ErrorKind, StreamError, StreamErrorKind, with_bare_timeout};
+use super::query::{Filters, since_parameter};
 use super::types::{ContainerInspect, ContainerSummary, Event, Node, Service, Task};
 
 /// The Go exporter's `dockerRequestTimeout`: the bound of one request and its response.
@@ -52,6 +63,12 @@ pub const CONTAINERS_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 /// of a poll, so a slow daemon cannot hold a poll for the inspect cap times a per-call timeout.
 pub const CONTAINERS_INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long [`DockerApi::events`] waits for the stream's first sign of life before it counts the
+/// stream as connected. bollard opens the request when the stream is first polled and says
+/// nothing when the response headers arrive, so a refused connection or a non-2xx answer shows up
+/// as the first item; a quiet stream has none, and is connected once this has passed without one.
+pub const EVENTS_CONNECT_GRACE: Duration = Duration::from_secs(2);
+
 /// The Docker calls the collectors make. Every one but [`DockerApi::events`] is a single request
 /// and response, which the caller bounds with [`with_docker_timeout`] (or the container
 /// timeouts); the event stream is long-lived and has no deadline.
@@ -59,30 +76,29 @@ pub trait DockerApi: Send + Sync {
     /// The event stream [`DockerApi::events`] opens.
     type Events: EventStream;
 
-    /// moby's `ServiceList` without filters or status: `GET /services`.
+    /// `GET /services`, without filters or status.
     fn service_list(&self) -> impl Future<Output = Result<Vec<Service>, Error>> + Send;
 
-    /// moby's `NodeList` without filters: `GET /nodes`.
+    /// `GET /nodes`, without filters.
     fn node_list(&self) -> impl Future<Output = Result<Vec<Node>, Error>> + Send;
 
-    /// moby's `ServiceInspect` with `InsertDefaults` false: `GET /services/{id}`.
+    /// `GET /services/{id}`, without the defaults inserted.
     fn service_inspect(&self, id: &str) -> impl Future<Output = Result<Service, Error>> + Send;
 
-    /// moby's `TaskList` without filters: `GET /tasks`.
+    /// `GET /tasks`, without filters.
     fn task_list(&self) -> impl Future<Output = Result<Vec<Task>, Error>> + Send;
 
-    /// moby's `ContainerList` with `All`: `GET /containers/json?all=1`.
+    /// `GET /containers/json` with all the containers, stopped ones included.
     fn container_list(&self) -> impl Future<Output = Result<Vec<ContainerSummary>, Error>> + Send;
 
-    /// moby's `ContainerInspect` without size: `GET /containers/{id}/json`.
+    /// `GET /containers/{id}/json`, without the size.
     fn container_inspect(
         &self,
         id: &str,
     ) -> impl Future<Output = Result<ContainerInspect, Error>> + Send;
 
-    /// moby's `Events` from `since` with `filters`: resolves once the response headers passed
-    /// moby's status check, which is when the stream counts as connected (Q6), and fails without
-    /// a stream otherwise.
+    /// `GET /events` from `since` with `filters`: resolves once the stream counts as connected
+    /// (Q6, see [`EVENTS_CONNECT_GRACE`]), and fails without a stream otherwise.
     fn events(
         &self,
         since: Timestamp,
@@ -96,24 +112,48 @@ pub trait EventStream: Send {
     fn next(&mut self) -> impl Future<Output = Result<Event, StreamError>> + Send;
 }
 
-/// The event stream of the Docker client.
-#[derive(Debug)]
+type Wire = Pin<Box<dyn Stream<Item = Result<EventMessage, BollardError>> + Send>>;
+
+/// The event stream of the Docker client. Dropping it closes the connection.
 pub struct ClientEventStream {
-    stream: JsonStream<Body>,
+    stream: Wire,
+    /// What the connect wait already took off the stream.
+    first: Option<Result<Event, StreamError>>,
 }
 
-impl ClientEventStream {
-    /// Whether the response was a JSON text sequence, read through the RS filter.
-    #[must_use]
-    pub fn filters_rs(&self) -> bool {
-        self.stream.filters_rs()
+impl std::fmt::Debug for ClientEventStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientEventStream")
+            .finish_non_exhaustive()
     }
 }
 
 impl EventStream for ClientEventStream {
     async fn next(&mut self) -> Result<Event, StreamError> {
-        self.stream.next().await
+        if let Some(first) = self.first.take() {
+            return first;
+        }
+        match self.stream.next().await {
+            None => Err(StreamError::eof()),
+            Some(Ok(message)) => Ok(convert::event(message)),
+            Some(Err(error)) => Err(stream_error(&error)),
+        }
     }
+}
+
+/// How a bollard error ended the stream: a body that is not an event is a decode failure, a
+/// connection that broke or timed out is Go's unexpected EOF.
+fn stream_error(error: &BollardError) -> StreamError {
+    let kind = if matches!(
+        error,
+        BollardError::JsonDataError { .. } | BollardError::JsonSerdeError { .. }
+    ) {
+        StreamErrorKind::Decode
+    } else {
+        StreamErrorKind::UnexpectedEof
+    };
+    StreamError::new(kind, error.to_string())
 }
 
 /// The Go exporter's `withDockerTimeout`: [`with_bare_timeout`] at [`DOCKER_REQUEST_TIMEOUT`].
@@ -127,53 +167,173 @@ pub async fn with_docker_timeout<T>(
     with_bare_timeout(DOCKER_REQUEST_TIMEOUT, call).await
 }
 
-/// The exporter's Docker client: rust-common's `docker-engine` client behind [`DockerApi`] alone,
-/// so no code of the exporter can send a request the trait does not name.
+/// The exporter's Docker client: `docker-client`'s connection behind [`DockerApi`] alone, so no
+/// code of the exporter can send a request the trait does not name.
 #[derive(Debug)]
 pub struct Client {
-    inner: docker_engine::Client,
+    config: Config,
+    /// The connection, made on the first call (the socket may not exist yet at startup) with the
+    /// API version negotiated then, unless the configuration pins one.
+    docker: OnceCell<Docker>,
+    events_grace: Duration,
 }
 
 impl Client {
-    /// A client for `settings` ([`super::settings_from_env`]), with no connection open yet.
-    #[must_use]
-    pub fn new(settings: Settings) -> Self {
-        Self {
-            inner: docker_engine::Client::new(settings),
+    /// A client for `config` ([`super::settings_from_env`]), with no request sent yet.
+    ///
+    /// # Errors
+    ///
+    /// What [`connect`] refuses for anything but a unix socket that is not there yet (which is
+    /// retried by every call): an unreadable certificate, a `User-Agent` no header can carry.
+    pub fn new(config: Config) -> Result<Self, ConnectError> {
+        match connect(config.clone()) {
+            Ok(_) | Err(ConnectError::Client(BollardError::SocketNotFoundError(_))) => {}
+            Err(error) => return Err(error),
         }
+        Ok(Self {
+            config,
+            docker: OnceCell::new(),
+            events_grace: EVENTS_CONNECT_GRACE,
+        })
+    }
+
+    /// The same client with another [`EVENTS_CONNECT_GRACE`], for tests.
+    #[must_use]
+    pub fn with_events_grace(mut self, grace: Duration) -> Self {
+        self.events_grace = grace;
+        self
+    }
+
+    /// The connection, made and negotiated by the first caller; a failed attempt is retried by
+    /// the next.
+    async fn docker(&self) -> Result<&Docker, Error> {
+        self.docker
+            .get_or_try_init(|| async {
+                let docker = connect(self.config.clone()).map_err(|error| match error {
+                    ConnectError::Client(error) => engine_error(error),
+                    other @ (ConnectError::Invalid(_) | ConnectError::Unsupported(_)) => {
+                        Error::new(ErrorKind::Other, other.to_string())
+                    }
+                })?;
+                // A refusal (a socket proxy with VERSION=0 answers 403) keeps the client's own
+                // version, which is what an unpinned client sends anyway; a failure to reach
+                // the engine is the call's and is retried by the next.
+                match negotiate(docker.clone(), &self.config).await {
+                    Ok(negotiated) => Ok(negotiated),
+                    Err(error) if error.kind() == docker_client::ErrorKind::Other => {
+                        warn!(
+                            error = %error,
+                            "API version negotiation was refused; using the client's default"
+                        );
+                        Ok(docker)
+                    }
+                    Err(error) => Err(Error::from(error)),
+                }
+            })
+            .await
     }
 }
 
-// Each call's future is the crate's, boxed: its request, pool and negotiation state would make
-// every caller's future (a poll, a resync) larger than clippy's `large_futures` allows.
+fn engine_error(error: BollardError) -> Error {
+    Error::from(docker_client::Error::from(error))
+}
+
+/// moby's `trimID`: surrounding whitespace dropped, an empty ID refused.
+fn trim_id<'id>(kind: &str, id: &'id str) -> Result<&'id str, Error> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("invalid {kind} name or ID: value is empty"),
+        ));
+    }
+    Ok(id)
+}
+
+// Each call's future is boxed: the connection and negotiation state would make every caller's
+// future (a poll, a resync) larger than clippy's `large_futures` allows.
 impl DockerApi for Client {
     type Events = ClientEventStream;
 
     async fn service_list(&self) -> Result<Vec<Service>, Error> {
-        Box::pin(self.inner.get_list("/services", "")).await
+        Box::pin(async {
+            let list = self
+                .docker()
+                .await?
+                .list_services(None::<ListServicesOptions>)
+                .await
+                .map_err(engine_error)?;
+            list.into_iter().map(convert::service).collect()
+        })
+        .await
     }
 
     async fn node_list(&self) -> Result<Vec<Node>, Error> {
-        Box::pin(self.inner.get_list("/nodes", "")).await
+        Box::pin(async {
+            let list = self
+                .docker()
+                .await?
+                .list_nodes(None::<ListNodesOptions>)
+                .await
+                .map_err(engine_error)?;
+            Ok(list.into_iter().map(convert::node).collect())
+        })
+        .await
     }
 
     async fn service_inspect(&self, id: &str) -> Result<Service, Error> {
         let id = trim_id("service", id)?;
-        Box::pin(self.inner.get_object(&format!("/services/{id}"))).await
+        Box::pin(async {
+            let service = self
+                .docker()
+                .await?
+                .inspect_service(id, None)
+                .await
+                .map_err(engine_error)?;
+            convert::service(service)
+        })
+        .await
     }
 
     async fn task_list(&self) -> Result<Vec<Task>, Error> {
-        Box::pin(self.inner.get_list("/tasks", "")).await
+        Box::pin(async {
+            let list = self
+                .docker()
+                .await?
+                .list_tasks(None::<ListTasksOptions>)
+                .await
+                .map_err(engine_error)?;
+            list.into_iter().map(convert::task).collect()
+        })
+        .await
     }
 
     async fn container_list(&self) -> Result<Vec<ContainerSummary>, Error> {
-        let query = encode_query(&mut [("all", "1".to_owned())]);
-        Box::pin(self.inner.get_list("/containers/json", &query)).await
+        Box::pin(async {
+            let options = ListContainersOptionsBuilder::new().all(true).build();
+            let list = self
+                .docker()
+                .await?
+                .list_containers(Some(options))
+                .await
+                .map_err(engine_error)?;
+            Ok(list.into_iter().map(convert::container_summary).collect())
+        })
+        .await
     }
 
     async fn container_inspect(&self, id: &str) -> Result<ContainerInspect, Error> {
         let id = trim_id("container", id)?;
-        Box::pin(self.inner.get_object(&format!("/containers/{id}/json"))).await
+        Box::pin(async {
+            let inspect = self
+                .docker()
+                .await?
+                .inspect_container(id, None)
+                .await
+                .map_err(engine_error)?;
+            Ok(convert::container_inspect(inspect))
+        })
+        .await
     }
 
     async fn events(
@@ -181,14 +341,20 @@ impl DockerApi for Client {
         since: Timestamp,
         filters: &Filters,
     ) -> Result<ClientEventStream, Error> {
-        let mut pairs = vec![("since", since_parameter(since))];
+        let docker = self.docker().await?.clone();
+        let since = since_parameter(since);
+        let mut options = EventsOptionsBuilder::new().since(&since);
         if !filters.is_empty() {
-            pairs.push(("filters", filters.to_json()));
+            options = options.filters(&filters.to_map());
         }
-        let query = encode_query(&mut pairs);
-        Ok(ClientEventStream {
-            stream: Box::pin(self.inner.events(&query)).await?,
-        })
+        let mut stream: Wire = Box::pin(docker.events(Some(options.build())));
+        let first = match tokio::time::timeout(self.events_grace, stream.next()).await {
+            Err(_quiet) => None,
+            Ok(None) => Some(Err(StreamError::eof())),
+            Ok(Some(Err(error))) => return Err(engine_error(error)),
+            Ok(Some(Ok(message))) => Some(Ok(convert::event(message))),
+        };
+        Ok(ClientEventStream { stream, first })
     }
 }
 

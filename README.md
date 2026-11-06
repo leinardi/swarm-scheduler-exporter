@@ -275,8 +275,9 @@ To turn it off, set `healthcheck: disable: true` in compose or a stack file, or 
 ## 📋 Requirements
 
 - Docker Engine **19.03+** (Engine API **1.40**) in Swarm mode; tested on Docker **29.x**.
-- The exporter negotiates the API version with the daemon. If `DOCKER_API_VERSION` is set, it must
-  be within **1.40–1.56**; otherwise the exporter exits at startup with an error.
+- The exporter negotiates the API version with the daemon (`GET /version`). If
+  `DOCKER_API_VERSION` is set, it must be `<major>.<minor>` and at least **1.40**; otherwise the
+  exporter exits at startup with an error.
 
 ## 🚀 Quick Start
 
@@ -352,9 +353,9 @@ docker stack deploy -c docker-compose.socket-proxy.yaml monitoring
 ```
 
 The allowlist sets every ACL variable of the pinned proxy image explicitly (the image enables
-`EVENTS` and `VERSION` by default) and opens only `PING`, `EVENTS`, `SERVICES`, `NODES`, `TASKS` and
-`CONTAINERS`. `TestSocketProxy_ExampleAllowlist` runs the pinned image with that file against a real
-Swarm, and checks that the exporter works through it and that what is left off is refused.
+`EVENTS` and `VERSION` by default) and opens only `VERSION`, `EVENTS`, `SERVICES`, `NODES`, `TASKS`
+and `CONTAINERS`. `TestSocketProxy_ExampleAllowlist` runs the pinned image with that file against a
+real Swarm, and checks that the exporter works through it and that what is left off is refused.
 
 > ⚠️ **Scope:** this makes the Docker API **read-only** for the exporter, not least-privilege. The
 > proxy matches each section by path prefix, so every enabled section allows every `GET` under it,
@@ -458,8 +459,8 @@ Options:
 - `DOCKER_HOST` — Docker daemon URL
 - `DOCKER_CERT_PATH` — Path to TLS certs
 - `DOCKER_TLS_VERIFY` — Enable TLS verification (set to `1`)
-- `DOCKER_API_VERSION` — Pin the Engine API version instead of negotiating it (must be within
-  1.40–1.56)
+- `DOCKER_API_VERSION` — Pin the Engine API version instead of negotiating it (`<major>.<minor>`,
+  at least 1.40)
 
 The client connects to `DOCKER_HOST` directly: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are not
 read. To go through a proxy (a socket proxy, say), point `DOCKER_HOST` at it.
@@ -670,16 +671,17 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false` and every `strconv.ParseBool` spelling, Go durations for `--poll-delay`, repeatable `--label`, exit 2 on parse errors |
 | Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2), the message naming the accepted values; `plain` (format) and `fatal`, `panic` (level) are no longer accepted, `warning` stays an alias of `warn` |
 | Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | Startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |
-| Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the daemon answers 2xx; a failed connect goes straight to the warn path |
+| Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the stream is accepted: a refused request (non-2xx, no connection) is seen within 2s of opening it and goes straight to the warn path; a daemon that accepts the connection and never answers counts as connected after 2s and fails at the 30s response-header timeout |
 | Q7 | Reconnect backoff | The 500ms backoff reset only after a stream that carried an event, so a quiet cluster behind a proxy backed off to 30s | It resets after any stream that connected |
 | Q8 | Shutdown | 10s for the HTTP drain, then an unbounded wait for the workers | One 10s budget from the signal to exit, covering the drain and the workers |
 | Q9 | Error texts | Library errors in Go's and the Docker SDK's wording | Library errors in Rust's wording; every prefix and message the exporter writes itself is unchanged, and an OS error number reads as Go's `syscall.Errno` text (`errno <n>` for one Go does not name) |
 | Q10 | Panic recovery | `reconciler recovered from panic` with a Go stack trace | The same record, with the panic message and a Rust backtrace |
-| Q11 | Docker wire | User-Agent `moby-client/…`; one version ping per concurrent first request | User-Agent `swarm-scheduler-exporter/<version>`; concurrent first requests share one ping; every other request detail unchanged |
+| Q11 | Docker wire | User-Agent `moby-client/…`; one version ping per concurrent first request | User-Agent `swarm-scheduler-exporter/<version>`; the version is negotiated once with `GET /version` (a refusal, as a socket proxy with `VERSION=0` gives, is logged and the client's default version kept; set `VERSION=1` in the proxy or pin `DOCKER_API_VERSION`) |
 | Q12 | Go runtime environment | `GOMAXPROCS`, `GOMEMLIMIT`, `GOGC` and `GODEBUG` tuned the process | No effect; the worker count follows the CPUs available to the container |
 | Q13 | HTTP edge cases | net/http's answers to malformed requests, its header-count and size limits, the 307 for unclean paths, any method on the two routes, four server timeouts (read header 5s, read 10s, write 15s, idle 60s), and `net.Listen`'s wording and service-name ports (`:http`) | axum and hyper's: a bodyless 404 for any other path, 405 for a method other than GET and HEAD, hyper's answers and limits (431 above 100 headers), no redirect for unclean paths; a 5s header-read timeout that also closes an idle keep-alive connection, and a 15s write-stall timeout (no read or idle timeout); a listen error reads `http listen: listen tcp <address>: <system error>`, a port is a number, and a host name binds its first IPv4 address. Paths, status codes and bodies of `/metrics` and `/healthz` are unchanged |
 | Q14 | Docker proxy variables | A TCP `DOCKER_HOST` went through `HTTP_PROXY` / `HTTPS_PROXY` (honouring `NO_PROXY` and skipping loopback), as Go's `http.ProxyFromEnvironment` decides | The client dials `DOCKER_HOST` directly and reads no proxy variable; unix sockets are unaffected |
 | Q15 | Log output | slog text/JSON/plain lines, timestamps in the local zone (`TZ`) | `tracing` text or JSON lines (`level`, `message`, then the fields; JSON adds `target`), timestamps in UTC; the fields keep their names except `err`, now `error`, and durations print as Rust writes them (`500ms`, `1s`) |
+| Q16 | Docker client | moby client v0.6.0 over its own HTTP/1 transport; every state a string; `DOCKER_API_VERSION` within 1.40–1.56 | bollard through `docker-client`: a state or type the daemon documents is decoded, one a newer daemon invents fails the call that carries it (a decode error, logged by the collector); requests carry no `/v1.xx` prefix whatever the version (bollard 0.21.1 drops it, so the daemon answers in its current API); the container list asks `all=true&size=false`; a pin is checked for its format and the 1.40 minimum, with no maximum |
 
 ## 🤝 Contributing
 

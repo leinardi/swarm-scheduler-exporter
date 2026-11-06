@@ -31,7 +31,6 @@ use std::future::pending;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{OnceLock, Weak};
 
-use hyper::StatusCode;
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -51,7 +50,7 @@ use crate::docker::types::{
     ServiceMode, ServiceSpec, Task, Version,
 };
 use crate::docker::{
-    DOCKER_REQUEST_TIMEOUT, Error, EventStream, Filters, StreamError, StreamErrorKind,
+    DOCKER_REQUEST_TIMEOUT, Error, ErrorKind, EventStream, Filters, StreamError, StreamErrorKind,
 };
 use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
 use crate::test_support::{Logs, count};
@@ -421,7 +420,7 @@ impl DockerApi for TestDocker {
                     .find(|service| service.id == id)
                     .cloned()
                     .ok_or_else(|| {
-                        Error::response(StatusCode::NOT_FOUND, format!("service {id} not found"))
+                        Error::new(ErrorKind::NotFound, format!("service {id} not found"))
                     })
             },
             Err,
@@ -487,7 +486,7 @@ impl DockerApi for TestDocker {
 }
 
 fn unavailable() -> Error {
-    Error::connection_failed("list unavailable".to_owned())
+    Error::new(ErrorKind::Unavailable, "list unavailable")
 }
 
 fn service(id: &str, stack: &str, name: &str, mode: ServiceMode) -> Service {
@@ -1199,7 +1198,7 @@ async fn the_retry_limit_requests_a_resync() {
     fixture.complete_first_resync().await;
     fixture.docker.set_inspect_err(
         "svc1",
-        Some(Error::connection_failed("inspect unavailable".to_owned())),
+        Some(Error::new(ErrorKind::Unavailable, "inspect unavailable")),
     );
     // Keep the resync this ends in from succeeding, so the count below is only the key's.
     fixture.docker.set_list_errors(Some(unavailable()), None);
@@ -1250,7 +1249,7 @@ async fn a_fresh_event_supersedes_a_retry() {
     fixture.complete_first_resync().await;
     fixture.docker.set_inspect_err(
         "svc1",
-        Some(Error::connection_failed("inspect unavailable".to_owned())),
+        Some(Error::new(ErrorKind::Unavailable, "inspect unavailable")),
     );
     fixture
         .handle

@@ -24,22 +24,19 @@
 
 //! The Engine API objects the exporter reads, with only the fields it uses.
 //!
-//! Decoding follows Go's `encoding/json` where the daemon's output can tell them apart: a missing
-//! field or a JSON `null` is the zero value (`null_default`), unknown fields are ignored, a
-//! timestamp is parsed as RFC 3339 into a [`GoTime`] whose zero is Go's `0001-01-01T00:00:00Z`,
-//! and every state and other enum-like field is a plain `String`, so a value a newer daemon
-//! introduces reaches the collectors' fallback rules instead of failing the whole list. A field
-//! Go holds behind a pointer is an `Option`, so its presence stays visible.
+//! Built by `convert` from bollard's models: a missing field or a `null` is the
+//! zero value, a timestamp is parsed as RFC 3339 into a [`GoTime`] whose zero is Go's
+//! `0001-01-01T00:00:00Z`, and every state and other enum-like field is its wire text. A field Go
+//! holds behind a pointer is an `Option`, so its presence stays visible.
 
 use std::fmt;
 
 use jiff::Timestamp;
-use serde::{Deserialize, Deserializer};
 
-use docker_engine::types::null_default;
 use go_compat::time_layout::{go_zero_time, is_go_zero_time};
 
-pub use docker_engine::types::Labels;
+/// Labels, as the daemon sends them.
+pub type Labels = std::collections::BTreeMap<String, String>;
 
 /// A Go `time.Time` decoded from the wire: an instant, Go's zero time when missing or `null`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -88,373 +85,270 @@ impl fmt::Display for GoTime {
     }
 }
 
-impl<'de> Deserialize<'de> for GoTime {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        match Option::<String>::deserialize(deserializer)? {
-            None => Ok(Self::default()),
-            Some(text) => text.parse::<Timestamp>().map(Self).map_err(|error| {
-                serde::de::Error::custom(format_args!("parsing time {text:?}: {error}"))
-            }),
-        }
-    }
-}
-
 /// A JSON object whose presence is all that is read (Go's pointer to a struct it never looks
 /// into).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Present {}
 
 /// swarm `Version`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Version {
     /// `Index`.
-    #[serde(rename = "Index", deserialize_with = "null_default")]
     pub index: u64,
 }
 
 /// swarm `Service`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Service {
     /// `ID`.
-    #[serde(rename = "ID", deserialize_with = "null_default")]
     pub id: String,
     /// `Spec`.
-    #[serde(rename = "Spec", deserialize_with = "null_default")]
     pub spec: ServiceSpec,
     /// `UpdateStatus`.
-    #[serde(rename = "UpdateStatus")]
     pub update_status: Option<UpdateStatus>,
     /// `JobStatus`.
-    #[serde(rename = "JobStatus")]
     pub job_status: Option<JobStatus>,
 }
 
 /// swarm `ServiceSpec`, with its `Annotations` inline.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServiceSpec {
     /// `Name`.
-    #[serde(rename = "Name", deserialize_with = "null_default")]
     pub name: String,
     /// `Labels`.
-    #[serde(rename = "Labels", deserialize_with = "null_default")]
     pub labels: Labels,
     /// `TaskTemplate`.
-    #[serde(rename = "TaskTemplate", deserialize_with = "null_default")]
     pub task_template: TaskSpec,
     /// `Mode`.
-    #[serde(rename = "Mode", deserialize_with = "null_default")]
     pub mode: ServiceMode,
 }
 
 /// swarm `TaskSpec`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskSpec {
     /// `Placement`.
-    #[serde(rename = "Placement")]
     pub placement: Option<Placement>,
     /// `RestartPolicy`.
-    #[serde(rename = "RestartPolicy")]
     pub restart_policy: Option<RestartPolicy>,
 }
 
 /// swarm `Placement`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Placement {
     /// `Constraints`.
-    #[serde(rename = "Constraints", deserialize_with = "null_default")]
     pub constraints: Vec<String>,
     /// `Platforms`.
-    #[serde(rename = "Platforms", deserialize_with = "null_default")]
     pub platforms: Vec<Platform>,
 }
 
 /// swarm `Platform`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Platform {
     /// `Architecture`.
-    #[serde(rename = "Architecture", deserialize_with = "null_default")]
     pub architecture: String,
     /// `OS`.
-    #[serde(rename = "OS", deserialize_with = "null_default")]
     pub os: String,
 }
 
 /// swarm `RestartPolicy`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RestartPolicy {
     /// `Condition`: `none`, `on-failure`, `any`, or whatever a newer daemon sends.
-    #[serde(rename = "Condition", deserialize_with = "null_default")]
     pub condition: String,
 }
 
 /// swarm `ServiceMode`: which of the modes is set.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServiceMode {
     /// `Replicated`.
-    #[serde(rename = "Replicated")]
     pub replicated: Option<ReplicatedService>,
     /// `Global`.
-    #[serde(rename = "Global")]
     pub global: Option<Present>,
     /// `ReplicatedJob`.
-    #[serde(rename = "ReplicatedJob")]
     pub replicated_job: Option<ReplicatedJob>,
     /// `GlobalJob`.
-    #[serde(rename = "GlobalJob")]
     pub global_job: Option<Present>,
 }
 
 /// swarm `ReplicatedService`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplicatedService {
     /// `Replicas`.
-    #[serde(rename = "Replicas")]
     pub replicas: Option<u64>,
 }
 
 /// swarm `ReplicatedJob`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplicatedJob {
     /// `MaxConcurrent`.
-    #[serde(rename = "MaxConcurrent")]
     pub max_concurrent: Option<u64>,
     /// `TotalCompletions`.
-    #[serde(rename = "TotalCompletions")]
     pub total_completions: Option<u64>,
 }
 
 /// swarm `UpdateStatus`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdateStatus {
     /// `State`: `updating`, `paused`, `completed`, `rollback_started`, …
-    #[serde(rename = "State", deserialize_with = "null_default")]
     pub state: String,
     /// `StartedAt`.
-    #[serde(rename = "StartedAt")]
     pub started_at: Option<GoTime>,
     /// `CompletedAt`.
-    #[serde(rename = "CompletedAt")]
     pub completed_at: Option<GoTime>,
 }
 
 /// swarm `JobStatus`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JobStatus {
     /// `JobIteration`.
-    #[serde(rename = "JobIteration", deserialize_with = "null_default")]
     pub job_iteration: Version,
 }
 
 /// swarm `Node`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Node {
     /// `ID`.
-    #[serde(rename = "ID", deserialize_with = "null_default")]
     pub id: String,
     /// `Spec`.
-    #[serde(rename = "Spec", deserialize_with = "null_default")]
     pub spec: NodeSpec,
     /// `Description`.
-    #[serde(rename = "Description", deserialize_with = "null_default")]
     pub description: NodeDescription,
     /// `Status`.
-    #[serde(rename = "Status", deserialize_with = "null_default")]
     pub status: NodeStatus,
 }
 
 /// swarm `NodeSpec`, with its `Annotations` inline.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NodeSpec {
     /// `Labels`.
-    #[serde(rename = "Labels", deserialize_with = "null_default")]
     pub labels: Labels,
     /// `Role`: `manager`, `worker`, …
-    #[serde(rename = "Role", deserialize_with = "null_default")]
     pub role: String,
     /// `Availability`: `active`, `pause`, `drain`, …
-    #[serde(rename = "Availability", deserialize_with = "null_default")]
     pub availability: String,
 }
 
 /// swarm `NodeDescription`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NodeDescription {
     /// `Hostname`.
-    #[serde(rename = "Hostname", deserialize_with = "null_default")]
     pub hostname: String,
     /// `Platform`.
-    #[serde(rename = "Platform", deserialize_with = "null_default")]
     pub platform: Platform,
     /// `Engine`.
-    #[serde(rename = "Engine", deserialize_with = "null_default")]
     pub engine: EngineDescription,
 }
 
 /// swarm `EngineDescription`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineDescription {
     /// `Labels`.
-    #[serde(rename = "Labels", deserialize_with = "null_default")]
     pub labels: Labels,
 }
 
 /// swarm `NodeStatus`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NodeStatus {
     /// `State`: `unknown`, `down`, `ready`, `disconnected`, …
-    #[serde(rename = "State", deserialize_with = "null_default")]
     pub state: String,
     /// `Addr`.
-    #[serde(rename = "Addr", deserialize_with = "null_default")]
     pub addr: String,
 }
 
 /// swarm `Task`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Task {
     /// `Version`.
-    #[serde(rename = "Version", deserialize_with = "null_default")]
     pub version: Version,
     /// `CreatedAt`.
-    #[serde(rename = "CreatedAt", deserialize_with = "null_default")]
     pub created_at: GoTime,
     /// `ServiceID`.
-    #[serde(rename = "ServiceID", deserialize_with = "null_default")]
     pub service_id: String,
     /// `Slot`.
-    #[serde(rename = "Slot", deserialize_with = "null_default")]
     pub slot: i64,
     /// `NodeID`.
-    #[serde(rename = "NodeID", deserialize_with = "null_default")]
     pub node_id: String,
     /// `Status`.
-    #[serde(rename = "Status", deserialize_with = "null_default")]
     pub status: TaskStatus,
     /// `DesiredState`.
-    #[serde(rename = "DesiredState", deserialize_with = "null_default")]
     pub desired_state: String,
     /// `JobIteration`.
-    #[serde(rename = "JobIteration")]
     pub job_iteration: Option<Version>,
 }
 
 /// swarm `TaskStatus`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskStatus {
     /// `Timestamp`.
-    #[serde(rename = "Timestamp", deserialize_with = "null_default")]
     pub timestamp: GoTime,
     /// `State`: `new`, `pending`, `running`, `complete`, `failed`, …
-    #[serde(rename = "State", deserialize_with = "null_default")]
     pub state: String,
 }
 
 /// container `Summary`, one entry of the container list.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContainerSummary {
     /// `Id`.
-    #[serde(rename = "Id", deserialize_with = "null_default")]
     pub id: String,
     /// `Names`.
-    #[serde(rename = "Names", deserialize_with = "null_default")]
     pub names: Vec<String>,
     /// `Labels`.
-    #[serde(rename = "Labels", deserialize_with = "null_default")]
     pub labels: Labels,
     /// `State`: `created`, `running`, `paused`, `restarting`, `exited`, …
-    #[serde(rename = "State", deserialize_with = "null_default")]
     pub state: String,
 }
 
 /// container `InspectResponse`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContainerInspect {
     /// `State`.
-    #[serde(rename = "State")]
     pub state: Option<ContainerState>,
     /// `Config`.
-    #[serde(rename = "Config")]
     pub config: Option<ContainerConfig>,
 }
 
 /// container `State`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContainerState {
     /// `ExitCode`.
-    #[serde(rename = "ExitCode", deserialize_with = "null_default")]
     pub exit_code: i64,
     /// `Health`.
-    #[serde(rename = "Health")]
     pub health: Option<Health>,
 }
 
 /// container `Health`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Health {
     /// `Status`: `none`, `starting`, `healthy`, `unhealthy`, …
-    #[serde(rename = "Status", deserialize_with = "null_default")]
     pub status: String,
 }
 
 /// container `Config`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContainerConfig {
     /// `Healthcheck`: only whether one is configured is read.
-    #[serde(rename = "Healthcheck")]
     pub healthcheck: Option<Present>,
 }
 
 /// events `Message`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Event {
     /// `Type`: `service`, `node`, … (the stream is filtered to these two).
-    #[serde(rename = "Type", deserialize_with = "null_default")]
     pub kind: String,
     /// `Action`.
-    #[serde(rename = "Action", deserialize_with = "null_default")]
     pub action: String,
     /// `Actor`.
-    #[serde(rename = "Actor", deserialize_with = "null_default")]
     pub actor: Actor,
     /// `time`: seconds since the epoch.
-    #[serde(rename = "time", deserialize_with = "null_default")]
     pub time: i64,
     /// `timeNano`: nanoseconds since the epoch.
-    #[serde(rename = "timeNano", deserialize_with = "null_default")]
     pub time_nano: i64,
 }
 
 /// events `Actor`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Actor {
     /// `ID`.
-    #[serde(rename = "ID", deserialize_with = "null_default")]
     pub id: String,
 }
 

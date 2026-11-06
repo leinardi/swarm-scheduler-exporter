@@ -7,7 +7,7 @@
   COMMIT,DATE}` at compile time.
 - Libraries: tokio, hyper + hyper-util (healthcheck client), axum (routes), clap, jiff, serde,
   prometheus-client (registry and OpenMetrics encoder). From leinardi/rust-common (git, pinned by
-  `rev`): docker-engine (Docker client, rustls with ring), tracing-setup (logger subscriber),
+  `rev`): docker-client (Docker connection over bollard, rustls with ring), tracing-setup (logger subscriber),
   go-slog (testenv only, until step 7), go-compat (Go library ports), clock, service-kit (with
   `runtime`, `process-metrics` and `http`), testenv-core, repo-meta.
 - Lint and audit: clippy (workspace lints), rustfmt, cargo-machete, cargo-deny (`deny.toml`).

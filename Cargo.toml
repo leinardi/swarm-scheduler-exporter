@@ -19,7 +19,7 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
 clock = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
-docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
+docker-client = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 go-compat = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 go-slog = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
@@ -87,11 +87,13 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The exposition: the registry, the OpenMetrics text encoder, the histogram and the counters.
 # No features: the exporter encodes text only (no protobuf, no derive macros).
 prometheus-client = { version = "0.25.2", default-features = false }
-# The Docker Engine client (rust-common): moby client v0.6.0's requests over HTTP/1, its API
-# version negotiation, error wording and event stream, on unix sockets, TCP (`tcp`: DOCKER_HOST,
-# Go's keep-alive, the transparent gunzip) and TLS (`tls`: rustls on ring, Q5). No `write` or
+# The Docker connection (rust-common): bollard behind a unix socket, TCP (`tcp`: DOCKER_HOST) and
+# TLS (`tls`: rustls on ring, DOCKER_TLS_VERIFY and DOCKER_CERT_PATH), a fixed or negotiated API
+# version, the `User-Agent`, the error kinds and bollard itself (`docker_client::bollard`). No
 # `attach`: the exporter only reads (meta/tests/docker_boundary.rs checks it).
-docker-engine = { workspace = true, features = ["tcp", "tls"] }
+docker-client = { workspace = true, features = ["tcp", "tls"] }
+# The engine's event stream (`Stream`, `next`) behind the Docker client.
+futures-util = { version = "0.3.34", default-features = false }
 # The build stamps (buildinfo!), the runtime main builds, its shutdown bounded by the shutdown
 # budget (run_until_exit), the lazy SIGINT and SIGTERM watch, and the `process_*` collector
 # (`process-metrics`, rust-common).
@@ -138,12 +140,10 @@ hyper-util = { version = "0.1.21", default-features = false, features = [
 ] }
 http-body-util = "0.1.5"
 bytes = "1.12.1"
-# The Engine API types' decoding (docker-engine's decoders).
-serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
-# The fake engine core, its request recorder and OrPanic, for the Docker tests.
-docker-engine = { workspace = true, features = ["tcp", "tls", "test-util"] }
+# The fake engine on a unix socket, for the Docker tests.
+docker-client = { workspace = true, features = ["tcp", "tls", "test-util"] }
 # The paused clock (start_paused) needs the test runtime.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",
@@ -157,8 +157,10 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # The gzip exposition's decoding (tests/exposition.rs); the pure-Rust backend, so no C zlib.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
-# The Engine API fixtures of tests/run.rs.
+# The Engine API fixtures of the conversion tests, decoded into bollard's models.
 serde_json = "1.0.154"
+# The bound of the conversion tests' decoding helper.
+serde = { version = "1.0.229", default-features = false }
 # The captured logs of the tests: a scoped subscriber and a writer that keeps what was logged.
 tracing-setup = { workspace = true, features = ["testing"] }
 

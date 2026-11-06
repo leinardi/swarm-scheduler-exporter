@@ -88,23 +88,23 @@ The exporter must only ever *read* from the Docker API. A `:ro` bind of
 from modifying the socket file, and a client can still POST creates, updates and removes
 through it. So the read-only property rests entirely on the code:
 
-- `DockerApi` (`src/docker`), on a `Client` newtype over rust-common's docker-engine built
-  without its `write` and `attach` features, which exposes only list, inspect and events calls
+- `DockerApi` (`src/docker`), on a `Client` over rust-common's docker-client (bollard) built
+  without its `attach` feature, which exposes only list, inspect and events calls
   (nodes, services, a service inspect, tasks, containers, a container inspect, events), and
   through which all collector code reaches Docker;
-- `meta/tests/docker_boundary.rs`, which keeps docker-engine to `GET` (plus the ping's one
-  `HEAD`) by refusing any manifest that enables `write` or `attach`, lets only `src/docker` name
-  the crate and build no request of its own there, asks only for paths the shipped socket-proxy
-  allowlist grants, and keeps bollard (the harness's SDK, which creates and removes things)
-  declared only by `testenv` behind its `integration` feature, with none of bollard, testenv and
+- `meta/tests/docker_boundary.rs`, which keeps docker-client to reads by refusing any
+  manifest that enables `attach`, lets only `src/docker` name the crate (and bollard, as
+  `docker_client::bollard`) and build no request of its own there, allows only the known read
+  calls (and the version negotiation) whose sections the shipped socket-proxy allowlist grants,
+  and keeps bollard (the harness's SDK, which creates and removes things) declared directly only
+  by `testenv` behind its `integration` feature, with none of bollard, testenv and
   testenv-core named in the exporter package. A diff that loosens any of those rules, or reaches
   Docker around the client, is a finding.
 
 Critical:
 
 - a new client method that creates, updates, removes, kills, scales, restarts, prunes or
-  otherwise changes anything, or a request with a method other than `GET` (the ping's `HEAD`
-  aside);
+  otherwise changes anything, or a bollard call other than the reads the boundary test lists;
 - the exporter package depending on bollard, testenv or testenv-core in any dependency table;
 - docs claiming that `:ro` makes the socket read-only. The README's Security section says the
   exporter only *issues* read requests and that enforcing it needs a proxy; a diff that walks

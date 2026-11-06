@@ -26,19 +26,20 @@
 //! socket bind does not make the API read-only). It replaces Go's `docker-sdk-boundary` depguard
 //! rule for the Rust workspace:
 //!
-//! - bollard, the SDK the test harness creates and removes things with, is declared only by
-//!   `testenv`, only in its `[dependencies]` and only as `optional = true` (behind the
-//!   `integration` feature);
+//! - bollard, the SDK the test harness creates and removes things with, is declared directly only
+//!   by `testenv`, only in its `[dependencies]` and only as `optional = true` (behind the
+//!   `integration` feature); the exporter reaches it only through `docker-client`;
 //! - the exporter package names neither bollard nor testenv nor testenv-core (whose `bollard`
 //!   feature brings bollard) in any dependency table, so none can reach the shipped binary;
-//! - nothing under `src/` names either;
-//! - the exporter's Docker client is rust-common's `docker-engine`, which sends `GET` only, plus
-//!   one `HEAD` in its ping, as long as neither `write` nor `attach` (its requests of any method)
-//!   is enabled: no workspace manifest enables them, and the exporter package takes `tcp` and
-//!   `tls` only (`test-util` too, in its dev-dependencies);
+//! - nothing under `src/` names testenv, and bollard is named only in `src/docker`, as
+//!   `docker_client::bollard`;
+//! - the exporter's Docker client is rust-common's `docker-client`, over bollard, as long as its
+//!   `attach` feature (the container attach and wait calls) is not enabled: no workspace manifest
+//!   enables it, and the exporter package takes `tcp` and `tls` only (`test-util` too, in its
+//!   dev-dependencies);
 //! - the exporter reaches the client through `src/docker` alone, builds no request of its own
-//!   there, calls no write, and asks only for paths the shipped socket-proxy allowlist grants,
-//!   `/_ping` included.
+//!   there, calls no bollard write, and makes only the read calls (and the version negotiation)
+//!   whose API sections the shipped socket-proxy allowlist grants.
 //!
 //! Each rule is a function over the files' text, so each has a negative control. They are this
 //! repository's own: repo-meta's `docker_drivers`, which `integration_targets.rs` runs, sees a
@@ -59,8 +60,8 @@ const HARNESS_CORE: &str = "testenv-core";
 const HARNESS_MANIFEST: &str = "testenv/Cargo.toml";
 const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 /// The sanctioned Docker client, and the features that let it send requests of any method.
-const CLIENT: &str = "docker-engine";
-const WRITE_FEATURES: &[&str] = &["write", "attach"];
+const CLIENT: &str = "docker-client";
+const WRITE_FEATURES: &[&str] = &["attach"];
 /// What the exporter package may enable: in its `[dependencies]`, and in its
 /// `[dev-dependencies]`.
 const CLIENT_FEATURES: &[&str] = &["tcp", "tls"];
@@ -193,7 +194,7 @@ fn client_manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
             for feature in &features {
                 if WRITE_FEATURES.contains(feature) {
                     violations.push(format!(
-                        "{place}: `{feature}` lets the client send requests of any method"
+                        "{place}: `{feature}` lets the client attach to and wait for containers"
                     ));
                 }
             }
@@ -233,79 +234,90 @@ fn client_manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
 
 static SDK_OR_HARNESS: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(bollard|testenv(_core)?)\b"));
 
-/// Files under `src/` that name the SDK or the harness, in code or in a comment.
+/// Files under `src/` that name the harness, or the SDK other than as `docker_client::bollard` in
+/// `src/docker` (a comment there may name it), in code or in a comment.
 fn source_violations(sources: &[(&str, &str)]) -> Vec<String> {
     sources
         .iter()
         .flat_map(|(path, text)| {
+            let in_docker = path.starts_with("src/docker/");
             text.lines().enumerate().filter_map(move |(index, line)| {
-                SDK_OR_HARNESS
-                    .find(line)
-                    .map(|found| format!("{path}:{}: names {}", index + 1, found.as_str()))
+                SDK_OR_HARNESS.find_iter(line).find_map(|found| {
+                    let through_client = found.as_str() == SDK
+                        && in_docker
+                        && (line.contains("docker_client::bollard")
+                            || line.trim_start().starts_with("//"));
+                    (!through_client)
+                        .then(|| format!("{path}:{}: names {}", index + 1, found.as_str()))
+                })
             })
         })
         .collect()
 }
 
+static CLIENT_NAMED: LazyLock<Regex> = LazyLock::new(|| regex(r"\bdocker_client\b"));
+/// The bollard calls that read: `list_*` and `inspect_*` of the objects the exporter lists.
+static READ_CALL: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"\.\s*((?:list|inspect)_[a-z_]+)\s*\("));
+/// The bollard calls that change, run, or leak content of a container, service or task.
+static WRITE_CALL: LazyLock<Regex> = LazyLock::new(|| {
+    regex(
+        r"\.\s*((?:create|start|stop|restart|kill|remove|delete|update|pause|unpause|rename|wait|attach|exec|prune|build|commit|import|export|resize|upload|download|join|leave|init|unlock|push|pull|tag|connect|disconnect|prepare|top|logs|stats|changes)_[a-z_]+)\s*\(",
+    )
+});
+/// The event stream and the version negotiation, the two calls that are not `list_*` or
+/// `inspect_*`.
+static EVENTS_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\.\s*events\s*\("));
+static NEGOTIATE_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\bnegotiate(?:_version)?\s*\("));
 static METHOD: LazyLock<Regex> = LazyLock::new(|| regex(r"\bMethod::[A-Za-z_]+"));
 static REQUEST_BUILT: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\b(Request::new|Request::builder)\s*\("));
-static WRITE_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\bexchange(_upgrade)?\s*\("));
-static ENGINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\bdocker_engine\b"));
-/// The request paths: the client's calls' path arguments.
-static REQUEST_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r#"\b(?:get_list|get_object|get_body|get)\(\s*(?:&format!\(\s*)?"(/[^"]*)""#)
-});
-/// The client's `events` call, whose path (`/events`) is the crate's.
-static EVENTS_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\.events\s*\("));
 
-/// The first path segments the socket-proxy allowlist grants: each `KEY=1` of `env`, lowercased,
-/// with `PING` standing for `_ping`.
+/// The API section (the first path segment, as the allowlist names it) of each read call the
+/// exporter may make.
+const READ_SEGMENTS: &[(&str, &str)] = &[
+    ("list_services", "services"),
+    ("inspect_service", "services"),
+    ("list_nodes", "nodes"),
+    ("list_tasks", "tasks"),
+    ("list_containers", "containers"),
+    ("inspect_container", "containers"),
+];
+
+/// The first path segments the socket-proxy allowlist grants: each `KEY=1` of `env`, lowercased.
 fn granted_segments(env: &str) -> BTreeSet<String> {
     env.lines()
         .map(str::trim)
         .filter(|line| !line.starts_with('#'))
         .filter_map(|line| line.split_once('='))
         .filter(|(_, value)| value.trim() == "1")
-        .map(|(key, _)| match key.trim() {
-            "PING" => "_ping".to_owned(),
-            key => key.to_ascii_lowercase(),
-        })
+        .map(|(key, _)| key.trim().to_ascii_lowercase())
         .collect()
 }
 
 /// The client rules over the non-test sources of `src/` (paths as `src/…`), against the
 /// allowlist in `env`: only `src/docker` names the client crate, nothing calls a write, and in
-/// `src/docker` no request is built and no method named, and every path the client is asked for
-/// is on the allowlist, as is the ping's.
+/// `src/docker` no request is built and no method named, and every call made is a known read
+/// whose section is on the allowlist, the version negotiation's and the event stream's included.
 fn client_violations(sources: &[(&str, &str)], env: &str) -> Vec<String> {
     let granted = granted_segments(env);
     let mut violations = Vec::new();
-    let mut paths = 0;
-    if !granted.contains("_ping") {
-        violations.push(
-            "/_ping, the client's version negotiation, is not on the socket-proxy allowlist"
-                .to_owned(),
-        );
-    }
+    let mut calls = 0;
     for (path, text) in sources {
         let in_docker = path.starts_with("src/docker/");
         for (index, line) in text.lines().enumerate() {
             let line_number = index + 1;
-            if !in_docker && ENGINE.is_match(line) {
+            if !in_docker && CLIENT_NAMED.is_match(line) {
                 violations.push(format!(
-                    "{path}:{line_number}: names docker_engine; the client is reached through \
+                    "{path}:{line_number}: names docker_client; the client is reached through \
                      src/docker"
-                ));
-            }
-            if let Some(found) = WRITE_CALL.find(line) {
-                violations.push(format!(
-                    "{path}:{line_number}: {} is a write",
-                    found.as_str()
                 ));
             }
             if !in_docker {
                 continue;
+            }
+            if let Some(found) = WRITE_CALL.captures(line) {
+                violations.push(format!("{path}:{line_number}: {}( is a write", &found[1]));
             }
             for found in METHOD.find_iter(line).chain(REQUEST_BUILT.find_iter(line)) {
                 violations.push(format!(
@@ -317,26 +329,38 @@ fn client_violations(sources: &[(&str, &str)], env: &str) -> Vec<String> {
         if !in_docker {
             continue;
         }
-        // Over the whole text: a call's path argument may sit on the line after it.
-        let calls = REQUEST_PATH
-            .captures_iter(text)
-            .filter_map(|captures| captures.get(1).map(|found| found.as_str().to_owned()))
-            .chain(EVENTS_CALL.find_iter(text).map(|_| "/events".to_owned()));
-        for request_path in calls {
-            paths += 1;
-            let segment = request_path[1..]
-                .split(['/', '?'])
-                .next()
-                .unwrap_or_default();
-            if !granted.contains(segment) {
+        // Over the whole text: a call's name may sit on the line after its receiver.
+        let mut sections: Vec<(String, String)> = Vec::new();
+        for captures in READ_CALL.captures_iter(text) {
+            let call = captures[1].to_owned();
+            match READ_SEGMENTS.iter().find(|(name, _)| *name == call) {
+                Some((_, segment)) => sections.push((call, (*segment).to_owned())),
+                None => {
+                    violations.push(format!("{path}: {call}( is not a read the exporter makes"));
+                }
+            }
+        }
+        sections.extend(
+            EVENTS_CALL
+                .find_iter(text)
+                .map(|_| ("events".to_owned(), "events".to_owned())),
+        );
+        sections.extend(
+            NEGOTIATE_CALL
+                .find_iter(text)
+                .map(|_| ("negotiate".to_owned(), "version".to_owned())),
+        );
+        for (call, segment) in sections {
+            calls += 1;
+            if !granted.contains(&segment) {
                 violations.push(format!(
-                    "{path}: {request_path} is not on the socket-proxy allowlist"
+                    "{path}: {call}( needs /{segment}, which is not on the socket-proxy allowlist"
                 ));
             }
         }
     }
-    if paths == 0 {
-        violations.push("no request path found: the path pattern no longer matches".to_owned());
+    if calls == 0 {
+        violations.push("no client call found: the call patterns no longer match".to_owned());
     }
     violations
 }
@@ -385,7 +409,7 @@ fn bollard_is_confined_to_the_harness() {
 }
 
 #[test]
-fn the_docker_client_is_docker_engine_without_writes() {
+fn the_docker_client_is_docker_client_without_attach() {
     let manifests = workspace_manifests();
     let violations = client_manifest_violations(&borrowed(&manifests));
     assert!(violations.is_empty(), "{}", violations.join("\n"));
@@ -568,13 +592,32 @@ fn manifest_rules_keep_testenv_core_out_of_the_exporter() {
 #[test]
 fn source_rule_rejects_a_reference() {
     assert!(source_violations(&[("src/lib.rs", "pub mod docker;\n")]).is_empty());
-    for line in [
-        "use bollard::Docker;",
-        "// see testenv::up",
-        "extern crate bollard;",
+    for (path, line) in [
+        ("src/lib.rs", "use bollard::Docker;"),
+        ("src/lib.rs", "// see testenv::up"),
+        ("src/lib.rs", "extern crate bollard;"),
+        (
+            "src/collector/nodes.rs",
+            "use docker_client::bollard::Docker;",
+        ),
+        ("src/docker/api.rs", "use bollard::Docker;"),
+        ("src/docker/api.rs", "extern crate bollard;"),
+        (
+            "src/docker/api.rs",
+            "use docker_client::bollard::Docker; // testenv",
+        ),
     ] {
-        let violations = source_violations(&[("src/lib.rs", line)]);
-        assert_eq!(violations.len(), 1, "{line:?}: {violations:?}");
+        let violations = source_violations(&[(path, line)]);
+        assert_eq!(violations.len(), 1, "{path} {line:?}: {violations:?}");
+    }
+    // bollard through the client, in the client module, and a comment there, are the way in.
+    for line in [
+        "use docker_client::bollard::Docker;",
+        "use docker_client::bollard::query_parameters::EventsOptionsBuilder;",
+        "//! made over bollard",
+    ] {
+        let violations = source_violations(&[("src/docker/api.rs", line)]);
+        assert!(violations.is_empty(), "{line:?}: {violations:?}");
     }
     // A word that merely contains one is not a reference.
     assert!(source_violations(&[("src/lib.rs", "let testenvironment = 1;")]).is_empty());
@@ -584,21 +627,22 @@ fn source_rule_rejects_a_reference() {
 const SOURCES_OK: &[(&str, &str)] = &[
     (
         "src/docker/mod.rs",
-        "pub use docker_engine::{Settings, with_bare_timeout};\n",
+        "pub use docker_client::{Config, ConnectError};\n",
     ),
     (
         "src/docker/api.rs",
-        r#"
-async fn service_list(&self) { self.inner.get_list("/services", "").await }
-async fn container_inspect(&self) { self.inner.get_object(&format!("/containers/{id}/json")).await }
-async fn events(&self) { self.inner.events(&query).await }
-"#,
+        r"
+async fn service_list(&self) { self.docker.list_services(None).await }
+async fn container_inspect(&self) { self.docker.inspect_container(id, None).await }
+async fn events(&self) { self.docker.events(Some(options)) }
+async fn version(&self) { negotiate(docker, &self.config).await }
+",
     ),
     ("src/run.rs", "use crate::docker::{self, Client};\n"),
 ];
 
 const ENV: &str =
-    "# the allowlist\nPING=1\nSERVICES=1\nCONTAINERS=1\nEVENTS=1\nPOST=0\nNETWORKS=0\n";
+    "# the allowlist\nVERSION=1\nSERVICES=1\nCONTAINERS=1\nEVENTS=1\nPOST=0\nNETWORKS=0\n";
 
 /// Negative controls for the client source rules: each edit below breaks one, and the clean
 /// exporter passes.
@@ -628,46 +672,46 @@ fn client_rules_reject_each_escape() {
             "a write call",
             (
                 "src/docker/api.rs",
-                "async fn kill(&self) { self.inner.exchange(\"/containers/x/kill\", \"\", |_| {}) }",
+                "async fn kill(&self) { self.docker.kill_container(id, None).await }",
             ),
-            "exchange( is a write",
+            "kill_container( is a write",
+        ),
+        (
+            "a log read, which leaks what the containers print",
+            (
+                "src/docker/api.rs",
+                "fn logs(&self) { self.docker.logs_container(id, None) }",
+            ),
+            "logs_container( is a write",
         ),
         (
             "the client named outside src/docker",
-            ("src/collector/nodes.rs", "use docker_engine::Client;"),
-            "src/collector/nodes.rs:1: names docker_engine",
+            ("src/collector/nodes.rs", "use docker_client::Config;"),
+            "src/collector/nodes.rs:1: names docker_client",
         ),
         (
-            "a write outside src/docker",
-            (
-                "src/run.rs",
-                "client.exchange_upgrade(\"/containers/x/attach\", \"\", |_| {})",
-            ),
-            "exchange_upgrade( is a write",
-        ),
-        (
-            "a path the allowlist denies",
+            "a read the allowlist denies",
             (
                 "src/docker/api.rs",
-                "async fn network_list(&self) { self.inner.get_list(\"/networks\", \"\").await }",
+                "async fn networks(&self) { self.docker.list_networks(None).await }",
             ),
-            "/networks is not on the socket-proxy allowlist",
+            "list_networks( is not a read the exporter makes",
         ),
         (
-            "a path whose key is 0",
+            "an inspect of an object the exporter does not read",
             (
                 "src/docker/api.rs",
-                "async fn pull(&self) { self.inner.get(\"/post\", \"\", &[]).await }",
+                "async fn secret(&self) { self.docker.inspect_secret(id).await }",
             ),
-            "/post is not on the socket-proxy allowlist",
+            "inspect_secret( is not a read the exporter makes",
         ),
         (
-            "an inspect the allowlist denies",
+            "a read whose section is off",
             (
                 "src/docker/api.rs",
-                "self.inner.get_object(&format!(\"/secrets/{id}\")).await",
+                "async fn tasks(&self) { self.docker.list_tasks(None).await }",
             ),
-            "/secrets/{id} is not on the socket-proxy allowlist",
+            "list_tasks( needs /tasks, which is not on the socket-proxy allowlist",
         ),
     ];
     for (name, extra, want) in cases {
@@ -680,27 +724,25 @@ fn client_rules_reject_each_escape() {
         );
     }
 
-    // The events stream needs its key, the ping needs PING, and a path pattern that matches
-    // nothing is a failure too.
+    // The events stream needs its key, the version negotiation needs VERSION, and a call pattern
+    // that matches nothing is a failure too.
     let violations = client_violations(SOURCES_OK, &ENV.replace("EVENTS=1", "EVENTS=0"));
     assert!(
-        violations
-            .iter()
-            .any(|violation| violation.contains("/events is not on the socket-proxy allowlist")),
+        violations.iter().any(|violation| violation
+            .contains("events( needs /events, which is not on the socket-proxy allowlist")),
         "{violations:?}"
     );
-    let violations = client_violations(SOURCES_OK, &ENV.replace("PING=1", "PING=0"));
+    let violations = client_violations(SOURCES_OK, &ENV.replace("VERSION=1", "VERSION=0"));
     assert!(
-        violations
-            .iter()
-            .any(|violation| violation.contains("/_ping, the client's version negotiation")),
+        violations.iter().any(|violation| violation
+            .contains("negotiate( needs /version, which is not on the socket-proxy allowlist")),
         "{violations:?}"
     );
     let pathless = client_violations(&[("src/docker/api.rs", "fn ping() {}\n")], ENV);
     assert!(
         pathless
             .iter()
-            .any(|violation| violation.contains("no request path")),
+            .any(|violation| violation.contains("no client call")),
         "{pathless:?}"
     );
 }
@@ -708,43 +750,43 @@ fn client_rules_reject_each_escape() {
 /// Negative controls for the client's manifest rules.
 #[test]
 fn client_manifest_rules_reject_each_escape() {
-    const ROOT: &str = "[dependencies]\ndocker-engine = { workspace = true, features = [\"tcp\", \"tls\"] }\n[dev-dependencies]\ndocker-engine = { workspace = true, features = [\"tcp\", \"tls\", \"test-util\"] }\n";
+    const ROOT: &str = "[dependencies]\ndocker-client = { workspace = true, features = [\"tcp\", \"tls\"] }\n[dev-dependencies]\ndocker-client = { workspace = true, features = [\"tcp\", \"tls\", \"test-util\"] }\n";
     let clean = client_manifest_violations(&[("Cargo.toml", ROOT), (HARNESS_MANIFEST, HARNESS_OK)]);
     assert!(clean.is_empty(), "{clean:?}");
 
     let cases: &[ManifestCase] = &[
         (
-            "write in the exporter's dependencies",
+            "attach in the exporter's dependencies",
             &[(
                 "Cargo.toml",
-                "[dependencies]\ndocker-engine = { workspace = true, features = [\"tcp\", \"write\"] }\n",
+                "[dependencies]\ndocker-client = { workspace = true, features = [\"tcp\", \"attach\"] }\n",
             )],
-            "`write` lets the client send requests of any method",
+            "`attach` lets the client attach to and wait for containers",
         ),
         (
             "attach on the workspace entry",
             &[(
                 "Cargo.toml",
-                "[workspace.dependencies]\ndocker-engine = { git = \"x\", features = [\"attach\"] }\n[dependencies]\ndocker-engine.workspace = true\n",
+                "[workspace.dependencies]\ndocker-client = { git = \"x\", features = [\"attach\"] }\n[dependencies]\ndocker-client.workspace = true\n",
             )],
-            "[workspace.dependencies] docker-engine: `attach`",
+            "[workspace.dependencies] docker-client: `attach`",
         ),
         (
-            "write in another member, which feature unification would hand the exporter",
+            "attach in another member, which feature unification would hand the exporter",
             &[
                 ("Cargo.toml", ROOT),
                 (
                     HARNESS_MANIFEST,
-                    "[dev-dependencies]\ndocker-engine = { workspace = true, features = [\"write\"] }\n",
+                    "[dev-dependencies]\ndocker-client = { workspace = true, features = [\"attach\"] }\n",
                 ),
             ],
-            "testenv/Cargo.toml [dev-dependencies] docker-engine: `write`",
+            "testenv/Cargo.toml [dev-dependencies] docker-client: `attach`",
         ),
         (
             "test-util in the shipped binary",
             &[(
                 "Cargo.toml",
-                "[dependencies]\ndocker-engine = { workspace = true, features = [\"test-util\"] }\n",
+                "[dependencies]\ndocker-client = { workspace = true, features = [\"test-util\"] }\n",
             )],
             "feature `test-util` is not one of",
         ),
@@ -754,7 +796,7 @@ fn client_manifest_rules_reject_each_escape() {
                 ("Cargo.toml", ROOT),
                 (
                     "Cargo.toml",
-                    "[target.'cfg(unix)'.dependencies]\nengine = { package = \"docker-engine\", version = \"0.1\" }\n",
+                    "[target.'cfg(unix)'.dependencies]\nengine = { package = \"docker-client\", version = \"0.1\" }\n",
                 ),
             ],
             "not in [target.cfg(unix).dependencies]",
@@ -762,7 +804,7 @@ fn client_manifest_rules_reject_each_escape() {
         (
             "no client",
             &[("Cargo.toml", "[dependencies]\njiff = \"0.2\"\n")],
-            "declares docker-engine 0 times",
+            "declares docker-client 0 times",
         ),
     ];
     for (name, manifests, want) in cases {

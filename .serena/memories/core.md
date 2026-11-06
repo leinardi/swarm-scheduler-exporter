@@ -7,19 +7,20 @@ akerouanton/swarm-tasks-exporter; a port of its Go 1.x implementation, metric fo
 
 AGENTS.md (repo root) is the authoritative contract: layout, commands, invariants, validation
 matrix, commit types. Read it before any change; memories below only add what it does not say.
-The README "Migrating from 1.x" section lists the only intended differences from Go (Q1-Q14).
+The README "Migrating from 1.x" section lists the only intended differences from Go (Q1-Q16).
 
 ## Source map
 
 - Shared code is rust-common's (git dependency pinned by `rev`): go-compat, clock,
-  tracing-setup, go-slog (testenv only), docker-engine, service-kit, testenv-core,
+  tracing-setup, go-slog (testenv only), docker-client, service-kit, testenv-core,
   repo-meta. A per-project difference is a parameter there, never a fork here; fixes land in
   rust-common first.
 - `src/main.rs` (service-kit's runtime and lazy shutdown signal, one shutdown budget), `src/run.rs`
   (startup order, workers, HTTP server), `src/cli.rs` (clap, double-dash flags),
   `src/healthcheck.rs` (`--healthcheck`), `src/version.rs` (`service_kit::buildinfo!` stamps).
-- `src/docker/`: `DockerApi` (read-only trait) on a `Client` newtype over docker-engine (`tcp`,
-  `tls`), the API types and timeouts. GET only, plus `HEAD /_ping`.
+- `src/docker/`: `DockerApi` (read-only trait) on a `Client` over docker-client/bollard (`tcp`,
+  `tls`), the API types (`convert.rs` maps bollard's models) and timeouts. Read calls only, plus
+  the `GET /version` negotiation.
 - `src/collector/`:
   - `reconciler/`: the single owner of the service/node caches and derived gauges (`mod.rs`
     cycle, resync, retries; `poll.rs` the poll snapshot/verdict exchange; `listener.rs` the
