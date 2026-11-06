@@ -262,3 +262,34 @@ async fn the_wildcard_socket_is_not_v6_only() {
     }
     assert!(!socket2::SockRef::from(&listener).only_v6().unwrap());
 }
+
+/// The zone of a scoped listen address reaches the socket address as its scope id: the interface
+/// name and the numeric index name the same one, and the loopback's own index is read from the
+/// kernel, so the test needs no particular host.
+#[tokio::test]
+async fn a_zone_becomes_the_scope_id() {
+    let Ok(index) = std::fs::read_to_string("/sys/class/net/lo/ifindex") else {
+        return;
+    };
+    let index: u32 = index.trim().parse().unwrap();
+    let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
+    for host in ["fe80::1%lo".to_owned(), format!("fe80::1%{index}")] {
+        let found = resolve(&host, 8888).await.unwrap();
+        let [SocketAddr::V6(address)] = found.as_slice() else {
+            panic!("{host}: {found:?}");
+        };
+        assert_eq!(address.scope_id(), index, "{host}");
+        assert_eq!((address.ip(), address.port()), (&link_local, 8888));
+    }
+}
+
+/// An interface that does not exist is a lookup error naming the address, not a bind of the
+/// unscoped one.
+#[tokio::test]
+async fn an_unknown_zone_is_a_clear_error() {
+    let error = bind("[fe80::1%nosuchif0]:0").await.unwrap_err().to_string();
+    assert!(
+        error.starts_with("http listen: listen tcp: lookup fe80::1%nosuchif0: "),
+        "{error}"
+    );
+}

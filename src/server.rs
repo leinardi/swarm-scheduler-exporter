@@ -153,9 +153,11 @@ pub async fn bind(address: &str) -> Result<TcpListener, ListenError> {
     let port: u16 = port
         .parse()
         .map_err(|_| fail(format!("listen tcp: address {port}: invalid port")))?;
-    let host = host.split('%').next().unwrap_or(host);
-    let wildcard = host.is_empty()
-        || host
+    // The zone (`fe80::1%eth0`, `fe80::1%2`) stays in `host` for the lookup, which turns it into
+    // the scope id of the address; only the wildcard test looks at the address alone.
+    let unscoped = host.split('%').next().unwrap_or(host);
+    let wildcard = unscoped.is_empty()
+        || unscoped
             .parse::<IpAddr>()
             .is_ok_and(|ip| ip.to_canonical().is_unspecified());
     let candidates: Vec<SocketAddr> = if wildcard {
@@ -164,13 +166,9 @@ pub async fn bind(address: &str) -> Result<TcpListener, ListenError> {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
         ]
     } else {
-        let mut found: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        resolve(host, port)
             .await
             .map_err(|error| fail(format!("listen tcp: lookup {host}: {error}")))?
-            .collect();
-        found.sort_by_key(SocketAddr::is_ipv6);
-        found.truncate(1);
-        found
     };
     let mut last = format!("listen tcp {address}: no suitable address");
     for candidate in candidates {
@@ -187,6 +185,16 @@ pub async fn bind(address: &str) -> Result<TcpListener, ListenError> {
         }
     }
     Err(fail(last))
+}
+
+/// The address `host` names (an IP literal with an optional zone, or a host name) as one socket
+/// address, the first IPv4 one when there are both. A zone, an interface name or an index, becomes
+/// the scope id of the IPv6 address, which a link-local bind needs.
+async fn resolve(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+    let mut found: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+    found.sort_by_key(SocketAddr::is_ipv6);
+    found.truncate(1);
+    Ok(found)
 }
 
 fn listen_on(address: SocketAddr) -> std::io::Result<TcpListener> {
