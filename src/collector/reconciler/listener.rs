@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 use crate::docker::types::Event;
 use crate::docker::{DockerApi, Error, EventStream, Filters, StreamError, StreamErrorKind};
 use go_compat::{duration, time_layout};
-use go_slog::Attr;
+use tracing::{info, warn};
 
 use super::{BACKOFF_INITIAL_DELAY, BACKOFF_MAX_DELAY, BACKOFF_MULTIPLIER, ReconcilerHandle};
 use super::{EVENT_TYPE_NODE, EVENT_TYPE_SERVICE, duration_nanos};
@@ -178,19 +178,21 @@ pub async fn listen_swarm_events(
         // whether a proxy timed out or the daemon restarted, only the restart loses event
         // history, and the resync is just two list calls.
         let backoff_nanos = duration_nanos(backoff);
-        let attrs = [
-            Attr::error("err", &outcome.end),
-            Attr::duration("backoff", backoff_nanos),
-            Attr::string("next_since", local_rfc3339_nano(handle, since)),
-        ];
+        let next_since = rfc3339_nano(since);
         if outcome.end.is_eof() {
-            shared
-                .logger
-                .info("event stream closed by the server; reconnecting", &attrs);
+            info!(
+                error = %outcome.end,
+                backoff = ?backoff,
+                next_since,
+                "event stream closed by the server; reconnecting"
+            );
         } else {
-            shared
-                .logger
-                .warn("event stream ended; will reconnect", &attrs);
+            warn!(
+                error = %outcome.end,
+                backoff = ?backoff,
+                next_since,
+                "event stream ended; will reconnect"
+            );
         }
         if cancel
             .run_until_cancelled(tokio::time::sleep(backoff))
@@ -203,10 +205,9 @@ pub async fn listen_swarm_events(
     }
 }
 
-/// `timestamp` in the logger's zone, Go's `time.Local`, as `time.RFC3339Nano`.
-fn local_rfc3339_nano(handle: &ReconcilerHandle, timestamp: Timestamp) -> String {
-    let offset = handle.shared.logger.zone().to_offset(timestamp);
-    time_layout::format_rfc3339_nano(timestamp, offset)
+/// `timestamp` in UTC, as `time.RFC3339Nano`.
+fn rfc3339_nano(timestamp: Timestamp) -> String {
+    time_layout::format_rfc3339_nano(timestamp, jiff::tz::Offset::UTC)
 }
 
 /// Opens one event stream connection and dispatches its events until it ends. The connection
@@ -241,10 +242,7 @@ pub async fn follow_event_stream<D: DockerApi>(
         .metrics
         .timestamps()
         .mark_events_connected(shared.clock.now());
-    shared.logger.info(
-        "event stream connected",
-        &[Attr::string("since", local_rfc3339_nano(handle, since))],
-    );
+    info!(since = rfc3339_nano(since), "event stream connected");
     if reconnect {
         handle.request_resync("event stream reconnected");
     }

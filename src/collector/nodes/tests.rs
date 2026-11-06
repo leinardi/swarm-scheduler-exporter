@@ -26,9 +26,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::docker::types::{NodeSpec, NodeStatus};
-use crate::test_support::capture_logs;
 use go_prom::testing::{gather_series, series_id};
-use go_slog::Level;
 
 fn node(role: &str, availability: &str, status: &str) -> Node {
     Node {
@@ -62,7 +60,7 @@ fn gathered(nodes: &NodesByState) -> BTreeMap<String, f64> {
 }
 
 fn nodes_by_state() -> NodesByState {
-    NodesByState::new(capture_logs(Level::INFO).0)
+    NodesByState::new()
 }
 
 /// Go: `TestUpdateNodesByStateFromSlice_Aggregation`

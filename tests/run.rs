@@ -33,14 +33,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use jiff::tz::TimeZone;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use clock::{Clock, SystemClock};
 use go_prom::promhttp::HandlerMetrics;
 use go_prom::{Registry, Value};
-use go_slog::{Config, Format, Level, Logger};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
@@ -158,20 +156,6 @@ impl DockerApi for LifecycleDocker {
     }
 }
 
-fn quiet_logger() -> Logger {
-    Logger::new(
-        Config {
-            format: Format::Text,
-            level: Level::INFO,
-            include_time: false,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Box::new(std::io::sink()),
-        TimeZone::UTC,
-        Arc::new(SystemClock),
-    )
-}
-
 fn clock() -> Arc<dyn Clock> {
     Arc::new(SystemClock)
 }
@@ -188,7 +172,6 @@ fn configure_metrics(poll_delay: Duration) -> (Arc<Registry>, Metrics) {
             build: ["test".to_owned(), "none".to_owned(), "unknown".to_owned()],
         },
         clock(),
-        &quiet_logger(),
     );
     (registry, metrics)
 }
@@ -205,7 +188,6 @@ fn run_workers(
         metrics,
         Duration::from_secs(3600),
         &clock(),
-        &quiet_logger(),
     )
 }
 
@@ -243,7 +225,6 @@ async fn serve_endpoints(
         Arc::clone(registry),
         HandlerMetrics::new(),
         clock(),
-        quiet_logger(),
     ));
     let shutdown = cancel.clone().cancelled_owned();
     tokio::spawn(server::serve(
@@ -423,7 +404,7 @@ struct ExitCase {
 }
 
 /// The startup cases of [`flags_and_startup_exit_codes`].
-const EXIT_CASES: [ExitCase; 11] = [
+const EXIT_CASES: [ExitCase; 13] = [
     ExitCase {
         args: &["-containers"],
         env: &[],
@@ -451,6 +432,20 @@ const EXIT_CASES: [ExitCase; 11] = [
         code: 2,
         stdout: "",
         stderr: "invalid value 'xml' for '--log-format",
+    },
+    ExitCase {
+        args: &["--log-format=plain"],
+        env: &[],
+        code: 2,
+        stdout: "",
+        stderr: "[possible values: text, json]",
+    },
+    ExitCase {
+        args: &["--log-level=fatal"],
+        env: &[],
+        code: 2,
+        stdout: "",
+        stderr: "[possible values: debug, info, warn, error]",
     },
     ExitCase {
         args: &["--label="],
@@ -486,25 +481,25 @@ const EXIT_CASES: [ExitCase; 11] = [
         stderr: "",
     },
     ExitCase {
-        args: &["--label=service"],
+        args: &["--log-format=json", "--label=service"],
         env: &[],
         code: 1,
-        stdout: "level=ERROR msg=\"invalid custom labels\" err=\"custom label collides with a \
-                 reserved label name: \\\"service\\\"\"\n",
+        stdout: "\"level\":\"ERROR\",\"message\":\"invalid custom labels\",\"error\":\"custom label \
+                 collides with a reserved label name: \\\"service\\\"\"",
         stderr: "",
     },
     ExitCase {
-        args: &[],
+        args: &["--log-format=json"],
         env: &[("DOCKER_CERT_PATH", "/nonexistent")],
         code: 1,
-        stdout: "level=ERROR msg=\"docker client init failed\"",
+        stdout: "\"level\":\"ERROR\",\"message\":\"docker client init failed\"",
         stderr: "",
     },
     ExitCase {
-        args: &[],
+        args: &["--log-format=json"],
         env: &[("DOCKER_API_VERSION", "1.20")],
         code: 1,
-        stdout: "level=ERROR msg=\"unsupported Docker API version\"",
+        stdout: "\"level\":\"ERROR\",\"message\":\"unsupported Docker API version\"",
         stderr: "",
     },
 ];

@@ -65,7 +65,6 @@ fn server_for(capture: &Capture) -> Server {
             Box::new(move |_| metrics.clone()),
         ),
         clock,
-        &capture_logs(Level::INFO).0,
     )
 }
 

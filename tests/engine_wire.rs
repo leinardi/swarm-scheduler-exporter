@@ -40,7 +40,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -48,7 +47,6 @@ use tokio_util::sync::CancellationToken;
 
 use clock::{Clock as _, SystemClock};
 use go_prom::{Gathered, GatheredSeries, Registry, Value, text};
-use go_slog::{Config as LogConfig, Format, Level, Logger};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::reconciler::{
     BACKOFF_INITIAL_DELAY, ListenerStopped, Reconciler, ReconcilerHandle, listen_swarm_events,
@@ -328,20 +326,6 @@ fn excluded(family: &str) -> bool {
     EXCLUDED_FAMILIES.iter().any(|(name, _)| *name == family)
 }
 
-fn quiet_logger() -> Logger {
-    Logger::new(
-        LogConfig {
-            format: Format::Text,
-            level: Level::INFO,
-            include_time: false,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Box::new(std::io::sink()),
-        TimeZone::UTC,
-        Arc::new(SystemClock),
-    )
-}
-
 /// Go's `configureCollectorsLikeMain`: every family registered as `run` registers it with
 /// `--containers --containers-include-swarm` and `--label com.example.team`, on a private
 /// registry.
@@ -357,7 +341,6 @@ fn configure_collectors_like_main(registry: &Registry) -> Metrics {
             build: ["test".to_owned(), "none".to_owned(), "unknown".to_owned()],
         },
         Arc::new(SystemClock),
-        &quiet_logger(),
     )
 }
 
@@ -533,7 +516,6 @@ async fn pins_requests_and_metrics(set_index: usize) {
         Arc::clone(&client),
         metrics.collectors.clone(),
         Arc::new(SystemClock),
-        quiet_logger(),
     );
     let handle = reconciler.handle();
     // The event-stream anchor, captured before the resync lists anything, as run does.

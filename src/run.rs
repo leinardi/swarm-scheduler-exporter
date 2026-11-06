@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-//! The exporter's wiring, Go's `run`: the flags, the logger, the metrics, the Docker client, the
+//! The exporter's wiring, Go's `run`: the flags, the log, the metrics, the Docker client, the
 //! workers (reconciler, event listener, poller) and the HTTP server, and the one shutdown
 //! deadline they share (Q8).
 
@@ -34,6 +34,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 use crate::cli::{self, Args};
 use crate::collector::containers::{ContainersConfig, ContainersState};
@@ -57,7 +58,6 @@ use go_prom::exposition::render;
 use go_prom::process::ProcessCollector;
 use go_prom::promhttp::HandlerMetrics;
 use go_prom::{Collector, RegisterError, Registry};
-use go_slog::{Attr, Logger};
 use service_kit::runtime::Exit;
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
@@ -107,28 +107,24 @@ pub fn register_metrics(
     registry: &Registry,
     options: &MetricsOptions,
     clock: Arc<dyn Clock>,
-    logger: &Logger,
 ) -> Metrics {
     let custom = &options.custom_labels;
     let timestamps = Arc::new(Timestamps::default());
     let replica_gauges = Arc::new(ReplicaGauges::new(custom));
     must_register(replica_gauges.register(registry));
-    let replicas_state = Arc::new(ReplicasState::new(custom, logger.clone()));
+    let replicas_state = Arc::new(ReplicasState::new(custom));
     must_register(replicas_state.register(registry));
     let health = Health::unbound(Arc::clone(&timestamps), options.poll_delay, clock);
     let [version, commit, date] = &options.build;
     must_register(HealthGauges::new(health.clone(), version, commit, date).register(registry));
-    let nodes_by_state = Arc::new(NodesByState::new(logger.clone()));
+    let nodes_by_state = Arc::new(NodesByState::new());
     must_register(nodes_by_state.register(registry));
     let exporter_metrics = Arc::new(ExporterMetrics::new(timestamps));
     must_register(exporter_metrics.register(registry));
     let service_update = Arc::new(ServiceUpdateMetrics::new(custom));
     must_register(service_update.register(registry));
     let containers = options.containers.enabled.then(|| {
-        let containers = Arc::new(ContainersState::new(
-            options.containers.clone(),
-            logger.clone(),
-        ));
+        let containers = Arc::new(ContainersState::new(options.containers.clone()));
         must_register(containers.register(registry));
         containers
     });
@@ -185,13 +181,11 @@ pub fn start_workers<D: DockerApi + 'static>(
     metrics: &Metrics,
     poll_delay: Duration,
     clock: &Arc<dyn Clock>,
-    logger: &Logger,
 ) -> Workers {
     let reconciler = Reconciler::new(
         Arc::clone(&docker),
         metrics.collectors.clone(),
         Arc::clone(clock),
-        logger.clone(),
     );
     let handle = reconciler.handle();
     metrics.health.bind(handle.clone());
@@ -222,7 +216,6 @@ pub fn start_workers<D: DockerApi + 'static>(
         handle,
         exporter_metrics: Arc::clone(&metrics.collectors.metrics),
         containers: metrics.containers.clone(),
-        logger: logger.clone(),
         cancel: root.clone(),
     };
     let poller_task = tokio::spawn(poller.run(poll_delay));
@@ -239,7 +232,6 @@ struct Poller<D> {
     handle: ReconcilerHandle,
     exporter_metrics: Arc<ExporterMetrics>,
     containers: Option<Arc<ContainersState>>,
-    logger: Logger,
     cancel: CancellationToken,
 }
 
@@ -253,18 +245,12 @@ impl<D: DockerApi> Poller<D> {
     async fn run(self, delay: Duration) {
         tokio::select! {
             () = self.cancel.cancelled() => {
-                self.logger.debug(
-                    "polling loop: context canceled before the first resync completed",
-                    &[],
-                );
+                debug!("polling loop: context canceled before the first resync completed");
                 return;
             }
             () = self.handle.ready() => {}
         }
-        self.logger.debug(
-            "start polling replicas state",
-            &[Attr::duration("every", nanos(delay))],
-        );
+        debug!(every = ?delay, "start polling replicas state");
         let mut ticker = tokio::time::interval(delay);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         ticker.tick().await;
@@ -272,7 +258,7 @@ impl<D: DockerApi> Poller<D> {
         loop {
             tokio::select! {
                 () = self.cancel.cancelled() => {
-                    self.logger.debug("polling loop: context canceled", &[]);
+                    debug!("polling loop: context canceled");
                     return;
                 }
                 _ = ticker.tick() => self.poll_once().await,
@@ -291,8 +277,7 @@ impl<D: DockerApi> Poller<D> {
         self.exporter_metrics.inc_polls();
         if let Err(error) = result {
             self.exporter_metrics.inc_poll_errors();
-            self.logger
-                .error("poll replicas state failed", &[Attr::error("err", &error)]);
+            error!(error = %error, "poll replicas state failed");
         }
         let Some(containers) = &self.containers else {
             return;
@@ -303,34 +288,26 @@ impl<D: DockerApi> Poller<D> {
             .await
         {
             Some(Ok(rows)) => containers.update(&rows),
-            Some(Err(error)) => self.logger.warn(
-                "poll containers state failed",
-                &[Attr::error("err", &error)],
-            ),
+            Some(Err(error)) => warn!(error = %error, "poll containers state failed"),
             // Go's list fails at once on the cancelled context.
-            None => self.logger.warn(
-                "poll containers state failed",
-                &[Attr::string("err", "container list: context canceled")],
+            None => warn!(
+                error = "container list: context canceled",
+                "poll containers state failed"
             ),
         }
     }
 }
 
-fn nanos(duration: Duration) -> i64 {
-    i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX)
-}
-
 /// The endpoints Go's `server.NewMuxWithHealth` serves: `/healthz` from `health`, and
 /// `/metrics` from `registry`, counted by `handler` as promhttp's `InstrumentMetricHandler`
 /// counts it (in flight while the families are gathered and encoded, then one more request under
-/// its status code), with `Date` from `clock` and the server's errors through `logger`.
+/// its status code), with `Date` from `clock` and the server's errors through the log.
 #[must_use]
 pub fn app(
     health: Health,
     registry: Arc<Registry>,
     handler: HandlerMetrics,
     clock: Arc<dyn Clock>,
-    logger: Logger,
 ) -> App {
     let health: HealthFn = Box::new(move || {
         let (healthy, reason) = health.snapshot_now();
@@ -351,7 +328,7 @@ pub fn app(
         in_flight.finish(200);
         exposition
     });
-    App::new(health, metrics, clock, logger)
+    App::new(health, metrics, clock)
 }
 
 /// Writes `text` to stdout or stderr, as Go's `fmt.Fprint` does, ignoring a write error.
@@ -384,7 +361,7 @@ fn watch_shutdown(
 
 /// Go's `run`, on `args` (the program name first) and the environment `getenv`, shutting down
 /// when `shutdown` resolves. In Go's order: the flags (the help, a parse error), the
-/// `--healthcheck` probe, the poll-delay check, the logger and the start log, the custom labels,
+/// `--healthcheck` probe, the poll-delay check, the log and the start log, the custom labels,
 /// the metrics, the shutdown watch, the Docker client and its API version, the workers, and the
 /// HTTP server until the shutdown or its failure. `shutdown` is polled only from there, so a
 /// probe or a failed startup is not held up by signal handling.
@@ -404,7 +381,7 @@ where
             return Exit::early(exit.code);
         }
     };
-    // A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no logger, no
+    // A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no log, no
     // metric and no Docker client.
     if args.healthcheck {
         return Exit::early(run_healthcheck(&args.listen_addr, &mut io::stdout()).await);
@@ -414,23 +391,19 @@ where
         return Exit::early(1);
     }
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let logger = go_slog::configure(
-        go_slog::Config {
-            format: args.log_format,
-            level: args.log_level,
-            include_time: args.log_time,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Arc::clone(&clock),
-        &getenv,
-    );
-    logger.info(
-        "swarm-scheduler-exporter starting",
-        &[
-            Attr::string("version", VERSION),
-            Attr::string("commit", COMMIT),
-            Attr::string("date", DATE),
-        ],
+    // Installed once per process: a second run_with in the same process (the tests) logs through
+    // the first one's subscriber, or the scoped default of the test.
+    let _ = tracing_setup::install_global(tracing_setup::build(
+        io::stdout,
+        args.log_format.into(),
+        args.log_level.filter(),
+        tracing_setup::Options::new().time(args.log_time),
+    ));
+    info!(
+        version = VERSION,
+        commit = COMMIT,
+        date = DATE,
+        "swarm-scheduler-exporter starting"
     );
     let custom_labels = match cli::validate_custom_labels(&args.labels) {
         Ok(labels) => {
@@ -441,7 +414,7 @@ where
             CustomLabels::new(&raw, &sanitized)
         }
         Err(error) => {
-            logger.error("invalid custom labels", &[Attr::error("err", &error)]);
+            error!(error = %error, "invalid custom labels");
             return Exit::early(1);
         }
     };
@@ -457,7 +430,6 @@ where
             build: [VERSION.to_owned(), COMMIT.to_owned(), DATE.to_owned()],
         },
         Arc::clone(&clock),
-        &logger,
     );
 
     let (root, signalled) = watch_shutdown(shutdown);
@@ -467,29 +439,20 @@ where
     let settings = match docker::settings_from_env(&getenv) {
         Ok(settings) => settings,
         Err(error) => {
-            logger.error("docker client init failed", &[Attr::error("err", &error)]);
+            error!(error = %error, "docker client init failed");
             return Exit::early(1);
         }
     };
     if let Err(error) = docker::version::validate_client_api_version(settings.client_version()) {
-        logger.error(
-            "unsupported Docker API version",
-            &[Attr::error("err", &error)],
-        );
+        error!(error = %error, "unsupported Docker API version");
         return Exit::early(1);
     }
     let docker = Arc::new(Client::new(settings));
 
-    let workers = start_workers(&root, docker, &metrics, poll_delay, &clock, &logger);
+    let workers = start_workers(&root, docker, &metrics, poll_delay, &clock);
 
     let handler = register_runtime_metrics(&registry);
-    let app = Arc::new(app(
-        metrics.health.clone(),
-        registry,
-        handler,
-        clock,
-        logger,
-    ));
+    let app = Arc::new(app(metrics.health.clone(), registry, handler, clock));
     let deadline: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
     let code = server::serve_until_done(&root, workers.join(), &args.listen_addr, app, {
         let deadline = Arc::clone(&deadline);

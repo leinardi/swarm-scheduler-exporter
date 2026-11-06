@@ -42,7 +42,7 @@ use go_prom::{
     BuildError, Collector, Desc, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotCollector,
     constant_desc,
 };
-use go_slog::{Attr, Logger};
+use tracing::{debug, warn};
 
 use super::desired::{node_eligible, placement_from_metadata};
 use super::error::CallError;
@@ -437,7 +437,6 @@ pub struct ReplicasState {
     state_desc: Arc<Desc>,
     running_desc: Arc<Desc>,
     at_desired_desc: Arc<Desc>,
-    logger: Logger,
     // The first at-desired mismatch logged per service; the reconciler forgets a removed
     // service.
     mismatch_logged: Mutex<HashMap<String, String>>,
@@ -445,9 +444,9 @@ pub struct ReplicasState {
 
 impl ReplicasState {
     /// The families, with the custom labels after the base labels (after `state` on the state
-    /// family), logging to `logger`, with nothing published.
+    /// family), with nothing published.
     #[must_use]
-    pub fn new(custom_labels: &CustomLabels, logger: Logger) -> Self {
+    pub fn new(custom_labels: &CustomLabels) -> Self {
         let base = [
             LABEL_STACK,
             LABEL_SERVICE,
@@ -499,7 +498,6 @@ impl ReplicasState {
             state_desc,
             running_desc,
             at_desired_desc,
-            logger,
             mismatch_logged: Mutex::new(HashMap::new()),
         }
     }
@@ -577,15 +575,13 @@ impl ReplicasState {
         let label = |name: &str| base.get(name).map_or("", String::as_str);
         let running = counter.state(TASK_STATE_RUNNING);
         if !counter.desired_known {
-            self.logger.warn(
-                "desired replicas missing from the polling snapshot",
-                &[
-                    Attr::string("service_id", service_id),
-                    Attr::string(LABEL_STACK, label(LABEL_STACK)),
-                    Attr::string(LABEL_SERVICE, label(LABEL_SERVICE)),
-                    Attr::string("mode", label(LABEL_SERVICE_MODE)),
-                    Attr::float("running", running),
-                ],
+            warn!(
+                service_id,
+                stack = label(LABEL_STACK),
+                service = label(LABEL_SERVICE),
+                mode = label(LABEL_SERVICE_MODE),
+                running,
+                "desired replicas missing from the polling snapshot"
             );
             return 0.0;
         }
@@ -625,21 +621,6 @@ impl ReplicasState {
         } else {
             format!("{running:.0}|{desired:.0}")
         };
-        let mut attrs = vec![
-            Attr::string("service_id", service_id),
-            Attr::string(LABEL_STACK, label(LABEL_STACK)),
-            Attr::string(LABEL_SERVICE, label(LABEL_SERVICE)),
-            Attr::string("mode", mode),
-            Attr::float("running", running),
-            Attr::float("desired", desired),
-        ];
-        if job {
-            attrs.extend([
-                Attr::float("wanted", counter.wanted),
-                Attr::float("wanted_complete", counter.wanted_complete),
-                Attr::bool("eligible_nodes_covered", counter.eligible_nodes_covered),
-            ]);
-        }
         let mut logged = self
             .mismatch_logged
             .lock()
@@ -649,7 +630,30 @@ impl ReplicasState {
         }
         logged.entry(service_id.to_owned()).or_insert(key);
         drop(logged);
-        self.logger.debug("at_desired mismatch", &attrs);
+        if job {
+            debug!(
+                service_id,
+                stack = label(LABEL_STACK),
+                service = label(LABEL_SERVICE),
+                mode,
+                running,
+                desired,
+                wanted = counter.wanted,
+                wanted_complete = counter.wanted_complete,
+                eligible_nodes_covered = counter.eligible_nodes_covered,
+                "at_desired mismatch"
+            );
+        } else {
+            debug!(
+                service_id,
+                stack = label(LABEL_STACK),
+                service = label(LABEL_SERVICE),
+                mode,
+                running,
+                desired,
+                "at_desired mismatch"
+            );
+        }
     }
 }
 

@@ -527,10 +527,15 @@ async fn the_third_rejection_in_a_row_omits_and_fails() {
         before,
         "the poll timestamp moved on a partial failure"
     );
-    assert!(fixture.sink.contents().contains(
-        "level=WARN poll published without services rejected too many polls in a row \
-         service_ids=[svc1] limit=2"
-    ));
+    assert!(
+        fixture.logs.contains(
+            "WARN",
+            "poll published without services rejected too many polls in a row",
+            &[("service_ids", "[\"svc1\"]"), ("limit", "2")]
+        ),
+        "{}",
+        fixture.logs.dump()
+    );
     running.stop().await;
 }
 

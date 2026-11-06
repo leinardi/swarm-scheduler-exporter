@@ -118,9 +118,8 @@ async fn serve_until_done_fails_on_a_busy_port() {
             done.store(true, Ordering::SeqCst);
         }
     };
-    let (logger, sink) = capture_logs(Level::INFO);
-    let mut app = healthy_app();
-    app.logger = logger;
+    let logs = capture_logs(LevelFilter::INFO);
+    let app = healthy_app();
     let exit_code = tokio::time::timeout(
         BOUND,
         serve_until_done(&root, workers, &address, Arc::new(app), || {
@@ -131,12 +130,18 @@ async fn serve_until_done_fails_on_a_busy_port() {
     .expect("serve_until_done did not return after a bind failure");
     assert_eq!(exit_code, 1);
     assert!(worker_done.load(Ordering::SeqCst), "the worker still runs");
-    assert_eq!(
-        sink.contents(),
-        format!(
-            "level=ERROR http server error err=\"http listen: listen tcp {address}: bind: address \
-             already in use\"\n"
-        )
+    assert_eq!(logs.lines().len(), 1, "{}", logs.dump());
+    assert!(
+        logs.contains(
+            "ERROR",
+            "http server error",
+            &[(
+                "error",
+                &format!("http listen: listen tcp {address}: bind: address already in use")
+            )]
+        ),
+        "{}",
+        logs.dump()
     );
 }
 
@@ -181,9 +186,8 @@ async fn serve_until_done_warns_about_a_drain_past_the_deadline() {
     let address = free.local_addr().unwrap();
     drop(free);
     let root = CancellationToken::new();
-    let (logger, sink) = capture_logs(Level::INFO);
-    let mut app = slow_app(Duration::from_secs(30));
-    app.logger = logger;
+    let logs = capture_logs(LevelFilter::INFO);
+    let app = slow_app(Duration::from_secs(30));
     let serving = {
         let root = root.clone();
         let address = address.to_string();
@@ -210,8 +214,14 @@ async fn serve_until_done_warns_about_a_drain_past_the_deadline() {
     root.cancel();
     let exit_code = tokio::time::timeout(BOUND, serving).await.unwrap().unwrap();
     assert_eq!(exit_code, 0);
-    assert_eq!(
-        sink.contents(),
-        "level=WARN HTTP server shutdown err=\"context deadline exceeded\"\n"
+    assert_eq!(logs.lines().len(), 1, "{}", logs.dump());
+    assert!(
+        logs.contains(
+            "WARN",
+            "HTTP server shutdown",
+            &[("error", "context deadline exceeded")]
+        ),
+        "{}",
+        logs.dump()
     );
 }

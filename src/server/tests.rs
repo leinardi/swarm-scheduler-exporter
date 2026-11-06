@@ -40,7 +40,7 @@ use clock::FakeClock;
 use go_compat::errno::io_error_text;
 use go_http::{ConnState, TimedIo};
 use go_prom::exposition;
-use go_slog::Level;
+use tracing::level_filters::LevelFilter;
 
 mod parity;
 mod shutdown;
@@ -66,7 +66,6 @@ fn app_with(healthy: bool, reason: &'static str, metrics: Exposition) -> App {
         Box::new(move || (healthy, reason.to_owned())),
         Box::new(move |_| metrics.clone()),
         Arc::new(FakeClock::new(capture_time())),
-        capture_logs(Level::INFO).0,
     )
 }
 
@@ -89,11 +88,7 @@ fn slow_app(duration: Duration) -> App {
             "slow done\n",
         )
     });
-    App::with_mux(
-        mux,
-        Arc::new(FakeClock::new(capture_time())),
-        capture_logs(Level::INFO).0,
-    )
+    App::with_mux(mux, Arc::new(FakeClock::new(capture_time())))
 }
 
 /// Sends `request` on a fresh connection of `app` and returns everything the server wrote
@@ -165,7 +160,6 @@ async fn the_scrape_request_reaches_the_metrics_function() {
             }
         }),
         Arc::new(FakeClock::new(capture_time())),
-        capture_logs(Level::INFO).0,
     );
     let response = exchange_text(
         app,
@@ -204,7 +198,6 @@ async fn a_scrape_without_names_has_no_filter() {
             text_exposition(b"")
         }),
         Arc::new(FakeClock::new(capture_time())),
-        capture_logs(Level::INFO).0,
     );
     exchange(
         app,

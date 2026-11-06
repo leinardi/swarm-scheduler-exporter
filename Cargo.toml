@@ -27,6 +27,7 @@ go-slog = { git = "https://github.com/leinardi/rust-common", rev = "2179ec425844
 repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
 service-kit = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
 testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
+tracing-setup = { git = "https://github.com/leinardi/rust-common", rev = "2179ec42584417bcea437b90b168f632890babe6" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
@@ -57,8 +58,8 @@ disallowed_methods = "deny"
 # - rustls and tokio-rustls with `default-features = false` plus the `ring` feature, which keeps
 #   aws-lc-sys (C, hard to cross-build for musl) out of the graph;
 # - hyper and hyper-util with only `http1`, `client` or `server`, and the tokio features;
-# - no tracing or log bridge: the logger is in-tree, and hyper, hyper-util, tokio and rustls print
-#   nothing without a subscriber.
+# - tracing, no log bridge: the subscriber is tracing-setup's (rust-common); hyper, hyper-util,
+#   tokio and rustls print nothing without a subscriber.
 
 [package]
 name = "swarm-scheduler-exporter"
@@ -80,9 +81,11 @@ workspace = true
 go-compat.workspace = true
 # The injected wall clock (rust-common): Clock, SystemClock, TokioClock, FakeClock.
 clock.workspace = true
-# Go's log/slog handlers and the plain format, byte for byte (rust-common), in the Quoted
-# plain style with the strict level and format parsers.
-go-slog.workspace = true
+# The subscriber (rust-common): tracing-subscriber's text or flat JSON, no ANSI, UTC RFC 3339
+# timestamps, to stdout; the flags and the writer are here.
+tracing-setup.workspace = true
+# The logging macros.
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The Prometheus Go client's registry and text exposition, byte for byte (rust-common), with
 # prometheus/common v0.71.0's content negotiation (ExpfmtVersion::V0_71_0).
 go-prom.workspace = true
@@ -160,6 +163,8 @@ flate2 = { version = "1.1.10", default-features = false, features = ["rust_backe
 socket2 = { version = "0.6.5", features = ["all"] }
 # The Engine API fixtures of tests/run.rs.
 serde_json = "1.0.154"
+# The captured logs of the tests: a scoped subscriber and a writer that keeps what was logged.
+tracing-setup = { workspace = true, features = ["testing"] }
 
 [profile.release]
 lto = true

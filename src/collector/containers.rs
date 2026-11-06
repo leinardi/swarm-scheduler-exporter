@@ -42,7 +42,7 @@ use go_compat::strings::{equal_fold, to_lower, trim_space};
 use go_prom::{
     Collector, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotFamily, constant_desc,
 };
-use go_slog::{Attr, Logger};
+use tracing::{debug, error, warn};
 
 use super::error::CallError;
 use super::metrics_ids::{
@@ -175,13 +175,12 @@ pub struct Orchestration {
 pub struct ContainersState {
     config: ContainersConfig,
     family: Arc<SnapshotFamily>,
-    logger: Logger,
 }
 
 impl ContainersState {
-    /// The family, with nothing published, logging to `logger`.
+    /// The family, with nothing published.
     #[must_use]
-    pub fn new(config: ContainersConfig, logger: Logger) -> Self {
+    pub fn new(config: ContainersConfig) -> Self {
         let names = sanitize_label_names(
             &[
                 LABEL_PROJECT,
@@ -205,7 +204,6 @@ impl ContainersState {
         Self {
             config,
             family: Arc::new(SnapshotFamily::new(desc)),
-            logger,
         }
     }
 
@@ -296,9 +294,9 @@ impl ContainersState {
         }
         match build_containers_state(&self.family, rows).build() {
             Ok(families) => self.family.collector().publish(families),
-            Err(error) => self.logger.error(
-                "build container state snapshot; keeping previous",
-                &[Attr::error("err", &error)],
+            Err(error) => error!(
+                error = %error,
+                "build container state snapshot; keeping previous"
             ),
         }
     }
@@ -319,12 +317,10 @@ impl ContainersState {
             inspected += 1;
             match with_bare_deadline(deadline, docker.container_inspect(&row.id)).await {
                 Err(error) => {
-                    self.logger.warn(
-                        "container inspect failed; using base state",
-                        &[
-                            Attr::string("container_id", row.id.as_str()),
-                            Attr::error("err", &error),
-                        ],
+                    warn!(
+                        container_id = row.id.as_str(),
+                        error = %error,
+                        "container inspect failed; using base state"
                     );
                     row.keep_base_state();
                 }
@@ -341,22 +337,16 @@ impl ContainersState {
     /// deadline has not passed. Logs at debug, for every row skipped, why not.
     fn can_inspect(&self, deadline: Instant, inspected: usize) -> bool {
         if inspected >= self.config.inspect_cap {
-            self.logger.debug(
-                "containers inspect cap reached, skipping remaining enrichments",
-                &[Attr::int(
-                    "cap",
-                    i64::try_from(self.config.inspect_cap).unwrap_or(i64::MAX),
-                )],
+            debug!(
+                cap = self.config.inspect_cap,
+                "containers inspect cap reached, skipping remaining enrichments"
             );
             return false;
         }
         if Instant::now() >= deadline {
-            self.logger.debug(
-                "containers enrichment deadline reached, skipping remaining enrichments",
-                &[Attr::duration(
-                    "timeout",
-                    i64::try_from(self.config.enrich_timeout.as_nanos()).unwrap_or(i64::MAX),
-                )],
+            debug!(
+                timeout = ?self.config.enrich_timeout,
+                "containers enrichment deadline reached, skipping remaining enrichments"
             );
             return false;
         }

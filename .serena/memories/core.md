@@ -11,9 +11,10 @@ The README "Migrating from 1.x" section lists the only intended differences from
 
 ## Source map
 
-- Shared code is rust-common's (git dependency pinned by the release tag `v0.3.0`): go-compat,
-  clock, go-slog, go-prom, go-http, docker-engine, service-kit, testenv-core, repo-meta. A
-  per-project difference is a parameter there, never a fork here; fixes land in rust-common first.
+- Shared code is rust-common's (git dependency pinned by `rev`): go-compat, clock,
+  tracing-setup, go-slog (testenv only), go-prom, go-http, docker-engine, service-kit, testenv-core,
+  repo-meta. A per-project difference is a parameter there, never a fork here; fixes land in
+  rust-common first.
 - `src/main.rs` (service-kit's runtime and lazy shutdown signal, one shutdown budget), `src/run.rs`
   (startup order, workers, HTTP server), `src/cli.rs` (clap, double-dash flags),
   `src/healthcheck.rs` (`--healthcheck`), `src/version.rs` (`service_kit::buildinfo!` stamps).
@@ -27,8 +28,8 @@ The README "Migrating from 1.x" section lists the only intended differences from
     `at_desired`), `service_update.rs`, `nodes.rs`, `containers.rs` (opt-in), `health.rs`,
     `exporter_metrics.rs`.
 - `src/labels.rs` (custom label keys), `src/server.rs` (`/metrics`, `/healthz` on go-http,
-  `TIMEOUTS`). Metrics are go-prom's (`ExpfmtVersion::V0_71_0`), the logger go-slog's
-  (`PlainStyle::Quoted`, strict parsers), the Go ports go-compat's.
+  `TIMEOUTS`). Metrics are go-prom's (`ExpfmtVersion::V0_71_0`), the logger tracing-setup's
+  (`tracing` macros, clap-parsed flags), the Go ports go-compat's.
 - `tests/`: `engine_wire.rs` (fake Engine replaying `tests/testdata/engine_wire/`),
   `exposition.rs` (byte diff against the Go `/metrics` capture), `run.rs` (lifecycle, flags).
 - `testenv/`: the DinD Swarm harness over testenv-core; bollard and every Docker-driving module

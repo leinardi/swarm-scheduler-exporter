@@ -94,19 +94,34 @@ fn node_update(time_nano: i64) -> Event {
 }
 
 impl Fixture {
-    /// `timestamp` as the listener logs it, in the logger's zone.
-    fn logged_time(&self, timestamp: Timestamp) -> String {
-        let offset = self.handle.shared.logger.zone().to_offset(timestamp);
-        format_rfc3339_nano(timestamp, offset)
+    /// `timestamp` as the listener logs it, in UTC.
+    fn logged_time(timestamp: Timestamp) -> String {
+        format_rfc3339_nano(timestamp, jiff::tz::Offset::UTC)
     }
 
-    /// The log lines that announce a reconnect, in order.
+    /// The records that announce a reconnect, in order, each as its level, message and fields.
     fn reconnect_lines(&self) -> Vec<String> {
-        self.sink
-            .contents()
+        let field = |line: &serde_json::Value, name: &str| {
+            line[name].as_str().unwrap_or_default().to_owned()
+        };
+        self.logs
             .lines()
-            .filter(|line| line.contains("reconnect"))
-            .map(str::to_owned)
+            .iter()
+            .filter(|line| {
+                line["message"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("reconnect"))
+            })
+            .map(|line| {
+                format!(
+                    "level={} {} err=\"{}\" backoff={} next_since={}",
+                    field(line, "level"),
+                    field(line, "message"),
+                    field(line, "error"),
+                    field(line, "backoff"),
+                    field(line, "next_since"),
+                )
+            })
             .collect()
     }
 
@@ -381,7 +396,7 @@ async fn the_reconnect_log_level_follows_how_the_stream_ended() {
         "a resync requested after the failed stream",
     )
     .await;
-    let since = fixture.logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap());
+    let since = Fixture::logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap());
     assert_eq!(
         fixture.reconnect_lines(),
         [
@@ -416,12 +431,16 @@ async fn the_first_connection_requests_no_resync() {
     .await;
     assert_eq!(resyncs_requested(&fixture.handle), before);
     assert!(
-        fixture.sink.contents().contains(&format!(
-            "level=INFO event stream connected since={}",
-            fixture.logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap())
-        )),
+        fixture.logs.contains(
+            "INFO",
+            "event stream connected",
+            &[(
+                "since",
+                &Fixture::logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap())
+            )]
+        ),
         "{}",
-        fixture.sink.contents()
+        fixture.logs.dump()
     );
     assert_eq!(
         fixture
@@ -628,7 +647,7 @@ async fn a_failed_connect_is_not_a_connection() {
             .last_events_connect(),
         0
     );
-    assert!(!fixture.sink.contents().contains("event stream connected"));
+    assert!(!fixture.logs.has("event stream connected"));
 }
 
 /// Q6: failed connects go to the reconnect warning, with a growing backoff since nothing
@@ -649,7 +668,7 @@ async fn the_connect_after_failed_ones_is_a_reconnect() {
     )
     .await;
     assert_eq!(fixture.docker.events_calls(), 3);
-    let since = fixture.logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap());
+    let since = Fixture::logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap());
     assert_eq!(
         fixture.reconnect_lines(),
         [
@@ -663,11 +682,7 @@ async fn the_connect_after_failed_ones_is_a_reconnect() {
             ),
         ]
     );
-    let connected = fixture
-        .sink
-        .contents()
-        .matches("event stream connected")
-        .count();
+    let connected = fixture.logs.with_message("event stream connected").len();
     assert_eq!(connected, 1);
     assert_eq!(Some(fixture.reconnects()), Some(2.0));
     listening.stop().await;
@@ -684,7 +699,7 @@ async fn the_backoff_resets_after_a_quiet_stream() {
         fixture.docker.send(index, Err(StreamError::eof()));
     }
     wait_opened(&fixture.docker, 4).await;
-    let since = fixture.logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap());
+    let since = Fixture::logged_time(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap());
     let want = format!(
         "level=INFO event stream closed by the server; reconnecting \
          err=\"events stream error: EOF\" backoff=500ms next_since={since}"

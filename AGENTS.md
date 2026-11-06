@@ -79,8 +79,8 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   - `src/labels.rs` — sanitizing and validating custom label keys; `src/version.rs` — the build
     stamps (`service_kit::buildinfo!`).
   - `tests/` — the black-box tests: the Engine API wire captures (`engine_wire.rs`, against
-    `tests/support/fake_engine.rs`), the exposition, the registry, the run lifecycle and the logger
-    golden files.
+    `tests/support/fake_engine.rs`), the exposition, the registry, the run lifecycle. The unit tests
+    capture logs with `test_support::capture_logs` (a scoped `tracing_setup` subscriber).
 - `testenv/` — the DinD Swarm harness: the cluster, its bring-up and teardown and the suite's
   names (`config.rs`) over testenv-core, with bollard behind its `integration` feature (the
   exporter package names none of testenv, testenv-core and bollard in any table;
@@ -98,11 +98,12 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
 dependency pinned by commit (`rev = "..."`, while the upstream-stack work is in flight) in
-`[workspace.dependencies]`: go-compat (the Go library ports), clock (the
-`Clock` trait), go-slog (the logger), go-prom (the registry, the text exposition, the `process_*`
-collector and promhttp), go-http (the server), docker-engine (the Engine API client), service-kit
-(the runtime, the signals, the stamps), testenv-core (the harness's generic half) and repo-meta
-(the meta-tests' checks). The exporter keeps only what is its own.
+`[workspace.dependencies]`: go-compat (the Go library ports), clock (the `Clock` trait),
+tracing-setup (the logger's subscriber; the code logs with `tracing` macros), go-prom (the registry,
+the text exposition, the `process_*` collector and promhttp), go-http (the server), docker-engine
+(the Engine API client), service-kit (the runtime, the signals, the stamps), testenv-core (the
+harness's generic half) and repo-meta (the meta-tests' checks). The exporter keeps only what is
+its own.
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
@@ -114,12 +115,12 @@ collector and promhttp), go-http (the server), docker-engine (the Engine API cli
   `ExpfmtVersion::V0_71_0` (prometheus/common v0.71.0's negotiation); go-http's `TIMEOUTS`
   (read header 5s, read 10s, write 15s, idle 60s) and the `http listen:` prefix;
   docker-engine's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
-  response-header timeout (`RESPONSE_HEADER_TIMEOUT`); go-slog's `PlainStyle::Quoted` (the plain
-  format as the exporter wrote it) and `parse_level_strict`/`parse_format_strict` (Q4: an unknown
-  value is refused); `lazy_shutdown_signal`, whose handlers are installed only once the shutdown
-  watch first polls it, so a signal during startup still terminates the process, as in Go before its
-  `signal.NotifyContext` call; the `buildinfo!` defaults `dev`, `none` and `unknown`, an empty stamp
-  kept.
+  response-header timeout (`RESPONSE_HEADER_TIMEOUT`); the log flags (Q4:
+  `--log-format` text|json, `--log-level` debug|info|warn|error, an unknown value refused by clap),
+  installed once through `tracing_setup::build` and `install_global`; `lazy_shutdown_signal`, whose
+  handlers are installed only once the shutdown watch first polls it, so a signal during startup
+  still terminates the process, as in Go before its `signal.NotifyContext` call; the `buildinfo!`
+  defaults `dev`, `none` and `unknown`, an empty stamp kept.
 - Two workspace policies are the exporter's own: `panic = "unwind"` (the reconciler recovers a
   panicking step; see the invariants) and `unsafe_code = "forbid"`, with no exemption.
 

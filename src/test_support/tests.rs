@@ -128,10 +128,14 @@ async fn fake_events_stream_from_the_channel_and_end_when_it_closes() {
 
 #[test]
 fn capture_logs_records_what_is_logged_at_the_level() {
-    let (logger, sink) = capture_logs(go_slog::Level::INFO);
-    logger.debug("hidden", &[]);
-    logger.warn("shown", &[go_slog::Attr::string("key", "value")]);
-    assert_eq!(sink.contents(), "level=WARN shown key=value\n");
+    let logs = capture_logs(tracing::level_filters::LevelFilter::INFO);
+    tracing::debug!("hidden");
+    tracing::warn!(key = "value", "shown");
+    let lines = logs.lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["level"], "WARN");
+    assert_eq!(lines[0]["message"], "shown");
+    assert_eq!(lines[0]["key"], "value");
 }
 
 #[tokio::test(start_paused = true)]

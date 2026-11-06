@@ -40,7 +40,7 @@ fn summary(args: &Args) -> String {
         "run"
     };
     format!(
-        "listen={} poll={} containers={} swarm={} format={:?} level={} time={} labels={:?} then {next}",
+        "listen={} poll={} containers={} swarm={} format={:?} level={:?} time={} labels={:?} then {next}",
         args.listen_addr,
         duration::format(args.poll_delay),
         args.containers,
@@ -96,43 +96,43 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--listen-addr=:9000"],
         Ok(
-            "listen=:9000 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=:9000 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--listen-addr", ":9000"],
         Ok(
-            "listen=:9000 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=:9000 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--listen-addr", "-containers"],
         Ok(
-            "listen=-containers poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=-containers poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--listen-addr", "--containers"],
         Ok(
-            "listen=--containers poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=--containers poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--listen-addr", "-x"],
         Ok(
-            "listen=-x poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=-x poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=false"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
@@ -149,19 +149,19 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--log-level", "debug", "--log-level", "error"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=ERROR time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Error time=false labels=[] then run",
         ),
     ),
     (
         &["--log-level", "DEBUG", "--log-format", "JSON"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Json level=DEBUG time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Json level=Debug time=false labels=[] then run",
         ),
     ),
     (
         &["--log-level", "Warning"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=WARN time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Warn time=false labels=[] then run",
         ),
     ),
     (
@@ -181,19 +181,19 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--label", "team", "--label", "tier"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[\"team\", \"tier\"] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[\"team\", \"tier\"] then run",
         ),
     ),
     (
         &["--label=team", "--label", "tier"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[\"team\", \"tier\"] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[\"team\", \"tier\"] then run",
         ),
     ),
     (
         &["--label", "-x"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[\"-x\"] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[\"-x\"] then run",
         ),
     ),
     (
@@ -236,31 +236,31 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--poll-delay", "1h2m"],
         Ok(
-            "listen=0.0.0.0:8888 poll=1h2m0s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=1h2m0s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--poll-delay", "1.5s"],
         Ok(
-            "listen=0.0.0.0:8888 poll=1.5s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=1.5s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--poll-delay", "0"],
         Ok(
-            "listen=0.0.0.0:8888 poll=0s containers=false swarm=false format=Text level=INFO time=false labels=[] then exit 1",
+            "listen=0.0.0.0:8888 poll=0s containers=false swarm=false format=Text level=Info time=false labels=[] then exit 1",
         ),
     ),
     (
         &["--poll-delay", "-5s"],
         Ok(
-            "listen=0.0.0.0:8888 poll=-5s containers=false swarm=false format=Text level=INFO time=false labels=[] then exit 1",
+            "listen=0.0.0.0:8888 poll=-5s containers=false swarm=false format=Text level=Info time=false labels=[] then exit 1",
         ),
     ),
     (
         &["--poll-delay=-5s"],
         Ok(
-            "listen=0.0.0.0:8888 poll=-5s containers=false swarm=false format=Text level=INFO time=false labels=[] then exit 1",
+            "listen=0.0.0.0:8888 poll=-5s containers=false swarm=false format=Text level=Info time=false labels=[] then exit 1",
         ),
     ),
     (
@@ -273,79 +273,79 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--poll-delay", "500ms"],
         Ok(
-            "listen=0.0.0.0:8888 poll=500ms containers=false swarm=false format=Text level=INFO time=false labels=[] then exit 1",
+            "listen=0.0.0.0:8888 poll=500ms containers=false swarm=false format=Text level=Info time=false labels=[] then exit 1",
         ),
     ),
     (
         &["--containers=1"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=t"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=T"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=TRUE"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=true"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=True"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=0"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=f"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=F"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=FALSE"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=false"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--containers=False"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
@@ -365,22 +365,31 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--containers=true", "--containers=false"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--log-level=bogus"],
-        Err((
-            2,
-            "error: invalid value 'bogus' for '--log-level <string>': invalid log level \"bogus\" (want one of debug, info, warn, warning, error, fatal, panic)",
-        )),
+        Err((2, "error: invalid value 'bogus' for '--log-level <string>'")),
     ),
     (
         &["--log-format=xml"],
+        Err((2, "error: invalid value 'xml' for '--log-format <string>'")),
+    ),
+    (
+        &["--log-format=plain"],
         Err((
             2,
-            "error: invalid value 'xml' for '--log-format <string>': invalid log format \"xml\" (want one of json, text, plain)",
+            "error: invalid value 'plain' for '--log-format <string>'",
         )),
+    ),
+    (
+        &["--log-level=fatal"],
+        Err((2, "error: invalid value 'fatal' for '--log-level <string>'")),
+    ),
+    (
+        &["--log-level=panic"],
+        Err((2, "error: invalid value 'panic' for '--log-level <string>'")),
     ),
     (
         &["--log-level"],
@@ -399,13 +408,13 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--healthcheck", "--poll-delay", "0"],
         Ok(
-            "listen=0.0.0.0:8888 poll=0s containers=false swarm=false format=Text level=INFO time=false labels=[] then healthcheck",
+            "listen=0.0.0.0:8888 poll=0s containers=false swarm=false format=Text level=Info time=false labels=[] then healthcheck",
         ),
     ),
     (
         &["--poll-delay", "0", "--healthcheck"],
         Ok(
-            "listen=0.0.0.0:8888 poll=0s containers=false swarm=false format=Text level=INFO time=false labels=[] then healthcheck",
+            "listen=0.0.0.0:8888 poll=0s containers=false swarm=false format=Text level=Info time=false labels=[] then healthcheck",
         ),
     ),
     (
@@ -418,7 +427,7 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--label", "-label"],
         Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=INFO time=false labels=[\"-label\"] then run",
+            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[\"-label\"] then run",
         ),
     ),
 ];
@@ -460,9 +469,9 @@ Options:
       --containers-include-swarm[=<BOOL>]
           Include containers belonging to Swarm tasks.
       --log-format <string>
-          Either json, text or plain [default: text]
+          Either json or text [default: text] [possible values: text, json]
       --log-level <string>
-          Either debug, info, warn, error, fatal, panic [default: info]
+          Either debug, info, warn, error [default: info] [possible values: debug, info, warn, error]
       --log-time[=<BOOL>]
           Include timestamp in logs
       --healthcheck[=<BOOL>]
@@ -561,8 +570,8 @@ fn defaults_are_go_defaults() {
             poll_delay: DEFAULT_POLL_DELAY,
             containers: false,
             containers_include_swarm: false,
-            log_format: Format::Text,
-            log_level: Level::INFO,
+            log_format: LogFormat::Text,
+            log_level: LogLevel::Info,
             log_time: false,
             healthcheck: false,
             labels: Vec::new(),
@@ -686,4 +695,20 @@ fn custom_labels_post_sanitize_collision() {
 #[test]
 fn custom_labels_empty() {
     assert_eq!(validate_custom_labels(&[]), Ok(Vec::new()));
+}
+
+/// A refused log value exits 2 and the message names the accepted values.
+#[test]
+fn a_refused_log_value_names_the_accepted_ones() {
+    for (flag, accepted) in [
+        ("--log-format=plain", "[possible values: text, json]"),
+        (
+            "--log-level=fatal",
+            "[possible values: debug, info, warn, error]",
+        ),
+    ] {
+        let exit = parse_args(&[flag]).unwrap_err();
+        assert_eq!(exit.code, 2, "{flag}");
+        assert!(exit.message.contains(accepted), "{flag}: {}", exit.message);
+    }
 }

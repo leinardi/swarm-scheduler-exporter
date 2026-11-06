@@ -32,19 +32,19 @@
 //! drain.
 
 use std::future::Future;
-use std::io::{self, Write as _};
+use std::io;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use clock::Clock;
 use go_http::{Drained, ListenError, Mux, Reply, Served, Server, TEXT_PLAIN, Timeouts};
 use go_prom::exposition::Exposition;
-use go_slog::{Attr, Logger};
 use hyper::StatusCode;
 use hyper::header::{CONTENT_TYPE, HeaderValue};
 use tokio::net::TcpListener;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, warn};
 
 pub use go_http::MetricsRequest;
 
@@ -71,32 +71,24 @@ pub type HealthFn = Box<dyn Fn() -> (bool, String) + Send + Sync>;
 /// The `/metrics` answer for a request.
 pub type MetricsFn = Box<dyn Fn(&MetricsRequest) -> Exposition + Send + Sync>;
 
-/// The endpoints, and the logger the server's errors go through.
+/// The endpoints; the server's errors go through the log.
 #[derive(Debug)]
 pub struct App {
     server: Arc<Server>,
-    logger: Logger,
 }
 
 impl App {
     /// The endpoints answering from `health` and `metrics`, with `Date` read from `clock`, and
-    /// the server's own errors written in the zone of `logger` and through it.
+    /// the server's own errors logged.
     #[must_use]
-    pub fn new(
-        health: HealthFn,
-        metrics: MetricsFn,
-        clock: Arc<dyn Clock>,
-        logger: Logger,
-    ) -> Self {
-        Self::with_mux(mux(health, metrics), clock, logger)
+    pub fn new(health: HealthFn, metrics: MetricsFn, clock: Arc<dyn Clock>) -> Self {
+        Self::with_mux(mux(health, metrics), clock)
     }
 
-    /// `mux` served with `Date` from `clock`, and `net/http`'s messages and the server's errors
-    /// through `logger`.
-    fn with_mux(mux: Mux, clock: Arc<dyn Clock>, logger: Logger) -> Self {
+    /// `mux` served with `Date` from `clock`, and `net/http`'s messages logged.
+    fn with_mux(mux: Mux, clock: Arc<dyn Clock>) -> Self {
         Self {
-            server: Arc::new(server(mux, clock, &logger)),
-            logger,
+            server: Arc::new(server(mux, clock)),
         }
     }
 }
@@ -115,13 +107,10 @@ fn mux(health: HealthFn, metrics: MetricsFn) -> Mux {
         .route(HEALTHZ_PATH, move |_| healthz(&health))
 }
 
-/// `mux` behind a server whose own messages are Go's `log.Printf` lines on stderr, in the local
-/// zone of `logger`.
-fn server(mux: Mux, clock: Arc<dyn Clock>, logger: &Logger) -> Server {
-    let (log_clock, logger) = (Arc::clone(&clock), logger.clone());
+/// `mux` behind a server whose own messages (Go's `log.Printf` lines) are logged at error level.
+fn server(mux: Mux, clock: Arc<dyn Clock>) -> Server {
     Server::new(mux, clock, move |message| {
-        let line = go_http::log_printf_line(log_clock.now(), logger.zone(), message);
-        let _ = io::stderr().write_all(line.as_bytes());
+        error!(target: "http", "{}", message.trim_end());
     })
 }
 
@@ -201,23 +190,19 @@ pub async fn serve_until_done(
     app: Arc<App>,
     deadline: impl FnOnce() -> Instant,
 ) -> i32 {
-    let logger = app.logger.clone();
     let (deadline, failure) = match bind(address).await {
         Err(error) => (deadline(), Some(error.to_string())),
         Ok(listener) => {
             let (served, error) = serve(listener, app, TIMEOUTS, root.cancelled(), deadline).await;
             if served.drained == Drained::DeadlineExceeded {
-                logger.warn(
-                    "HTTP server shutdown",
-                    &[Attr::string("err", "context deadline exceeded")],
-                );
+                warn!(error = "context deadline exceeded", "HTTP server shutdown");
             }
             (served.deadline, error.map(|error| error.to_string()))
         }
     };
     let exit_code = match failure {
         Some(error) => {
-            logger.error("http server error", &[Attr::string("err", error)]);
+            error!(error = %error, "http server error");
             1
         }
         None => 0,

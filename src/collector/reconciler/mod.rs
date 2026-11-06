@@ -51,7 +51,7 @@ use tokio_util::sync::CancellationToken;
 use crate::docker::types::{Event, Node, Service};
 use crate::docker::{DockerApi, with_docker_timeout};
 use clock::Clock;
-use go_slog::{Attr, Logger};
+use tracing::{debug, error, warn};
 
 use super::desired::{ReplicaGauges, labels_for_metadata, replica_counts};
 use super::error::CallError;
@@ -247,7 +247,6 @@ struct Shared {
     // True once the first resync completed.
     ready: watch::Sender<bool>,
     clock: Arc<dyn Clock>,
-    logger: Logger,
     metrics: Arc<ExporterMetrics>,
     // The poller's ends of the poll protocol.
     polls: PollSenders,
@@ -267,16 +266,12 @@ impl Shared {
     }
 
     /// Logs an overflow outside the state lock; scheduling remains the caller's responsibility.
-    fn log_overflow(&self, cap: usize) {
-        self.logger.warn(
-            "dirty service keys over the cap; dropping them for a resync",
-            &[Attr::int("cap", saturating_i64(cap))],
+    fn log_overflow(cap: usize) {
+        warn!(
+            cap,
+            "dirty service keys over the cap; dropping them for a resync"
         );
     }
-}
-
-fn saturating_i64(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn duration_nanos(duration: Duration) -> i64 {
@@ -304,12 +299,10 @@ impl ReconcilerHandle {
     pub fn enqueue_event(&self, event: &Event) {
         if event.actor.id.is_empty() {
             self.shared.metrics.inc_events_dropped();
-            self.shared.logger.debug(
-                "event without actor ID dropped",
-                &[
-                    Attr::string("type", event.kind.as_str()),
-                    Attr::string("action", event.action.as_str()),
-                ],
+            debug!(
+                r#type = event.kind.as_str(),
+                action = event.action.as_str(),
+                "event without actor ID dropped"
             );
             return;
         }
@@ -344,7 +337,7 @@ impl ReconcilerHandle {
             let cap = state.pending_cap;
             state.overflow(timestamp);
             drop(state);
-            self.shared.log_overflow(cap);
+            Shared::log_overflow(cap);
             return;
         }
         state.pending_set.insert(
@@ -366,9 +359,7 @@ impl ReconcilerHandle {
             state.request_resync(now);
         }
         self.shared.signal();
-        self.shared
-            .logger
-            .debug("resync requested", &[Attr::string("reason", reason)]);
+        debug!(reason, "resync requested");
     }
 
     /// The resync counters, and since when a resync has been outstanding (none when none is).
@@ -455,19 +446,8 @@ impl<D: DockerApi> Reconciler<D> {
     /// A reconciler on `docker` writing `collectors`, with the default policy and its first
     /// resync already requested.
     #[must_use]
-    pub fn new(
-        docker: Arc<D>,
-        collectors: Collectors,
-        clock: Arc<dyn Clock>,
-        logger: Logger,
-    ) -> Self {
-        Self::with_policy(
-            docker,
-            collectors,
-            clock,
-            logger,
-            &ReconcilerPolicy::default(),
-        )
+    pub fn new(docker: Arc<D>, collectors: Collectors, clock: Arc<dyn Clock>) -> Self {
+        Self::with_policy(docker, collectors, clock, &ReconcilerPolicy::default())
     }
 
     /// [`Reconciler::new`] with `policy`.
@@ -476,7 +456,6 @@ impl<D: DockerApi> Reconciler<D> {
         docker: Arc<D>,
         collectors: Collectors,
         clock: Arc<dyn Clock>,
-        logger: Logger,
         policy: &ReconcilerPolicy,
     ) -> Self {
         let now = clock.now();
@@ -498,7 +477,6 @@ impl<D: DockerApi> Reconciler<D> {
             wake: Notify::new(),
             ready: watch::Sender::new(false),
             clock,
-            logger,
             metrics: Arc::clone(&collectors.metrics),
             polls: poll_senders,
             #[cfg(test)]
@@ -543,10 +521,6 @@ impl<D: DockerApi> Reconciler<D> {
     #[must_use]
     pub fn nodes(&self) -> &[Node] {
         self.nodes.get()
-    }
-
-    fn logger(&self) -> &Logger {
-        &self.shared.logger
     }
 
     /// Reconciles until `cancel` is cancelled, then returns itself. It never sleeps: it waits on
@@ -610,13 +584,11 @@ impl<D: DockerApi> Reconciler<D> {
         let Err(report) = outcome else {
             return;
         };
-        self.logger().error(
-            "reconciler recovered from panic",
-            &[
-                Attr::string("step", step),
-                Attr::string("panic", report.payload),
-                Attr::string("stack", report.stack),
-            ],
+        error!(
+            step,
+            panic = %report.payload,
+            stack = %report.stack,
+            "reconciler recovered from panic"
         );
         // A resync cut short by a panic neither completed nor went through its failure path.
         if step == RESYNC_STEP {
@@ -761,13 +733,11 @@ impl<D: DockerApi> Reconciler<D> {
         let Some(&delay) = self.retry_delays.get(key.attempts) else {
             state.request_resync(timestamp);
             drop(state);
-            self.logger().warn(
-                "service inspect keeps failing; leaving it to a resync",
-                &[
-                    Attr::string("service_id", key.service_id.as_str()),
-                    Attr::int("attempts", saturating_i64(key.attempts).saturating_add(1)),
-                    Attr::error("err", error),
-                ],
+            warn!(
+                service_id = key.service_id.as_str(),
+                attempts = key.attempts.saturating_add(1),
+                error = %error,
+                "service inspect keeps failing; leaving it to a resync"
             );
             return;
         };
@@ -775,7 +745,7 @@ impl<D: DockerApi> Reconciler<D> {
             let cap = state.pending_cap;
             state.overflow(timestamp);
             drop(state);
-            self.shared.log_overflow(cap);
+            Shared::log_overflow(cap);
             return;
         }
         state.pending_set.insert(
@@ -787,13 +757,11 @@ impl<D: DockerApi> Reconciler<D> {
         );
         state.pending_order.push(key.service_id.clone());
         drop(state);
-        self.logger().debug(
-            "service inspect failed; will retry",
-            &[
-                Attr::string("service_id", key.service_id.as_str()),
-                Attr::duration("backoff", duration_nanos(delay)),
-                Attr::error("err", error),
-            ],
+        debug!(
+            service_id = key.service_id.as_str(),
+            backoff = ?delay,
+            error = %error,
+            "service inspect failed; will retry"
         );
     }
 
@@ -869,12 +837,10 @@ impl<D: DockerApi> Reconciler<D> {
             Err(error) => {
                 self.shared.lock().nodes_dirty = true;
                 self.nodes_not_before = Some(Instant::now() + self.nodes_backoff);
-                self.logger().warn(
-                    "node refresh failed; will retry",
-                    &[
-                        Attr::error("err", &error),
-                        Attr::duration("backoff", duration_nanos(self.nodes_backoff)),
-                    ],
+                warn!(
+                    error = %error,
+                    backoff = ?self.nodes_backoff,
+                    "node refresh failed; will retry"
                 );
                 self.nodes_backoff = self
                     .nodes_backoff
@@ -918,12 +884,10 @@ impl<D: DockerApi> Reconciler<D> {
             Ok(lists) => lists,
             Err(error) => {
                 self.collectors.metrics.inc_resync(ResyncResult::Failure);
-                self.logger().warn(
-                    "resync failed; will retry",
-                    &[
-                        Attr::error("err", &error),
-                        Attr::duration("backoff", duration_nanos(self.resync_backoff)),
-                    ],
+                warn!(
+                    error = %error,
+                    backoff = ?self.resync_backoff,
+                    "resync failed; will retry"
                 );
                 self.schedule_resync_retry(Instant::now());
                 return;

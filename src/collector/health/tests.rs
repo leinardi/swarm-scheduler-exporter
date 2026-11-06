@@ -36,10 +36,9 @@ use crate::collector::reconciler::{Collectors, Reconciler};
 use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
-use crate::test_support::{FakeDocker, capture_logs};
+use crate::test_support::FakeDocker;
 use clock::FakeClock;
 use go_prom::testing::{gather_series, series_id};
-use go_slog::Level;
 
 const NOW_SECONDS: i64 = 1_767_225_600;
 
@@ -53,18 +52,17 @@ fn ago(seconds: i64) -> Timestamp {
 
 /// A reconciler's handle, never run.
 fn reconciler_handle() -> ReconcilerHandle {
-    let logger = capture_logs(Level::INFO).0;
     let custom = CustomLabels::default();
     let collectors = Collectors {
         custom_labels: custom.clone(),
         replica_gauges: Arc::new(ReplicaGauges::new(&custom)),
         service_update: Arc::new(ServiceUpdateMetrics::new(&custom)),
-        nodes_by_state: Arc::new(NodesByState::new(logger.clone())),
-        replicas_state: Arc::new(ReplicasState::new(&custom, logger.clone())),
+        nodes_by_state: Arc::new(NodesByState::new()),
+        replicas_state: Arc::new(ReplicasState::new(&custom)),
         metrics: Arc::new(ExporterMetrics::new(Arc::new(Timestamps::default()))),
     };
     let clock = Arc::new(FakeClock::new(now()));
-    Reconciler::new(Arc::new(FakeDocker::default()), collectors, clock, logger).handle()
+    Reconciler::new(Arc::new(FakeDocker::default()), collectors, clock).handle()
 }
 
 struct Fixture {

@@ -53,14 +53,17 @@ use crate::docker::types::{
 use crate::docker::{
     DOCKER_REQUEST_TIMEOUT, Error, EventStream, Filters, StreamError, StreamErrorKind,
 };
+use crate::test_support::Logs;
 use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
 use clock::FakeClock;
-use go_slog::{Level, MemorySink};
+use tracing::dispatcher::DefaultGuard;
+use tracing::level_filters::LevelFilter;
 
 mod listener;
 mod poll;
 
 /// Checks the lock rather than re-entering it, so a regression fails instead of hanging.
+#[derive(Clone)]
 struct StateCheckingSink {
     shared: Arc<OnceLock<Weak<Shared>>>,
     writes: Arc<AtomicUsize>,
@@ -82,8 +85,15 @@ impl std::io::Write for StateCheckingSink {
     }
 }
 
-fn state_checking_reconciler() -> (Reconciler<TestDocker>, Arc<AtomicUsize>) {
-    let fixture = fixture(TestDocker::default());
+fn state_checking_reconciler() -> (Reconciler<TestDocker>, Arc<AtomicUsize>, DefaultGuard) {
+    let Fixture {
+        docker,
+        collectors,
+        logs,
+        ..
+    } = fixture(TestDocker::default());
+    // The fixture's own capture is dropped first: scoped defaults are released in reverse order.
+    drop(logs);
     let shared = Arc::new(OnceLock::<Weak<Shared>>::new());
     let writes = Arc::new(AtomicUsize::new(0));
     let checked_shared = Arc::clone(&shared);
@@ -96,37 +106,33 @@ fn state_checking_reconciler() -> (Reconciler<TestDocker>, Arc<AtomicUsize>) {
         }
         Timestamp::from_second(1_767_225_600).unwrap()
     });
-    let logger = Logger::new(
-        go_slog::Config {
-            format: go_slog::Format::Plain,
-            level: Level::DEBUG,
-            include_time: false,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Box::new(StateCheckingSink {
-            shared: Arc::clone(&shared),
-            writes: Arc::clone(&writes),
-        }),
-        jiff::tz::TimeZone::UTC,
-        Arc::clone(&clock),
+    let sink = StateCheckingSink {
+        shared: Arc::clone(&shared),
+        writes: Arc::clone(&writes),
+    };
+    let dispatch = tracing_setup::build(
+        move || sink.clone(),
+        tracing_setup::Format::Json,
+        LevelFilter::DEBUG,
+        tracing_setup::Options::new().time(false),
     );
+    let guard = tracing_setup::testing::set_default(&dispatch);
     let reconciler = Reconciler::with_policy(
-        fixture.docker,
-        fixture.collectors,
+        docker,
+        collectors,
         clock,
-        logger,
         &ReconcilerPolicy {
             pending_cap: 1,
             ..test_policy()
         },
     );
     shared.set(Arc::downgrade(&reconciler.shared)).unwrap();
-    (reconciler, writes)
+    (reconciler, writes, guard)
 }
 
 #[test]
 fn resync_and_overflow_release_state_before_logging_or_reading_the_clock() {
-    let (reconciler, writes) = state_checking_reconciler();
+    let (reconciler, writes, _guard) = state_checking_reconciler();
     let handle = reconciler.handle();
     let requested = handle.resync_state().0;
     handle.request_resync("test");
@@ -138,7 +144,7 @@ fn resync_and_overflow_release_state_before_logging_or_reading_the_clock() {
 
 #[test]
 fn retry_paths_and_panic_recovery_release_state_before_callbacks() {
-    let (mut reconciler, writes) = state_checking_reconciler();
+    let (mut reconciler, writes, _guard) = state_checking_reconciler();
     let handle = reconciler.handle();
     let requested = handle.resync_state().0;
     let error = CallError::new("service inspect", unavailable());
@@ -603,7 +609,7 @@ struct Fixture {
     handle: ReconcilerHandle,
     collectors: Collectors,
     clock: Arc<FakeClock>,
-    sink: MemorySink,
+    logs: Logs,
 }
 
 /// The test policy of Go's `newTestReconciler`.
@@ -622,14 +628,14 @@ fn fixture(docker: TestDocker) -> Fixture {
 }
 
 fn fixture_with(docker: TestDocker, policy: &ReconcilerPolicy) -> Fixture {
-    let (logger, sink) = capture_logs(Level::INFO);
+    let logs = capture_logs(LevelFilter::INFO);
     let custom = CustomLabels::default();
     let collectors = Collectors {
         custom_labels: custom.clone(),
         replica_gauges: Arc::new(ReplicaGauges::new(&custom)),
         service_update: Arc::new(ServiceUpdateMetrics::new(&custom)),
-        nodes_by_state: Arc::new(NodesByState::new(logger.clone())),
-        replicas_state: Arc::new(ReplicasState::new(&custom, logger.clone())),
+        nodes_by_state: Arc::new(NodesByState::new()),
+        replicas_state: Arc::new(ReplicasState::new(&custom)),
         metrics: Arc::new(ExporterMetrics::new(Arc::new(Timestamps::default()))),
     };
     let clock = Arc::new(FakeClock::new(
@@ -640,7 +646,6 @@ fn fixture_with(docker: TestDocker, policy: &ReconcilerPolicy) -> Fixture {
         Arc::clone(&docker),
         collectors.clone(),
         Arc::clone(&clock) as Arc<dyn Clock>,
-        logger,
         policy,
     );
     Fixture {
@@ -649,7 +654,7 @@ fn fixture_with(docker: TestDocker, policy: &ReconcilerPolicy) -> Fixture {
         docker,
         collectors,
         clock,
-        sink,
+        logs,
     }
 }
 
@@ -1043,11 +1048,13 @@ async fn an_overflow_requests_a_resync() {
         "the overflow bumps the epoch"
     );
     assert!(
-        fixture.sink.contents().contains(
-            "level=WARN dirty service keys over the cap; dropping them for a resync cap=4"
+        fixture.logs.contains(
+            "WARN",
+            "dirty service keys over the cap; dropping them for a resync",
+            &[("cap", "4")]
         ),
         "{}",
-        fixture.sink.contents()
+        fixture.logs.dump()
     );
 }
 
@@ -1140,6 +1147,7 @@ async fn an_overflow_during_a_resync_runs_another_pass() {
 #[tokio::test]
 async fn an_event_without_actor_id_is_dropped_and_counted() {
     let mut fixture = fixture(TestDocker::default());
+    let logs = capture_logs(LevelFilter::DEBUG);
     fixture.complete_first_resync().await;
     fixture.handle.enqueue_event(&service_event("", "update"));
     fixture.handle.enqueue_event(&Event {
@@ -1153,6 +1161,17 @@ async fn an_event_without_actor_id_is_dropped_and_counted() {
         Some(fixture.collectors.metrics.events_dropped().get()),
         Some(2.0)
     );
+    assert_eq!(
+        logs.with_message("event without actor ID dropped").len(),
+        2,
+        "{}",
+        logs.dump()
+    );
+    assert!(logs.contains(
+        "DEBUG",
+        "event without actor ID dropped",
+        &[("type", "service"), ("action", "update")]
+    ));
 }
 
 /// Events of another type are ignored.
@@ -1205,13 +1224,18 @@ async fn the_retry_limit_requests_a_resync() {
     );
     assert_eq!(handle.shared.lock().pending_set.len(), 0);
     drop(reconciler);
-    let logs = fixture.sink.contents();
     assert!(
-        logs.contains(
-            "level=WARN service inspect keeps failing; leaving it to a resync service_id=svc1 \
-             attempts=4 err=\"service inspect svc1: inspect unavailable\""
+        fixture.logs.contains(
+            "WARN",
+            "service inspect keeps failing; leaving it to a resync",
+            &[
+                ("service_id", "svc1"),
+                ("attempts", "4"),
+                ("error", "service inspect svc1: inspect unavailable"),
+            ]
         ),
-        "{logs}"
+        "{}",
+        fixture.logs.dump()
     );
 }
 
@@ -1297,10 +1321,18 @@ async fn a_failed_node_refresh_backs_off() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     fixture.cycle().await;
     assert_eq!(fixture.reconciler.nodes().len(), 2);
-    let logs = fixture.sink.contents();
-    let warning = "level=WARN node refresh failed; will retry err=\"node list: list unavailable\" \
-                   backoff=20ms";
-    assert!(logs.contains(warning), "{logs}");
+    assert!(
+        fixture.logs.contains(
+            "WARN",
+            "node refresh failed; will retry",
+            &[
+                ("error", "node list: list unavailable"),
+                ("backoff", "20ms")
+            ]
+        ),
+        "{}",
+        fixture.logs.dump()
+    );
 }
 
 /// Go: `TestReconciler_PersistentListFailureIsRateLimited`: the backoff (20, 40, 80, 80, …
@@ -1414,16 +1446,29 @@ async fn docker_calls_have_deadlines() {
         .unwrap_err();
     assert_eq!(started.elapsed(), DOCKER_REQUEST_TIMEOUT, "task list");
     assert_eq!(error.to_string(), "task list: context deadline exceeded");
-    let logs = fixture.sink.contents();
-    for line in [
-        "level=WARN resync failed; will retry err=\"service list: context deadline exceeded\" \
-         backoff=20ms",
-        "level=WARN resync failed; will retry err=\"node list: context deadline exceeded\" \
-         backoff=40ms",
-        "level=WARN node refresh failed; will retry err=\"node list: context deadline exceeded\" \
-         backoff=20ms",
+    for (message, error, backoff) in [
+        (
+            "resync failed; will retry",
+            "service list: context deadline exceeded",
+            "20ms",
+        ),
+        (
+            "resync failed; will retry",
+            "node list: context deadline exceeded",
+            "40ms",
+        ),
+        (
+            "node refresh failed; will retry",
+            "node list: context deadline exceeded",
+            "20ms",
+        ),
     ] {
-        assert!(logs.contains(line), "{line} in {logs}");
+        let fields = [("error", error), ("backoff", backoff)];
+        assert!(
+            fixture.logs.contains("WARN", message, &fields),
+            "{message} {fields:?} in {}",
+            fixture.logs.dump()
+        );
     }
 }
 
@@ -1443,14 +1488,16 @@ async fn a_panic_in_a_step_requests_a_resync() {
         !fixture.reconciler.resync_due(Instant::now()),
         "the repair resync waits for the backoff"
     );
-    let logs = fixture.sink.contents();
-    assert!(
-        logs.starts_with(
-            "level=ERROR reconciler recovered from panic step=\"service svc1\" panic=\"unexpected \
-             service data\" stack="
-        ),
-        "{logs}"
+    let panic = fixture.logs.find(
+        "ERROR",
+        "reconciler recovered from panic",
+        &[
+            ("step", "service svc1"),
+            ("panic", "unexpected service data"),
+        ],
     );
+    assert!(panic.is_some(), "{}", fixture.logs.dump());
+    assert!(panic.is_some_and(|line| line.get("stack").is_some()));
     assert_eq!(
         fixture.resyncs(),
         (Some(1.0), Some(0.0)),
@@ -1552,12 +1599,13 @@ async fn a_panicking_resync_counts_as_a_failure() {
     );
     assert_eq!(fixture.resyncs(), (Some(0.0), Some(1.0)));
     assert!(
-        fixture
-            .sink
-            .contents()
-            .starts_with("level=ERROR reconciler recovered from panic step=resync"),
+        fixture.logs.contains(
+            "ERROR",
+            "reconciler recovered from panic",
+            &[("step", "resync")]
+        ),
         "{}",
-        fixture.sink.contents()
+        fixture.logs.dump()
     );
 }
 

@@ -32,7 +32,7 @@ use crate::docker::types::Node;
 use go_prom::{
     Collector, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotFamily, constant_desc,
 };
-use go_slog::{Attr, Logger};
+use tracing::error;
 
 /// The `role` label.
 pub const LABEL_NODE_ROLE: &str = "role";
@@ -51,13 +51,18 @@ pub const NODES_BY_STATE_HELP: &str =
 #[derive(Debug)]
 pub struct NodesByState {
     family: Arc<SnapshotFamily>,
-    logger: Logger,
+}
+
+impl Default for NodesByState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NodesByState {
-    /// The family, logging a failed build to `logger`.
+    /// The family, logging a failed build.
     #[must_use]
-    pub fn new(logger: Logger) -> Self {
+    pub fn new() -> Self {
         Self {
             family: Arc::new(SnapshotFamily::new(constant_desc(
                 NODES_BY_STATE_NAME,
@@ -65,7 +70,6 @@ impl NodesByState {
                 Kind::Gauge,
                 &[LABEL_NODE_ROLE, LABEL_NODE_AVAILABILITY, LABEL_NODE_STATUS],
             ))),
-            logger,
         }
     }
 
@@ -89,9 +93,9 @@ impl NodesByState {
     pub fn update_from_slice(&self, nodes: &[Node]) {
         match build_nodes_by_state(&self.family, nodes).build() {
             Ok(families) => self.family.collector().publish(families),
-            Err(error) => self.logger.error(
-                "build nodes by state snapshot; keeping previous",
-                &[Attr::error("err", &error)],
+            Err(error) => error!(
+                error = %error,
+                "build nodes by state snapshot; keeping previous"
             ),
         }
     }

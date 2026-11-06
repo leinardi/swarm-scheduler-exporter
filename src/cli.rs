@@ -36,11 +36,11 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
+use tracing::level_filters::LevelFilter;
 
 use crate::labels::{self, CountError, LabelError};
 use go_compat::{duration, quote};
-use go_slog::{Format, Level};
 
 /// Go's `DefaultPollDelay`: 10s.
 pub const DEFAULT_POLL_DELAY: i64 = 10_000_000_000;
@@ -52,6 +52,51 @@ pub const MIN_POLL_DELAY: i64 = 1_000_000_000;
 /// may take (Go's `collector.ReservedLabelNames`).
 pub const RESERVED_LABEL_NAMES: [&str; 5] =
     ["stack", "service", "service_mode", "display_name", "state"];
+
+/// The `--log-format` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    // tracing-subscriber's text lines.
+    Text,
+    // One JSON object per line.
+    Json,
+}
+
+impl From<LogFormat> for tracing_setup::Format {
+    fn from(format: LogFormat) -> Self {
+        match format {
+            LogFormat::Text => Self::Text,
+            LogFormat::Json => Self::Json,
+        }
+    }
+}
+
+/// The `--log-level` values: Go's `warning` stays an alias of `warn`; `fatal` and `panic` are gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogLevel {
+    // Everything.
+    Debug,
+    // The default.
+    Info,
+    // Warnings and errors.
+    #[value(alias = "warning")]
+    Warn,
+    // Errors only.
+    Error,
+}
+
+impl LogLevel {
+    /// The subscriber's maximum level.
+    #[must_use]
+    pub const fn filter(self) -> LevelFilter {
+        match self {
+            Self::Debug => LevelFilter::DEBUG,
+            Self::Info => LevelFilter::INFO,
+            Self::Warn => LevelFilter::WARN,
+            Self::Error => LevelFilter::ERROR,
+        }
+    }
+}
 
 /// The flags.
 #[expect(
@@ -123,22 +168,24 @@ pub struct Args {
     #[arg(
         long,
         default_value = "text",
-        value_parser = go_slog::parse_format_strict,
+        value_enum,
+        ignore_case = true,
         allow_hyphen_values = true,
         value_name = "string",
-        help = "Either json, text or plain"
+        help = "Either json or text"
     )]
-    pub log_format: Format,
+    pub log_format: LogFormat,
 
     #[arg(
         long,
         default_value = "info",
-        value_parser = go_slog::parse_level_strict,
+        value_enum,
+        ignore_case = true,
         allow_hyphen_values = true,
         value_name = "string",
-        help = "Either debug, info, warn, error, fatal, panic"
+        help = "Either debug, info, warn, error"
     )]
-    pub log_level: Level,
+    pub log_level: LogLevel,
 
     #[arg(
         long,

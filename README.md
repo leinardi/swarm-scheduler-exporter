@@ -424,9 +424,9 @@ Options:
       --containers-include-swarm[=<BOOL>]
           Include containers belonging to Swarm tasks.
       --log-format <string>
-          Either json, text or plain [default: text]
+          Either json or text [default: text] [possible values: text, json]
       --log-level <string>
-          Either debug, info, warn, error, fatal, panic [default: info]
+          Either debug, info, warn, error [default: info] [possible values: debug, info, warn, error]
       --log-time[=<BOOL>]
           Include timestamp in logs
       --healthcheck[=<BOOL>]
@@ -444,9 +444,10 @@ Options:
 - A boolean flag alone means `true`; turning one off takes `=` (`--containers=false`, also `0`,
   `f`, `F`, `FALSE`, `False`). `--containers false` is refused: `false` would be a positional
   argument.
-- `--log-level` takes `debug`, `info`, `warn`, `warning`, `error`, `fatal` or `panic`, and
-  `--log-format` takes `json`, `text` or `plain`, in any case; anything else is refused at startup
-  (exit code `2`).
+- `--log-level` takes `debug`, `info`, `warn` (also `warning`) or `error`, and `--log-format` takes
+  `json` or `text`, in any case; anything else is refused at startup (exit code `2`). Logs go to
+  standard output, the timestamps (`--log-time`) are UTC RFC 3339, and a line carries its fields as
+  `key=value` (text) or as JSON members (json).
 - `--poll-delay` takes a Go-style duration (`500ms`, `10s`, `1m30s`) of at least `1s` (exit code
   `1` otherwise).
 - `-h` and `--help` print the help to standard output and exit `0`.
@@ -669,7 +670,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q1 | Runtime metrics | `go_*`, `process_*` and `promhttp_metric_handler_*` | No `go_*`; `process_*` (the same Linux families, names, types and help texts) and `promhttp_metric_handler_*` unchanged |
 | Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always text 0.0.4, with the `escaping=` value and the gzip choice computed as 1.x does; only the body format differs where 1.x picked protobuf |
 | Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false` and every `strconv.ParseBool` spelling, Go durations for `--poll-delay`, repeatable `--label`, exit 2 on parse errors |
-| Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2); the accepted values are unchanged, in any case |
+| Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2), the message naming the accepted values; `plain` (format) and `fatal`, `panic` (level) are no longer accepted, `warning` stays an alias of `warn` |
 | Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | Startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |
 | Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the daemon answers 2xx; a failed connect goes straight to the warn path |
 | Q7 | Reconnect backoff | The 500ms backoff reset only after a stream that carried an event, so a quiet cluster behind a proxy backed off to 30s | It resets after any stream that connected |
@@ -680,6 +681,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q12 | Go runtime environment | `GOMAXPROCS`, `GOMEMLIMIT`, `GOGC` and `GODEBUG` tuned the process | No effect; the worker count follows the CPUs available to the container |
 | Q13 | HTTP edge cases | net/http's answers to malformed requests (a bad version, a missing `Host`), its header-count and size limits, and its silent close on a header timeout | hyper's equivalents (for example 431 above 100 headers); paths, status codes, bodies, header order, the 307 for unclean paths, HEAD and the server timeouts are unchanged |
 | Q14 | Docker proxy variables | A TCP `DOCKER_HOST` went through `HTTP_PROXY` / `HTTPS_PROXY` (honouring `NO_PROXY` and skipping loopback), as Go's `http.ProxyFromEnvironment` decides | The client dials `DOCKER_HOST` directly and reads no proxy variable; unix sockets are unaffected |
+| Q15 | Log output | slog text/JSON/plain lines, timestamps in the local zone (`TZ`) | `tracing` text or JSON lines (`level`, `message`, then the fields; JSON adds `target`), timestamps in UTC; the fields keep their names except `err`, now `error`, and durations print as Rust writes them (`500ms`, `1s`) |
 
 ## 🤝 Contributing
 
