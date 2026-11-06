@@ -41,7 +41,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::docker::DockerApi;
-use crate::logger::Attr;
+use go_slog::Attr;
 
 use super::super::desired::labels_for_metadata;
 use super::super::error::CallError;

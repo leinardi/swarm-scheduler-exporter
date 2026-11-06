@@ -38,13 +38,13 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use go_clock::{Clock, SystemClock};
+use go_slog::{Config, Format, Level, Logger};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
     ContainerInspect, ContainerSummary, Event, Node, Service, Task,
 };
 use swarm_scheduler_exporter::docker::{DockerApi, Error, EventStream, Filters, StreamError};
-use swarm_scheduler_exporter::logger::{Config, Format, Level, Logger};
 use swarm_scheduler_exporter::metrics::promhttp::HandlerMetrics;
 use swarm_scheduler_exporter::metrics::{Registry, Value};
 use swarm_scheduler_exporter::run::{
@@ -164,6 +164,7 @@ fn quiet_logger() -> Logger {
             format: Format::Text,
             level: Level::INFO,
             include_time: false,
+            plain_style: go_slog::PlainStyle::Quoted,
         },
         Box::new(std::io::sink()),
         TimeZone::UTC,

@@ -33,10 +33,10 @@ use jiff::Timestamp;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
 
 use super::*;
-use crate::logger::Level;
 use crate::metrics::exposition;
 use crate::test_support::capture_logs;
 use go_clock::FakeClock;
+use go_slog::Level;
 
 mod shutdown;
 mod timeouts;

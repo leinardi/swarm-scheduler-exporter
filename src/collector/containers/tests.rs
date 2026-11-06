@@ -30,9 +30,9 @@ use tokio::time::Instant;
 use super::*;
 use crate::docker::Error;
 use crate::docker::types::{ContainerConfig, ContainerState, ContainerSummary, Health, Present};
-use crate::logger::Level;
 use crate::metrics::testing::{gather_series, series_id};
 use crate::test_support::{FakeDocker, capture_logs};
+use go_slog::Level;
 
 fn names(names: &[&str]) -> Vec<String> {
     names.iter().map(|&name| name.to_owned()).collect()

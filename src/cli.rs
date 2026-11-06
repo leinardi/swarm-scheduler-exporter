@@ -39,8 +39,8 @@ use std::fmt;
 use clap::{ArgAction, Parser};
 
 use crate::labels::{self, CountError, LabelError};
-use crate::logger::{self, Format, Level};
 use go_compat::{duration, quote};
+use go_slog::{Format, Level};
 
 /// Go's `DefaultPollDelay`: 10s.
 pub const DEFAULT_POLL_DELAY: i64 = 10_000_000_000;
@@ -123,7 +123,7 @@ pub struct Args {
     #[arg(
         long,
         default_value = "text",
-        value_parser = logger::parse_format,
+        value_parser = go_slog::parse_format_strict,
         allow_hyphen_values = true,
         value_name = "string",
         help = "Either json, text or plain"
@@ -133,7 +133,7 @@ pub struct Args {
     #[arg(
         long,
         default_value = "info",
-        value_parser = logger::parse_level,
+        value_parser = go_slog::parse_level_strict,
         allow_hyphen_values = true,
         value_name = "string",
         help = "Either debug, info, warn, error, fatal, panic"

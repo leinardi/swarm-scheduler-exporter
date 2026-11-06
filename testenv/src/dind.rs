@@ -45,8 +45,8 @@ use bollard::query_parameters::{
 use futures_util::StreamExt as _;
 use go_clock::{Clock as _, SystemClock};
 use go_compat::duration;
+use go_slog::Attr;
 use jiff::Timestamp;
-use swarm_scheduler_exporter::logger::Attr;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::Error;

@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use go_clock::SystemClock;
 use go_compat::local_zone::local_zone;
-use swarm_scheduler_exporter::logger::{Attr, Config, Format, Level, Logger, Sink, Value};
+use go_slog::{Attr, Config, Format, Level, Logger, Sink, Value};
 
 /// What a redacted value is written as.
 pub const REDACTED: &str = "[redacted]";
@@ -105,6 +105,7 @@ impl RedactingLogger {
                     format: Format::Text,
                     level: Level::DEBUG,
                     include_time: true,
+                    plain_style: go_slog::PlainStyle::Quoted,
                 },
                 sink,
                 local_zone(|key| std::env::var(key).ok()),
@@ -170,6 +171,8 @@ fn redact_attr(attr: &Attr) -> Attr {
         | Value::Duration(_)
         | Value::Time(_)
         | Value::Strings(_)
+        | Value::NilStrings
+        | Value::Stringer(_)
         | Value::Error(_)
         | Value::Nil
         | Value::Group(_) => attr.clone(),
@@ -178,7 +181,7 @@ fn redact_attr(attr: &Attr) -> Attr {
 
 #[cfg(test)]
 mod tests {
-    use swarm_scheduler_exporter::logger::{Attr, MemorySink};
+    use go_slog::{Attr, MemorySink};
 
     use super::{REDACTED, RedactingLogger, Secret, redact_env};
 

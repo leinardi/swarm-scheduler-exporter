@@ -322,7 +322,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -443,6 +443,16 @@ name = "go-compat"
 version = "0.1.0"
 source = "git+https://github.com/leinardi/rust-common?rev=7c3e4336087e31e166e2fe6be4f5562669d91df2#7c3e4336087e31e166e2fe6be4f5562669d91df2"
 dependencies = [
+ "jiff",
+]
+
+[[package]]
+name = "go-slog"
+version = "0.1.0"
+source = "git+https://github.com/leinardi/rust-common?rev=7c3e4336087e31e166e2fe6be4f5562669d91df2#7c3e4336087e31e166e2fe6be4f5562669d91df2"
+dependencies = [
+ "go-clock",
+ "go-compat",
  "jiff",
 ]
 
@@ -1050,7 +1060,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1296,6 +1306,7 @@ dependencies = [
  "flate2",
  "go-clock",
  "go-compat",
+ "go-slog",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1366,7 +1377,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1378,6 +1389,7 @@ dependencies = [
  "futures-util",
  "go-clock",
  "go-compat",
+ "go-slog",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1385,7 +1397,6 @@ dependencies = [
  "regex",
  "rustix",
  "serde_json",
- "swarm-scheduler-exporter",
  "tempfile",
  "tokio",
  "tokio-util",

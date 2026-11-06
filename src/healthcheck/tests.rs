@@ -399,7 +399,7 @@ async fn the_probe_reads_the_exporter_s_answer() {
             body: Vec::new(),
         }),
         Arc::new(go_clock::SystemClock),
-        crate::test_support::capture_logs(crate::logger::Level::INFO).0,
+        crate::test_support::capture_logs(go_slog::Level::INFO).0,
     );
     let cancel = tokio_util::sync::CancellationToken::new();
     let shutdown = cancel.clone();

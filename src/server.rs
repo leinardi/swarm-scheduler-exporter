@@ -69,12 +69,12 @@ use tokio::net::TcpListener;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::logger::{Attr, Logger};
 use crate::metrics::exposition::Exposition;
 use go_clock::Clock;
 use go_compat::duration;
 use go_compat::errno::io_error_text;
 use go_compat::host_port::split_host_port;
+use go_slog::{Attr, Logger};
 
 use self::gopath::Route;
 pub use self::timeouts::{ConnState, TimedIo, Timeouts};

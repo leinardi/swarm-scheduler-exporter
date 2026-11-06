@@ -79,6 +79,9 @@ workspace = true
 go-compat.workspace = true
 # The injected wall clock (rust-common): Clock, SystemClock, TokioClock, FakeClock.
 go-clock.workspace = true
+# Go's log/slog handlers and the plain format, byte for byte (rust-common), in the Quoted
+# plain style with the strict level and format parsers.
+go-slog.workspace = true
 # Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
 # the way Go does (go-compat), so none of jiff's tzdb or system features is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }

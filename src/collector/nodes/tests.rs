@@ -26,9 +26,9 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::docker::types::{NodeSpec, NodeStatus};
-use crate::logger::Level;
 use crate::metrics::testing::{gather_series, series_id};
 use crate::test_support::capture_logs;
+use go_slog::Level;
 
 fn node(role: &str, availability: &str, status: &str) -> Node {
     Node {

@@ -29,7 +29,7 @@ use bollard::Docker;
 use bollard::errors::Error as DockerError;
 use bollard::query_parameters::ImportImageOptions;
 use futures_util::StreamExt as _;
-use swarm_scheduler_exporter::logger::Attr;
+use go_slog::Attr;
 use tempfile::TempPath;
 use tokio::io::AsyncWriteExt as _;
 use tokio_util::io::ReaderStream;

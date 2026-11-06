@@ -49,7 +49,6 @@ use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::docker::{self, Client, DockerApi, Settings};
 use crate::healthcheck::run_healthcheck;
-use crate::logger::{self, Attr, Logger};
 use crate::metrics::exposition::render;
 use crate::metrics::process::ProcessCollector;
 use crate::metrics::promhttp::HandlerMetrics;
@@ -57,6 +56,7 @@ use crate::metrics::{Collector, RegisterError, Registry};
 use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
 use go_clock::{Clock, SystemClock};
+use go_slog::{Attr, Logger};
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
 /// runtime's shutdown all come out of it. 10s is Docker's default stop grace period.
@@ -430,11 +430,12 @@ where
         return Exit::code(1);
     }
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let logger = logger::configure(
-        logger::Config {
+    let logger = go_slog::configure(
+        go_slog::Config {
             format: args.log_format,
             level: args.log_level,
             include_time: args.log_time,
+            plain_style: go_slog::PlainStyle::Quoted,
         },
         Arc::clone(&clock),
         &getenv,

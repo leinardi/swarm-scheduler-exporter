@@ -26,14 +26,16 @@ integration = [
 ]
 
 [dependencies]
-# The exporter's slog-compatible logger, and Go's time.ParseDuration and Duration.String. The
-# dependency only goes this way: the exporter package names testenv in no table (the boundary
-# meta-test checks it), so nothing here reaches the shipped binary.
-swarm-scheduler-exporter = { path = ".." }
+# The shared crates the exporter itself uses (rust-common), for the harness's own logs, clock
+# and Go formatting. testenv does not depend on the exporter crate; the exporter package names
+# testenv in no table (the boundary meta-test checks it), so nothing here reaches the shipped
+# binary.
 # Go's quoting, float and duration formatting and the local zone, as the exporter writes them.
 go-compat.workspace = true
 # The wall clock the harness and its logs read.
 go-clock.workspace = true
+# The exporter's logger, for the harness's own records.
+go-slog.workspace = true
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The run filter: Go's -run patterns are regular expressions.
 regex = "1.13.1"
