@@ -18,8 +18,8 @@ Suppressions: only `#[expect(lint, reason = "...")]`, ratcheted per lint against
 `scripts/check-suppressions.sh --update` and commits the baseline. The reason says why the fix
 does not apply, not which lint fired.
 
-Parity: any difference from the Go 1.x behaviour not listed in the README's "Migrating from 1.x"
-is a defect. Ported tests carry ``/// Go: `TestX` ``; Rust sources never name a Go source file.
+Behaviour changes: any change to the metrics, flags, health rules or logs that the README's
+"Migrating" section does not list is a defect. Rust sources never name a Go source file.
 
 Tests: paused tokio clock for time; integration waits poll (`eventually`, `consistently`), never
 sleep. Every `.rs` file carries the MIT `/* */` header.

@@ -6,7 +6,8 @@ A Prometheus exporter for Docker Swarm's scheduler: desired and running replicas
 accurate eligibility for `global` services), live task state, service update/rollback state, node
 availability and, opt-in, container state. It only ever reads from the Docker API. A Rust
 workspace (edition 2024, toolchain pinned in `rust-toolchain.toml`) since 2.0; 1.x was written in
-Go, and the README's "Migrating from 1.x" section lists every behaviour that changed. Fork of
+Go, and the README's "Migrating" section lists every behaviour that changed since. The metrics,
+flags and health rules are the contract; Go 1.x is history, not an authority. Fork of
 [akerouanton/swarm-tasks-exporter](https://github.com/akerouanton/swarm-tasks-exporter). The README
 is the user-facing story; the metrics it lists are the public contract.
 
@@ -42,7 +43,7 @@ Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged cont
 
 ```bash
 make test-integration                            # the whole suite, against the release binary
-make test-integration RUN='^TestNode_'           # a subset (Go's -run semantics)
+make test-integration RUN='^TestNode_'           # a subset (a regular expression per /-separated level)
 make test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden file
 make sweep-test-leaks                            # remove every labelled test container and network
 ```
@@ -117,8 +118,8 @@ meta-tests' checks). The exporter keeps only what is its own.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
   the `rev` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
   `git diff Cargo.lock` touches only the rust-common lines.
-- The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
-  otherwise:
+- The parameters this exporter passes (the README's Migrating section lists what differs from 1.x
+  and 2.x):
   the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
   `process-metrics`; Q2); the server's header-read (5s) and write-stall (15s) timeouts and the
   `http listen:` prefix (Q13);
@@ -127,7 +128,7 @@ meta-tests' checks). The exporter keeps only what is its own.
   `--log-format` text|json, `--log-level` debug|info|warn|error, an unknown value refused by clap),
   installed once through `tracing_setup::build` and `install_global`; `lazy_shutdown_signal`, whose
   handlers are installed only once the shutdown watch first polls it, so a signal during startup
-  still terminates the process, as in Go before its `signal.NotifyContext` call; the `buildinfo!`
+  still terminates the process; the `buildinfo!`
   defaults `dev`, `none` and `unknown`, an empty stamp kept.
 - Two workspace policies are the exporter's own: `panic = "unwind"` (the reconciler recovers a
   panicking step; see the invariants) and `unsafe_code = "forbid"`, with no exemption.
@@ -137,8 +138,10 @@ meta-tests' checks). The exporter keeps only what is its own.
 - `.mk/{docker,help,password,pre-commit,rust}.mk`, `.mk/.mk-common-version` and
   `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
   `make mk-common-update` and port a change upstream.
-- `tests/testdata/**` and `testenv/tests/integration/testdata/**`: byte-for-byte Engine API
-  captures and golden files. The integration golden file is rewritten with
+- `tests/testdata/**` and `testenv/tests/integration/testdata/**`: Engine API fixtures (captured
+  from a daemon) and golden files (the metrics golden was captured from the Go 1.3.2 exporter and
+  is kept as a regression pin on values, not as a parity target). The integration golden file is
+  rewritten with
   `make test-integration UPDATE=1 RUN=TestSnapshot_`; the whitespace hooks skip them.
 
 ## Invariants
@@ -185,12 +188,12 @@ The ones to keep in mind while writing code:
   one stays empty.
 - Lints are silenced only with `#[expect(lint, reason = "...")]`: `allow_attributes` is denied,
   the reason is mandatory, and an `#[expect]` that stops firing fails the build.
-- Fixtures under `testdata/` are byte-for-byte captures (Engine API wire captures, golden files);
-  the whitespace pre-commit hooks skip them, so do not tidy them by hand.
+- Fixtures under `testdata/` are captures (Engine API objects, golden files); the whitespace
+  pre-commit hooks skip them, so do not tidy them by hand.
 - A new `#[expect]`, `# shellcheck disable=` or `# droast ignore=` explains why the fix does not
   apply here, not which lint fired.
-- Where a test or a module replaces Go code, its provenance (`/// Go: TestX`) is a doc comment;
-  sources name no Go source file, and the reasoning behind a port lives in the commit bodies.
+- An older test may carry its Go provenance (`/// Go: TestX`) as a doc comment; new tests do not
+  need one, and sources name no Go source file.
 
 ## Licence headers and suppressions
 

@@ -324,7 +324,7 @@ in this repo (copied from another project) is a finding too.
 Before accepting a new helper, search for the one that already exists — in `src/**`,
 `tests/support`, `testenv/**` and rust-common's crates (a local copy of a helper rust-common has
 is a finding), by *behavior*, not by the name the author chose. Check label building and
-sanitization, metric constants, Go-compatible formatting, test fakes and wait helpers.
+sanitization, metric constants, formatting, test fakes and wait helpers.
 Two implementations of the same
 rule drift apart, and the one the reviewer did not read is the one that keeps the bug.
 

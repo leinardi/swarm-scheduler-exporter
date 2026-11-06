@@ -3,11 +3,12 @@
 Read-only Prometheus exporter for Docker Swarm's scheduler, in Rust: desired, schedulable and
 running replicas per service (accurate eligibility for `global` services), task state, service
 update/rollback state, node availability and, opt-in, container state. Fork of
-akerouanton/swarm-tasks-exporter; a port of its Go 1.x implementation, metric for metric.
+akerouanton/swarm-tasks-exporter; a Rust rewrite of its Go 1.x implementation (same metrics),
+since moved onto shared crates.
 
 AGENTS.md (repo root) is the authoritative contract: layout, commands, invariants, validation
 matrix, commit types. Read it before any change; memories below only add what it does not say.
-The README "Migrating from 1.x" section lists the only intended differences from Go (Q1-Q16).
+The README "Migrating" section lists the intended differences from 1.x (Go) and 2.x (Q1-Q17).
 
 ## Source map
 

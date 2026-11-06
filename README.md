@@ -638,20 +638,63 @@ scrape_configs:
   binary than the Go 1.x releases (see [Resource usage](#-resource-usage)), and a Docker client
   that can only send read requests.
 
-## 🔄 Migrating from 1.x
+## 🔄 Migrating
 
-2.0 is the same exporter rewritten in Rust: every `swarm_*` metric keeps its name, type, help text,
-labels and values, and `/metrics`, `/healthz`, the health rules, the flags' names and defaults and
-the Docker access (read-only, the same endpoints) are unchanged. The set of
-metric names, types and label names is pinned against the 1.3.2 exposition (minus the `go_*` and
-`promhttp_*` families), and the series the Docker fixtures feed are compared with 1.3.2's, value
-for value. The wire format is the one thing that changed (Q2): `/metrics` is OpenMetrics text.
+This page covers the two jumps: **2.x to 3.0** (the Rust exporter moves onto shared, standard
+libraries and stops reproducing Go's behaviour byte for byte) and, below it, **1.x (Go) to Rust**.
+Either way every `swarm_*` metric keeps its name, type, help text, labels and values, `/metrics`
+and `/healthz` keep their paths, and the Docker access stays read-only. The metric names, types
+and label names are pinned by a committed inventory taken from the 1.3.2 exposition (minus the
+`go_*` and `promhttp_*` families), and the values the Docker fixtures feed are checked by tests.
 
-What to change when upgrading:
+### Upgrading from 2.x to 3.0
+
+Before you roll it out:
+
+- **Scrape config and dashboards.** `/metrics` is OpenMetrics text only (`Content-Type:
+  application/openmetrics-text; version=1.0.0; charset=utf-8`), never compressed, and ends with
+  `# EOF`. Prometheus 2.5+ and 3.x negotiate it; a custom scraper that needs text 0.0.4 or protobuf
+  does not work. A counter's *family* has no `_total` (its sample has), the `promhttp_*` families
+  and `?name[]=` filtering are gone, and `process_*` is unchanged. Queries on sample names need no
+  change.
+- **Docker socket proxy.** The client negotiates the API version with `GET /version`, not
+  `/_ping`: set `VERSION=1` (and `PING=0`, which is no longer used) in your proxy's allowlist, or
+  pin `DOCKER_API_VERSION` (`<major>.<minor>`, within 1.40 to 1.56). Without either the exporter
+  logs that the negotiation was refused and sends requests with no version prefix. The example in
+  `deployments/docker/socket-proxy.env` is updated.
+- **Log parsers.** Logs are `tracing` lines: text (`level`, `message`, then `key=value` fields) or
+  JSON (`level`, `message`, the fields, `target`), timestamps in UTC (`TZ` has no effect), the error
+  field is `error` (it was `err`), and durations print as `500ms`, `1m 30s`.
+  `--log-format plain` and `--log-level fatal|panic` are refused (exit 2); `warning` is still an
+  alias of `warn`.
+- **Flag values.** A bool flag takes `true` or `false` only: `--containers=1`, `=t`, `=TRUE`, `=0`
+  and the other `strconv.ParseBool` spellings are refused (exit 2). `--poll-delay` takes `10s`,
+  `500ms`, `1m30s`, `1m 30s`, `1.5s` (and `2d`), no sign: `-5s` is a parse error (exit 2), not the
+  exit-1 minimum check; the minimum is still `1s`.
+- **Placement constraints** (`node.ip` with a CIDR such as `10.0.0.0/024` written with a
+  leading-zero prefix, constraint keys and values with non-ASCII letters) read slightly differently,
+  see Q17.
+- **Docker states.** A task, node, container or event value the Docker API documents is read as
+  before; one a *newer daemon invents* fails the call that carries it (logged by the collector),
+  where 2.x passed it on as text.
+- **HTTP edge cases.** Any other path is a bodyless 404, a method other than GET or HEAD is 405, and
+  a listen error reads `http listen: listen tcp <address>: <system error>` (Q13). The listener is
+  dual-stack on `:port`.
+
+The rows that changed since 2.x are Q1, Q2, Q3, Q4, Q6, Q11, Q13, Q15, Q16 and Q17 in the table
+below.
+
+### Coming from 1.x (Go)
+
+2.0 is the same exporter rewritten in Rust; the flags' names and defaults, the health rules and the
+Docker access are unchanged, and the wire format is the one thing that moved (Q2).
+
+What to change when upgrading from 1.x, besides the 3.0 list above:
 
 - **Flags take two dashes.** `-poll-delay 10s` becomes `--poll-delay 10s`, `-containers` becomes
   `--containers`, and so on, in `command:`, `docker run` and `docker service create` arguments.
-  1.x accepted both spellings; 2.0 refuses the single-dash one at startup and names the `--` one.
+  1.x accepted both spellings; the exporter refuses the single-dash one at startup and names the
+  `--` one.
 - **Healthchecks you override** run `--healthcheck`:
   `test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "--healthcheck" ]`. The image's own
   `HEALTHCHECK` and the compose examples in `deployments/docker/` already do.
@@ -662,9 +705,10 @@ What to change when upgrading:
   If the daemon is reachable only through that proxy, point `DOCKER_HOST` at a proxy that forwards
   to it (a socket proxy). A unix socket was never proxied.
 
-Every intended difference, 1.x (Go) against 2.0 (Rust):
+Every intended difference, 1.x (Go) against this release (the rows above that changed since 2.x
+read as written here):
 
-| # | Area | 1.x | 2.0 |
+| # | Area | 1.x | 3.0 |
 | --- | --- | --- | --- |
 | Q1 | Runtime metrics | `go_*`, `process_*` and `promhttp_metric_handler_*` | No `go_*` and no `promhttp_metric_handler_*`; `process_*` keeps the same Linux families, names, types and help texts |
 | Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always OpenMetrics text (`application/openmetrics-text; version=1.0.0; charset=utf-8`), never compressed; a counter's family has no `_total` (its sample has); `?name[]=` filtering is gone |
@@ -674,7 +718,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the stream is accepted: a refused request (non-2xx, no connection) is seen within 2s of opening it and goes straight to the warn path; a quiet stream is probed with `GET /version` (3s) after 2s, and a daemon that does not answer the probe is a failed connect |
 | Q7 | Reconnect backoff | The 500ms backoff reset only after a stream that carried an event, so a quiet cluster behind a proxy backed off to 30s | It resets after any stream that connected |
 | Q8 | Shutdown | 10s for the HTTP drain, then an unbounded wait for the workers | One 10s budget from the signal to exit, covering the drain and the workers |
-| Q9 | Error texts | Library errors in Go's and the Docker SDK's wording | Library errors in Rust's wording; every prefix and message the exporter writes itself is unchanged, and an OS error number reads as Go's `syscall.Errno` text (`errno <n>` for one Go does not name) |
+| Q9 | Error texts | Library errors in Go's and the Docker SDK's wording | Library errors in Rust's and bollard's wording; every prefix and message the exporter writes itself is unchanged |
 | Q10 | Panic recovery | `reconciler recovered from panic` with a Go stack trace | The same record, with the panic message and a Rust backtrace |
 | Q11 | Docker wire | User-Agent `moby-client/…`; one version ping per concurrent first request | User-Agent `swarm-scheduler-exporter/<version>`; the version is negotiated once with `GET /version` (a refusal, as a socket proxy with `VERSION=0` gives, is logged and requests then carry no version prefix; set `VERSION=1` in the proxy or pin `DOCKER_API_VERSION`) |
 | Q12 | Go runtime environment | `GOMAXPROCS`, `GOMEMLIMIT`, `GOGC` and `GODEBUG` tuned the process | No effect; the worker count follows the CPUs available to the container |
