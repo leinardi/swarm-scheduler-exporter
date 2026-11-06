@@ -20,8 +20,6 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 [workspace.dependencies]
 clock = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
 docker-client = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-go-compat = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-go-slog = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
 repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
 service-kit = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
 testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }

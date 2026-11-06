@@ -22,18 +22,15 @@
  * SOFTWARE.
  */
 
-//! A reader for the Prometheus text exposition format, as the integration suite scrapes
-//! `/metrics`: every gauge, counter and untyped sample, by name and labels. Histogram and summary
-//! samples are skipped, as the Go suite's expfmt-based reader skipped them; the tests assert on
-//! none. Also the line format the suite prints samples in (and the snapshot golden file holds):
-//! `name{key="value",...} value`, keys sorted, values quoted as Go's `strconv.Quote` does, the
-//! number as Go's `strconv.FormatFloat(v, 'g', -1, 64)`.
+//! A reader for the exposition the exporter serves on `/metrics`, OpenMetrics text: every gauge,
+//! counter and untyped sample, by name and labels (a counter's family is named without `_total`,
+//! its sample with it; `# EOF` ends the text). Histogram and summary samples are skipped; the
+//! tests assert on none. Also the line format the suite prints samples in (and the snapshot golden
+//! file holds): `name{key="value",...} value`, keys sorted, values quoted as Rust's `{:?}` does,
+//! the number as [`format_value`] writes it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-
-use go_compat::float::format_g;
-use go_compat::quote::quote;
 
 /// Labels by name, sorted.
 pub type Labels = BTreeMap<String, String>;
@@ -192,15 +189,22 @@ pub fn format_sample(sample: &Sample) -> String {
 pub fn format_series(name: &str, labels: &Labels) -> String {
     let pairs: Vec<String> = labels
         .iter()
-        .map(|(key, value)| format!("{key}={}", quote(value)))
+        .map(|(key, value)| format!("{key}={value:?}"))
         .collect();
     format!("{name}{{{}}}", pairs.join(","))
 }
 
-/// A value as Go's `strconv.FormatFloat(value, 'g', -1, 64)`.
+/// A value as the shortest text that reads back as the same number (`1`, `0.5`), `NaN`, `+Inf` or
+/// `-Inf`.
 #[must_use]
 pub fn format_value(value: f64) -> String {
-    format_g(value)
+    if value.is_nan() {
+        "NaN".to_owned()
+    } else if value.is_infinite() {
+        if value > 0.0 { "+Inf" } else { "-Inf" }.to_owned()
+    } else {
+        value.to_string()
+    }
 }
 
 /// Whether a sample belongs to a histogram or summary family.
@@ -416,7 +420,7 @@ nan_thing NaN
     }
 
     #[test]
-    fn formats_as_go_quotes_and_floats() {
+    fn formats_quotes_and_floats() {
         let scrape = parsed();
         assert_eq!(
             format_sample(&scrape.samples[1]),
@@ -428,8 +432,44 @@ nan_thing NaN
         );
         assert_eq!(scrape.lines_with("stack", "it").len(), 2);
         let large = Scrape::parse("x 1234567\ny 0.5\n").unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(format_sample(&large.samples[0]), "x{} 1.234567e+06");
+        assert_eq!(format_sample(&large.samples[0]), "x{} 1234567");
         assert_eq!(format_sample(&large.samples[1]), "y{} 0.5");
+        assert_eq!(format_value(f64::INFINITY), "+Inf");
+        assert_eq!(format_value(f64::NEG_INFINITY), "-Inf");
+        assert_eq!(format_value(f64::NAN), "NaN");
+    }
+
+    /// The exporter's exposition: a counter's family has no `_total`, its sample has; a
+    /// histogram's samples are skipped; `# EOF` ends the text.
+    #[test]
+    fn reads_openmetrics() {
+        let text = "# HELP swarm_exporter_polls Polls.\n\
+                    # TYPE swarm_exporter_polls counter\n\
+                    swarm_exporter_polls_total 7\n\
+                    # HELP swarm_exporter_poll_duration_seconds Poll time.\n\
+                    # TYPE swarm_exporter_poll_duration_seconds histogram\n\
+                    swarm_exporter_poll_duration_seconds_bucket{le=\"0.1\"} 3\n\
+                    swarm_exporter_poll_duration_seconds_bucket{le=\"+Inf\"} 3\n\
+                    swarm_exporter_poll_duration_seconds_sum 0.2\n\
+                    swarm_exporter_poll_duration_seconds_count 3\n\
+                    swarm_exporter_poll_duration_seconds_created 1700000000.5\n\
+                    # TYPE swarm_exporter_health gauge\n\
+                    swarm_exporter_health 1\n\
+                    # EOF\n";
+        let scrape = Scrape::parse(text).unwrap_or_else(|error| panic!("{error}"));
+        let names: Vec<&str> = scrape
+            .samples
+            .iter()
+            .map(|sample| sample.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "swarm_exporter_polls_total",
+                "swarm_exporter_poll_duration_seconds_created",
+                "swarm_exporter_health",
+            ]
+        );
     }
 
     #[test]

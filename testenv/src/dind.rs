@@ -42,12 +42,10 @@ use bollard::query_parameters::{
 };
 use clock::{Clock as _, SystemClock};
 use futures_util::StreamExt as _;
-use go_compat::duration;
-use go_slog::Attr;
 use jiff::Timestamp;
 use testenv_core::context::Context;
 use testenv_core::host::{self, HostSweep, OP_TIMEOUT, with_timeout};
-use testenv_core::redact::RedactingLogger;
+use testenv_core::redact::{Log as _, Logger};
 use testenv_core::sweep_rules::{
     DEFAULT_STALE_AFTER, Owner, SweepRules, current_owner, stale_after_from_env,
 };
@@ -95,13 +93,14 @@ pub async fn up(ctx: &Context, mut spec: Spec) -> Result<Cluster, Error> {
 
     let log = spec
         .logger
-        .with_attrs(&[Attr::string("envid", spec.env_id.clone())]);
+        .clone()
+        .with_fields(&[("envid", spec.env_id.as_str())]);
 
     // Logged before anything exists, so a run killed at any later point can still be cleaned up
     // by hand.
     log.info(
         "bringing up test swarm; manual cleanup",
-        &[Attr::string("cmd", cleanup_command(&spec.env_id))],
+        &[("cmd", cleanup_command(&spec.env_id).as_str())],
     );
 
     let owner = current_owner()?;
@@ -125,7 +124,7 @@ pub async fn up(ctx: &Context, mut spec: Spec) -> Result<Cluster, Error> {
             if spec.keep_on_failure {
                 log.warn(
                     "bring-up failed; keeping the environment",
-                    &[Attr::string("cmd", cleanup_command(&spec.env_id))],
+                    &[("cmd", cleanup_command(&spec.env_id).as_str())],
                 );
             } else {
                 let teardown = ctx.without_cancel().with_timeout(TEARDOWN_TIMEOUT);
@@ -135,7 +134,7 @@ pub async fn up(ctx: &Context, mut spec: Spec) -> Result<Cluster, Error> {
                 {
                     log.warn(
                         "bring-up failed and cleanup was incomplete",
-                        &[Attr::string("err", cleanup_error.to_string())],
+                        &[("err", cleanup_error.to_string().as_str())],
                     );
                 }
             }
@@ -269,7 +268,7 @@ async fn bring_up(
     owner: &Owner,
     started_at: Timestamp,
     host_client: &Docker,
-    log: &RedactingLogger,
+    log: &Logger,
 ) -> Result<(Vec<Node>, String), Error> {
     ensure_host_image(ctx, host_client, &spec.dind_image, log).await?;
 
@@ -280,7 +279,7 @@ async fn bring_up(
     let mut nodes = provision_nodes(ctx, host_client, spec, &network_name, &labels).await?;
     log.info(
         "DinD containers started",
-        &[Attr::int("count", count(nodes.len()))],
+        &[("count", nodes.len().to_string().as_str())],
     );
 
     wait_for_daemons(ctx, &nodes).await?;
@@ -295,13 +294,9 @@ async fn bring_up(
 
     log.info(
         "all swarm nodes ready",
-        &[Attr::int("nodes", count(nodes.len()))],
+        &[("nodes", nodes.len().to_string().as_str())],
     );
     Ok((nodes, workload_image_id))
-}
-
-fn count(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 async fn create_bridge_network(
@@ -619,7 +614,7 @@ pub(crate) async fn ensure_host_image(
     ctx: &Context,
     host_client: &Docker,
     image_ref: &str,
-    log: &RedactingLogger,
+    log: &Logger,
 ) -> Result<(), Error> {
     match with_timeout(ctx, OP_TIMEOUT, host_client.inspect_image(image_ref)).await {
         Ok(_) => return Ok(()),
@@ -631,7 +626,7 @@ pub(crate) async fn ensure_host_image(
         Err(_) => {}
     }
 
-    log.info("pulling image on host", &[Attr::string("image", image_ref)]);
+    log.info("pulling image on host", &[("image", image_ref)]);
 
     // The whole reference goes in fromImage: the daemon splits off the tag or digest itself.
     let pull = async {
@@ -687,8 +682,7 @@ async fn poll_until(
         };
         if Instant::now() > deadline {
             return Err(Error::new(format!(
-                "{what} within {}: not ready in time: {last}",
-                duration::format(i64::try_from(timeout.as_nanos()).unwrap_or(i64::MAX))
+                "{what} within {timeout:?}: not ready in time: {last}"
             )));
         }
         if let Err(ended) = ctx.run(ticker.tick()).await {

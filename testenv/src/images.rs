@@ -29,11 +29,10 @@ use bollard::Docker;
 use bollard::errors::Error as DockerError;
 use bollard::query_parameters::ImportImageOptions;
 use futures_util::StreamExt as _;
-use go_slog::Attr;
 use tempfile::TempPath;
 use testenv_core::context::Context;
 use testenv_core::host::{OP_TIMEOUT, OpError, with_timeout};
-use testenv_core::redact::RedactingLogger;
+use testenv_core::redact::{Log as _, Logger};
 use tokio::io::AsyncWriteExt as _;
 use tokio_util::io::ReaderStream;
 
@@ -58,7 +57,7 @@ pub(crate) async fn load_workload_image(
     ctx: &Context,
     host_client: &Docker,
     nodes: &[Node],
-    log: &RedactingLogger,
+    log: &Logger,
 ) -> Result<String, Error> {
     ensure_host_image(ctx, host_client, WORKLOAD_IMAGE, log).await?;
 
@@ -80,10 +79,7 @@ pub(crate) async fn load_workload_image(
 
     log.info(
         "workload image loaded on every node",
-        &[
-            Attr::string("image", WORKLOAD_IMAGE),
-            Attr::string("id", image_id.clone()),
-        ],
+        &[("image", WORKLOAD_IMAGE), ("id", image_id.as_str())],
     );
     Ok(image_id)
 }

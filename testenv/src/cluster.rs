@@ -26,16 +26,13 @@
 //! ([`Cluster`], made of [`Node`]s).
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write as _};
 use std::num::IntErrorKind;
-use std::sync::Arc;
 
 use bollard::Docker;
-use clock::SystemClock;
-use go_compat::local_zone::local_zone;
-use go_compat::quote::quote;
+use clock::{Clock as _, SystemClock};
 use jiff::Timestamp;
-use testenv_core::redact::RedactingLogger;
+use testenv_core::redact::Logger;
 use testenv_core::sweep_rules::Owner;
 
 use crate::Error;
@@ -55,14 +52,12 @@ const DEFAULT_WORKER_COUNT: usize = 2;
 /// The docker:dind image every node runs unless [`ENV_DIND_IMAGE`] says otherwise.
 pub(crate) const DEFAULT_DIND_IMAGE: &str = "docker:29.8.1-dind";
 
-/// The harness's log on stderr, with record times from the system clock in the local zone.
+/// The harness's log on stderr: one line per record, led by the system clock's time in UTC.
 #[must_use]
-pub fn new_logger() -> RedactingLogger {
-    RedactingLogger::new(
-        Box::new(io::stderr()),
-        local_zone(|key| std::env::var(key).ok()),
-        Arc::new(SystemClock),
-    )
+pub fn new_logger() -> Logger {
+    Logger::new(|line| {
+        let _ = writeln!(io::stderr().lock(), "time={} {line}", SystemClock.now());
+    })
 }
 
 /// The Swarm role a node was given.
@@ -88,7 +83,7 @@ pub struct Spec {
     /// Leaves a failed bring-up in place instead of removing it.
     pub keep_on_failure: bool,
     /// Receives the harness's progress.
-    pub logger: RedactingLogger,
+    pub logger: Logger,
 }
 
 /// A Spec built from the `SSE_IT_*` variables `getenv` returns, with a freshly generated envid.
@@ -116,8 +111,7 @@ pub fn spec_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Spec, Er
                     "invalid syntax"
                 };
                 Error::new(format!(
-                    "parse {ENV_WORKERS}: strconv.Atoi: parsing {}: {reason}",
-                    quote(&raw_workers)
+                    "parse {ENV_WORKERS}: strconv.Atoi: parsing {raw_workers:?}: {reason}"
                 ))
             })?;
         workers = usize::try_from(parsed).map_err(|_| {
@@ -132,8 +126,7 @@ pub fn spec_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Spec, Er
     if !raw_keep.is_empty() {
         keep_on_failure = parse_bool(&raw_keep).ok_or_else(|| {
             Error::new(format!(
-                "parse {ENV_KEEP_ON_FAILURE}: strconv.ParseBool: parsing {}: invalid syntax",
-                quote(&raw_keep)
+                "parse {ENV_KEEP_ON_FAILURE}: strconv.ParseBool: parsing {raw_keep:?}: invalid syntax"
             ))
         })?;
     }

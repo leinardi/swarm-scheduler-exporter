@@ -341,7 +341,7 @@ struct SocketProxy {
 
 impl SocketProxy {
     /// Runs `image` on the host daemon with the allowlist, in front of the test Swarm's manager,
-    /// and waits until it answers `/_ping`. The container is removed when the test ends, and its
+    /// and waits until it answers `/version`. The container is removed when the test ends, and its
     /// output logged if the test failed.
     async fn start(
         test: &TestHandle,
@@ -420,18 +420,18 @@ impl SocketProxy {
         )
         .await
         .map_err(|error| test.fatal(format!("start socket proxy: {error}")))?;
-        proxy.wait_ping(test).await?;
+        proxy.wait_ready(test).await?;
         Ok(proxy)
     }
 
-    /// Waits until the proxy answers `GET /_ping` with 200, which also proves it reaches the
+    /// Waits until the proxy answers `GET /version` with 200, which also proves it reaches the
     /// manager.
-    async fn wait_ping(&self, test: &TestHandle) -> TestResult {
-        let url = format!("http://{}/_ping", self.address);
+    async fn wait_ready(&self, test: &TestHandle) -> TestResult {
+        let url = format!("http://{}/version", self.address);
         eventually(test, Duration::from_secs(30), async |ctx| {
             match get(ctx, &url).await {
                 Ok((200, _)) => Ok(()),
-                Ok((status, _)) => Err(format!("GET /_ping = {status}: not yet")),
+                Ok((status, _)) => Err(format!("GET /version = {status}: not yet")),
                 Err(error) => Err(format!("{error}: not yet")),
             }
         })
@@ -464,7 +464,7 @@ impl SocketProxy {
         )
         .await
         .map_err(|error| test.fatal(format!("restart socket proxy: {error}")))?;
-        self.wait_ping(test).await
+        self.wait_ready(test).await
     }
 }
 
