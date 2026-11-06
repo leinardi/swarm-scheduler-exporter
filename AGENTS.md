@@ -97,8 +97,8 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v0.3.0"`) in `[workspace.dependencies]`, with
-`version = "0.3"`, the tag's `<major>.<minor>`: go-compat (the Go library ports), go-clock (the
+dependency pinned by commit (`rev = "..."`, while the upstream-stack work is in flight) in
+`[workspace.dependencies]`: go-compat (the Go library ports), clock (the
 `Clock` trait), go-slog (the logger), go-prom (the registry, the text exposition, the `process_*`
 collector and promhttp), go-http (the server), docker-engine (the Engine API client), service-kit
 (the runtime, the signals, the stamps), testenv-core (the harness's generic half) and repo-meta
@@ -107,9 +107,8 @@ collector and promhttp), go-http (the server), docker-engine (the Engine API cli
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
-  the `tag` on every rust-common line (and `version` when the tag's `<major>.<minor>` moves),
-  run `cargo fetch` (not `cargo update -p`), and check that `git diff Cargo.lock` touches only
-  the rust-common lines.
+  the `rev` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
+  `git diff Cargo.lock` touches only the rust-common lines.
 - The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
   otherwise:
   `ExpfmtVersion::V0_71_0` (prometheus/common v0.71.0's negotiation); go-http's `TIMEOUTS`
@@ -161,8 +160,8 @@ The ones to keep in mind while writing code:
   path.
 - **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `Zoned::now`,
   `SystemTime::now` and `std::time::Instant::now`; the time comes from the `Clock` trait, so tests
-  drive it with tokio's paused clock. The time comes only through `go_clock::Clock`; the one
-  wall-clock read is go-clock's `SystemClock`, in rust-common, so this repository has no
+  drive it with tokio's paused clock. The time comes only through `clock::Clock`; the one
+  wall-clock read is clock's `SystemClock`, in rust-common, so this repository has no
   `disallowed_methods` exemption.
 - **Health means published data.** The health snapshot is evaluated at scrape time; nothing marks
   health from the poller itself.

@@ -65,7 +65,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 
-use go_clock::{Clock as _, SystemClock};
+use clock::{Clock as _, SystemClock};
 use swarm_scheduler_exporter::version;
 
 use support::OrPanic as _;

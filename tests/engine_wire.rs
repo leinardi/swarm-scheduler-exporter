@@ -46,7 +46,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use go_clock::{Clock as _, SystemClock};
+use clock::{Clock as _, SystemClock};
 use go_prom::{Gathered, GatheredSeries, Registry, Value, text};
 use go_slog::{Config as LogConfig, Format, Level, Logger};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;

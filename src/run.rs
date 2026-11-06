@@ -51,7 +51,7 @@ use crate::docker::{self, Client, DockerApi};
 use crate::healthcheck::run_healthcheck;
 use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
-use go_clock::{Clock, SystemClock};
+use clock::{Clock, SystemClock};
 use go_prom::ExpfmtVersion;
 use go_prom::exposition::render;
 use go_prom::process::ProcessCollector;

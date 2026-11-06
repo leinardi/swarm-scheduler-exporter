@@ -177,7 +177,7 @@ code that is not a whole step.
 ### The clock is injected
 
 `clippy.toml` bans `Timestamp::now`, `Zoned::now`, `SystemTime::now` and
-`std::time::Instant::now`; the time comes only through `go_clock::Clock`, whose one wall-clock
+`std::time::Instant::now`; the time comes only through `clock::Clock`, whose one wall-clock
 read (`SystemClock`) lives in rust-common, so this repository has no exemption. Any
 `#[expect(clippy::disallowed_methods)]` here, a ban entry removed, or a
 time read that bypasses the `Clock` (a timestamp gauge, a staleness check) is a finding: the

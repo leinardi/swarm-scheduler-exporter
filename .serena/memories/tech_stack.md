@@ -8,7 +8,7 @@
 - Libraries: tokio, hyper + hyper-util (healthcheck client), clap, jiff, serde. From
   leinardi/rust-common (git, pinned by the release tag `v0.3.0`, `version = "0.3"`):
   docker-engine (Docker client, rustls with ring), go-http (HTTP server), go-prom (registry, text
-  encoder), go-slog (logger), go-compat (Go library ports), go-clock, service-kit, testenv-core,
+  encoder), go-slog (logger), go-compat (Go library ports), clock, service-kit, testenv-core,
   repo-meta.
 - Lint and audit: clippy (workspace lints), rustfmt, cargo-machete, cargo-deny (`deny.toml`).
 - Build/infra: Makefile + `.mk/*.mk`; make-common snippets (`.mk/{docker,help,password,

@@ -7,7 +7,7 @@ allow-expect-in-tests = true
 doc-valid-idents = ["OpenMetrics", "ShellCheck", ".."]
 
 # The exporter reads the wall clock through the injected Clock, so the tests can drive it with
-# tokio's paused clock. The one direct read is go_clock::SystemClock, in rust-common, outside
+# tokio's paused clock. The one direct read is clock::SystemClock, in rust-common, outside
 # this lint's reach, so the exporter itself has no exemption. tokio::time::Instant::now stays
 # allowed: it follows the paused clock.
 disallowed-methods = [

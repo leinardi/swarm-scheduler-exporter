@@ -54,7 +54,7 @@ use crate::docker::{
     DOCKER_REQUEST_TIMEOUT, Error, EventStream, Filters, StreamError, StreamErrorKind,
 };
 use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
-use go_clock::FakeClock;
+use clock::FakeClock;
 use go_slog::{Level, MemorySink};
 
 mod listener;

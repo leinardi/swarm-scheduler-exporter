@@ -31,7 +31,7 @@ use std::num::IntErrorKind;
 use std::sync::Arc;
 
 use bollard::Docker;
-use go_clock::SystemClock;
+use clock::SystemClock;
 use go_compat::local_zone::local_zone;
 use go_compat::quote::quote;
 use jiff::Timestamp;

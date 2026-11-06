@@ -36,7 +36,7 @@ use std::io::{self, Write as _};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use go_clock::Clock;
+use clock::Clock;
 use go_http::{Drained, ListenError, Mux, Reply, Served, Server, TEXT_PLAIN, Timeouts};
 use go_prom::exposition::Exposition;
 use go_slog::{Attr, Logger};

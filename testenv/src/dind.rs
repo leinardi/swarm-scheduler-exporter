@@ -40,8 +40,8 @@ use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListNodesOptions,
     StartContainerOptions,
 };
+use clock::{Clock as _, SystemClock};
 use futures_util::StreamExt as _;
-use go_clock::{Clock as _, SystemClock};
 use go_compat::duration;
 use go_slog::Attr;
 use jiff::Timestamp;

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use go_clock::Clock;
+use clock::Clock;
 use go_prom::{Collector, GaugeFunc, GaugeVec, Kind};
 use go_prom::{RegisterError, Registry, constant_desc};
 

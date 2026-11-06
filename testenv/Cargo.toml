@@ -14,13 +14,15 @@ workspace = true
 
 # integration is Go's integration build tag: it compiles the modules that talk to a Docker daemon
 # (the cluster, its bring-up and teardown, the images) and the suite, and testenv-core's context,
-# testing, redacting logger and host sweep (its bollard feature implies async and redact). Without
+# testing, redacting logger and host sweep (its bollard feature implies async and redact;
+# redact-go-slog, which the old go-slog RedactingLogger needs, is explicit). Without
 # it, only the /metrics text reader builds, and its tests run in a plain cargo test.
 [features]
 integration = [
     "testenv-core/async",
     "testenv-core/bollard",
     "testenv-core/redact",
+    "testenv-core/redact-go-slog",
     "dep:bollard",
     "dep:futures-util",
     "dep:tempfile",
@@ -36,7 +38,7 @@ integration = [
 # Go's quoting, float and duration formatting and the local zone, as the exporter writes them.
 go-compat.workspace = true
 # The wall clock the harness and its logs read.
-go-clock.workspace = true
+clock.workspace = true
 # The exporter's logger, for the harness's own records.
 go-slog.workspace = true
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }

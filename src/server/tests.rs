@@ -36,7 +36,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use super::*;
 use crate::test_support::capture_logs;
-use go_clock::FakeClock;
+use clock::FakeClock;
 use go_compat::errno::io_error_text;
 use go_http::{ConnState, TimedIo};
 use go_prom::exposition;

@@ -50,7 +50,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::docker::types::{Event, Node, Service};
 use crate::docker::{DockerApi, with_docker_timeout};
-use go_clock::Clock;
+use clock::Clock;
 use go_slog::{Attr, Logger};
 
 use super::desired::{ReplicaGauges, labels_for_metadata, replica_counts};

@@ -29,8 +29,8 @@ use std::time::Duration;
 
 use bollard::models::EventMessageTypeEnum;
 use bollard::query_parameters::{EventsOptions, InspectServiceOptions};
+use clock::{Clock as _, SystemClock};
 use futures_util::StreamExt as _;
-use go_clock::{Clock as _, SystemClock};
 use testenv::Node;
 use testenv::metrics_text::labels;
 use testenv_core::context::Context;

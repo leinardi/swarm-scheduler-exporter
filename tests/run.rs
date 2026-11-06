@@ -37,7 +37,7 @@ use jiff::tz::TimeZone;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use go_clock::{Clock, SystemClock};
+use clock::{Clock, SystemClock};
 use go_prom::promhttp::HandlerMetrics;
 use go_prom::{Registry, Value};
 use go_slog::{Config, Format, Level, Logger};

@@ -398,7 +398,7 @@ async fn the_probe_reads_the_exporter_s_answer() {
             content_encoding: None,
             body: Vec::new(),
         }),
-        Arc::new(go_clock::SystemClock),
+        Arc::new(clock::SystemClock),
         crate::test_support::capture_logs(go_slog::Level::INFO).0,
     );
     let cancel = tokio_util::sync::CancellationToken::new();
