@@ -312,9 +312,11 @@ fn build_stage() {
 }
 
 /// Go: `TestVersionIsStamped`. The version, commit and date the binary reports come from the
-/// build: the image's build stage (in the RUN that runs cargo zigbuild) and the make targets set
-/// the three variables src/version.rs reads at compile time, from the same build arguments and
-/// git values. A path that stamped nothing would ship a binary reporting "dev".
+/// build: the image's build stage (in the RUN that runs cargo zigbuild) and the make targets
+/// `rust-dist` and `rust-run` set the three variables src/version.rs reads at compile time, from
+/// the same build arguments and git values (`rust-build` builds unstamped, as the tests do:
+/// `RUST_BUILD_ENV :=` in the Makefile). A path that stamped nothing would ship a binary reporting
+/// "dev".
 #[test]
 fn version_is_stamped() {
     let problems = stamp_problems(&shipped(), &meta::repo().read("Makefile"));

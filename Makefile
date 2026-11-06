@@ -64,6 +64,17 @@ IMAGE_TAG    ?= $(GIT_VERSION)
 RUST_STAMP_PREFIX := SWARM_SCHEDULER_EXPORTER
 RUST_RUN_BIN      := swarm-scheduler-exporter
 
+# The date stamp is HEAD's commit date in UTC (rust.mk's GIT_COMMIT_DATE, the clock's only
+# outside git), the date release.yaml stamps. A stamp that moves only with a commit keeps a
+# repeated build a cache hit: a new date on every make would recompile the crate that reads it
+# each time.
+BUILD_DATE ?= $(or $(GIT_COMMIT_DATE),$(shell date -u +"%Y-%m-%dT%H:%M:%SZ"))
+
+# rust-build unstamped, as rust-test builds: the two share the swarm-scheduler-exporter crate's
+# units instead of each recompiling it after the other. rust-dist, rust-run and the image build
+# stay stamped.
+RUST_BUILD_ENV :=
+
 # Drop-in runtime defaults for rust-run and docker-run
 ARGS ?= --containers --log-level debug
 DOCKER_RUN_ARGS ?= --listen-addr 0.0.0.0:8888

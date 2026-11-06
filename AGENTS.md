@@ -15,9 +15,9 @@ is the user-facing story; the metrics it lists are the public contract.
 Build / test / lint use Make wrappers around `cargo`, workspace-wide and `--locked`:
 
 ```bash
-make verify               # rust-build (stamped), rust-fmt-check, rust-clippy, rust-test and rust-doc
+make verify               # rust-build (unstamped), rust-fmt-check, rust-clippy, rust-test and rust-doc
 make rust-doc             # cargo doc --workspace --all-features --no-deps --locked, warnings as errors
-make rust-build           # cargo build --workspace --all-targets --all-features, with the version stamps
+make rust-build           # cargo build --workspace --all-targets --all-features, unstamped (as rust-test)
 make rust-test            # cargo test --workspace: every test but the integration suite, meta-tests included
 make rust-clippy          # clippy over every target and feature, warnings as errors
 make rust-fmt             # cargo fmt --all (rust-fmt-check only checks)
@@ -97,8 +97,8 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v0.2.1"`) in `[workspace.dependencies]`, with
-`version = "0.2"`, the tag's `<major>.<minor>`: go-compat (the Go library ports), go-clock (the
+dependency pinned by the release tag (`tag = "v0.3.0"`) in `[workspace.dependencies]`, with
+`version = "0.3"`, the tag's `<major>.<minor>`: go-compat (the Go library ports), go-clock (the
 `Clock` trait), go-slog (the logger), go-prom (the registry, the text exposition, the `process_*`
 collector and promhttp), go-http (the server), docker-engine (the Engine API client), service-kit
 (the runtime, the signals, the stamps), testenv-core (the harness's generic half) and repo-meta
