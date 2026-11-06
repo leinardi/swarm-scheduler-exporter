@@ -31,8 +31,8 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use go_compat::duration;
-use testenv::context::Context;
 use testenv::metrics_text::{Labels, Scrape, format_series, format_value, labels};
+use testenv_core::context::Context;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::http::scrape_metrics;

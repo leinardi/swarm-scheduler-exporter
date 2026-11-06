@@ -30,7 +30,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use meta::{gitenv, repo};
+use meta::repo;
+use testenv_core::gitenv;
 
 const SCRIPT_PATH: &str = "scripts/check-license-headers.sh";
 

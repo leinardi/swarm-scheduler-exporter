@@ -42,8 +42,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rustix::process::{Pid, Signal, kill_process};
-use testenv::context::Context;
 use testenv::metrics_text::format_value;
+use testenv_core::context::Context;
 use tokio::io::{AsyncRead, AsyncReadExt as _};
 use tokio::process::Command;
 use tokio::sync::watch;

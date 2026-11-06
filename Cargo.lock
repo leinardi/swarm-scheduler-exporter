@@ -259,7 +259,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -775,6 +775,7 @@ dependencies = [
  "regex",
  "serde_yaml_ng",
  "tempfile",
+ "testenv-core",
  "toml",
 ]
 
@@ -924,7 +925,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1228,7 +1229,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1249,6 +1250,22 @@ dependencies = [
  "rustix",
  "serde_json",
  "tempfile",
+ "testenv-core",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "testenv-core"
+version = "0.1.0"
+source = "git+https://github.com/leinardi/rust-common?rev=5da82ad299ce541720fba968e8c4aa00eb24400f#5da82ad299ce541720fba968e8c4aa00eb24400f"
+dependencies = [
+ "bollard",
+ "go-compat",
+ "go-slog",
+ "jiff",
+ "regex",
+ "rustix",
  "tokio",
  "tokio-util",
 ]

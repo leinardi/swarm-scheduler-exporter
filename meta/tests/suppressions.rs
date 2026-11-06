@@ -33,7 +33,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use meta::{gitenv, repo};
+use meta::repo;
+use testenv_core::gitenv;
 
 /// The name the script looks for, relative to the repository it is run in.
 const BASELINE_FILE: &str = ".suppressions-baseline";

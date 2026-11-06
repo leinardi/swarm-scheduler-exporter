@@ -32,8 +32,8 @@ use bollard::query_parameters::{EventsOptions, InspectServiceOptions};
 use futures_util::StreamExt as _;
 use go_clock::{Clock as _, SystemClock};
 use testenv::Node;
-use testenv::context::Context;
 use testenv::metrics_text::labels;
+use testenv_core::context::Context;
 
 use crate::http::{get, scrape_metrics};
 use crate::launcher::Launch;

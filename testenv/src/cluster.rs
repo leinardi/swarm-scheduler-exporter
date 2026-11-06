@@ -28,15 +28,18 @@
 use std::collections::HashMap;
 use std::io;
 use std::num::IntErrorKind;
+use std::sync::Arc;
 
 use bollard::Docker;
+use go_clock::SystemClock;
+use go_compat::local_zone::local_zone;
 use go_compat::quote::quote;
 use jiff::Timestamp;
+use testenv_core::redact::RedactingLogger;
+use testenv_core::sweep_rules::Owner;
 
 use crate::Error;
-use crate::envid::{LABEL_ENV_ID, generate_env_id};
-use crate::redact::RedactingLogger;
-use crate::sweep_rules::{LABEL_OWNER, LABEL_PID_NAMESPACE, LABEL_STARTED, Owner};
+use crate::config::{ENV_IDS, LABELS};
 
 /// The absolute path of the exporter binary the tests run against the cluster.
 pub const ENV_BINARY: &str = "SSE_IT_BINARY";
@@ -52,10 +55,14 @@ const DEFAULT_WORKER_COUNT: usize = 2;
 /// The docker:dind image every node runs unless [`ENV_DIND_IMAGE`] says otherwise.
 pub(crate) const DEFAULT_DIND_IMAGE: &str = "docker:29.8.1-dind";
 
-/// The harness's log on stderr.
+/// The harness's log on stderr, with record times from the system clock in the local zone.
 #[must_use]
 pub fn new_logger() -> RedactingLogger {
-    RedactingLogger::new(Box::new(io::stderr()))
+    RedactingLogger::new(
+        Box::new(io::stderr()),
+        local_zone(|key| std::env::var(key).ok()),
+        Arc::new(SystemClock),
+    )
 }
 
 /// The Swarm role a node was given.
@@ -137,7 +144,7 @@ pub fn spec_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Spec, Er
     }
 
     Ok(Spec {
-        env_id: generate_env_id()?,
+        env_id: ENV_IDS.generate()?,
         binary: get(ENV_BINARY),
         dind_image,
         workers,
@@ -226,7 +233,7 @@ impl Cluster {
     /// cleanup select by, and the owner and start time the sweep of a later run decides by.
     #[must_use]
     pub fn labels(&self) -> HashMap<String, String> {
-        labels(&self.spec.env_id, &self.owner, self.started_at)
+        LABELS.run_labels(&self.spec.env_id, &self.owner, self.started_at)
     }
 
     /// The client of the host daemon the nodes run on, for a test that needs a helper container
@@ -236,22 +243,4 @@ impl Cluster {
     pub fn host_client(&self) -> &Docker {
         &self.host_client
     }
-}
-
-/// The labels of [`Cluster::labels`], before the cluster exists.
-pub(crate) fn labels(
-    env_id: &str,
-    owner: &Owner,
-    started_at: Timestamp,
-) -> HashMap<String, String> {
-    HashMap::from([
-        (LABEL_ENV_ID.to_owned(), env_id.to_owned()),
-        (LABEL_OWNER.to_owned(), owner.to_string()),
-        (
-            LABEL_STARTED.to_owned(),
-            started_at.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        ),
-        // Empty where /proc cannot be read: a label with no value, which no sweep matches.
-        (LABEL_PID_NAMESPACE.to_owned(), owner.pid_namespace.clone()),
-    ])
 }

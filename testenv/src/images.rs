@@ -31,14 +31,15 @@ use bollard::query_parameters::ImportImageOptions;
 use futures_util::StreamExt as _;
 use go_slog::Attr;
 use tempfile::TempPath;
+use testenv_core::context::Context;
+use testenv_core::host::{OP_TIMEOUT, OpError, with_timeout};
+use testenv_core::redact::RedactingLogger;
 use tokio::io::AsyncWriteExt as _;
 use tokio_util::io::ReaderStream;
 
 use crate::Error;
 use crate::cluster::Node;
-use crate::context::Context;
-use crate::dind::{IMAGE_TRANSFER_TIMEOUT, OP_TIMEOUT, OpError, ensure_host_image, with_timeout};
-use crate::redact::RedactingLogger;
+use crate::dind::{IMAGE_TRANSFER_TIMEOUT, ensure_host_image};
 
 /// The one image every test service runs. It is digest-pinned so every run loads the same
 /// bytes, and it is pulled only on the host: the nodes receive it through an image load and

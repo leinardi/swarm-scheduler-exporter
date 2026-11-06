@@ -26,8 +26,8 @@
 
 use std::time::Duration;
 
-use testenv::context::Context;
 use testenv::metrics_text::{format_sample, labels_include};
+use testenv_core::context::Context;
 
 use crate::http::scrape_metrics;
 use crate::launcher::Launch;

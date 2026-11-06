@@ -29,8 +29,8 @@
 //! - bollard, the SDK the test harness creates and removes things with, is declared only by
 //!   `testenv`, only in its `[dependencies]` and only as `optional = true` (behind the
 //!   `integration` feature);
-//! - the exporter package names neither bollard nor testenv in any dependency table, so neither
-//!   can reach the shipped binary;
+//! - the exporter package names neither bollard nor testenv nor testenv-core (whose `bollard`
+//!   feature brings bollard) in any dependency table, so none can reach the shipped binary;
 //! - nothing under `src/` names either;
 //! - the exporter's Docker client is rust-common's `docker-engine`, which sends `GET` only, plus
 //!   one `HEAD` in its ping, as long as neither `write` nor `attach` (its requests of any method)
@@ -51,6 +51,8 @@ use toml::{Table, Value};
 
 const SDK: &str = "bollard";
 const HARNESS: &str = "testenv";
+/// The harness's shared half (rust-common), whose `bollard` feature brings the SDK.
+const HARNESS_CORE: &str = "testenv-core";
 const HARNESS_MANIFEST: &str = "testenv/Cargo.toml";
 const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 /// The sanctioned Docker client, and the features that let it send requests of any method.
@@ -126,7 +128,7 @@ fn manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
             let place = format!("{path} [{}] {}", dependency.table, dependency.crate_name);
             if *path == "Cargo.toml"
                 && dependency.table != "workspace.dependencies"
-                && (dependency.crate_name == SDK || dependency.crate_name == HARNESS)
+                && [SDK, HARNESS, HARNESS_CORE].contains(&dependency.crate_name.as_str())
             {
                 violations.push(format!(
                     "{place}: the exporter package must not depend on {}",
@@ -226,7 +228,7 @@ fn client_manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
     violations
 }
 
-static SDK_OR_HARNESS: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(bollard|testenv)\b"));
+static SDK_OR_HARNESS: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(bollard|testenv(_core)?)\b"));
 
 /// Files under `src/` that name the SDK or the harness, in code or in a comment.
 fn source_violations(sources: &[(&str, &str)]) -> Vec<String> {
@@ -438,7 +440,6 @@ bollard = { version = "=0.21.1", optional = true }
 fn manifest_rules_reject_each_escape() {
     let clean = manifest_violations(&[("Cargo.toml", ROOT_OK), (HARNESS_MANIFEST, HARNESS_OK)]);
     assert!(clean.is_empty(), "{clean:?}");
-
     let cases: &[ManifestCase] = &[
         (
             "bollard in the exporter's dependencies",
@@ -516,6 +517,49 @@ fn manifest_rules_reject_each_escape() {
                 (HARNESS_MANIFEST, "[dependencies]\n"),
             ],
             "0 times",
+        ),
+    ];
+    for (name, manifests, want) in cases {
+        let violations = manifest_violations(manifests);
+        assert!(
+            violations.iter().any(|violation| violation.contains(want)),
+            "{name}: want a violation containing {want:?}, got {violations:?}"
+        );
+    }
+}
+
+/// Negative controls for testenv-core, whose `bollard` feature would bring the SDK into the
+/// exporter: the workspace entry and the harness's own use pass, the exporter's does not.
+#[test]
+fn manifest_rules_keep_testenv_core_out_of_the_exporter() {
+    let root = format!("{ROOT_OK}[workspace.dependencies]\ntestenv-core = {{ git = \"x\" }}\n");
+    let harness =
+        format!("{HARNESS_OK}testenv-core = {{ workspace = true, features = [\"bollard\"] }}\n");
+    let shared = manifest_violations(&[("Cargo.toml", &root), (HARNESS_MANIFEST, &harness)]);
+    assert!(shared.is_empty(), "{shared:?}");
+
+    let cases: &[ManifestCase] = &[
+        (
+            "testenv-core in the exporter's dependencies",
+            &[
+                (
+                    "Cargo.toml",
+                    "[dependencies]\ntestenv-core = { workspace = true, features = [\"bollard\"] }\n",
+                ),
+                (HARNESS_MANIFEST, HARNESS_OK),
+            ],
+            "must not depend on testenv-core",
+        ),
+        (
+            "testenv-core renamed in the exporter's dev-dependencies",
+            &[
+                (
+                    "Cargo.toml",
+                    "[dev-dependencies]\nharness = { package = \"testenv-core\", workspace = true }\n",
+                ),
+                (HARNESS_MANIFEST, HARNESS_OK),
+            ],
+            "must not depend on testenv-core",
         ),
     ];
     for (name, manifests, want) in cases {

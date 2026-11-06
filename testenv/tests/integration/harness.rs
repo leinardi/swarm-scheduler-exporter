@@ -31,16 +31,19 @@ use bollard::models::NodeState;
 use bollard::query_parameters::{
     InspectContainerOptions, ListContainersOptions, ListNetworksOptions, ListNodesOptions,
 };
-use testenv::context::Context;
-use testenv::envid::label_filter;
+use testenv::config::ENV_IDS;
 use testenv::{Cluster, NodeRole};
+use testenv_core::context::Context;
 
 use crate::swarm::op;
 use crate::testing::{TestHandle, TestResult, cluster};
 
 /// After `down`, the host has no container or network of the run left.
 pub async fn assert_nothing_left(ctx: &Context, cluster: &Cluster) -> Result<(), String> {
-    let filters = HashMap::from([("label".to_owned(), vec![label_filter(&cluster.spec.env_id)])]);
+    let filters = HashMap::from([(
+        "label".to_owned(),
+        vec![ENV_IDS.label_filter(&cluster.spec.env_id)],
+    )]);
     let host = cluster.host_client();
     let containers = timed(
         ctx,
@@ -172,7 +175,7 @@ async fn smoke_labels(ctx: &Context, cluster: &Cluster) -> Result<(), String> {
             all: true,
             filters: Some(HashMap::from([(
                 "label".to_owned(),
-                vec![label_filter(&cluster.spec.env_id)],
+                vec![ENV_IDS.label_filter(&cluster.spec.env_id)],
             )])),
             ..ListContainersOptions::default()
         })),

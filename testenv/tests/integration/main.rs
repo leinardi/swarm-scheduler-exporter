@@ -59,25 +59,26 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use futures_util::future::LocalBoxFuture;
-use go_compat::duration;
-use testenv::context::Context;
-use testenv::run_filter::RunFilter;
 use testenv::{ENV_BINARY, cleanup_command, spec_from_env, up};
-use tokio::signal::unix::{SignalKind, signal};
+use testenv_core::run_filter::RunFilter;
+use testenv_core::testing::{Runner, RunnerConfig, TallyStyle, Test, TimeoutRule};
 use tokio::time::Instant;
 
-use crate::testing::{Suite, TestResult, cluster, install, run_test, say, suite};
+use crate::testing::{Suite, cluster, install, suite};
 use crate::wait::go_duration;
 
-const ENV_SUITE_TIMEOUT: &str = "SSE_IT_SUITE_TIMEOUT";
-const DEFAULT_SUITE_TIMEOUT: Duration = Duration::from_mins(12);
-
-/// One top-level test, under its Go name.
-struct Test {
-    name: &'static str,
-    run: fn(testing::TestHandle) -> LocalBoxFuture<'static, TestResult>,
-}
+/// The runner's lines and exit codes, as Go's `TestMain` printed them: a negative
+/// `SSE_IT_SUITE_TIMEOUT` is clamped to zero, a test that starts after the deadline still runs
+/// (its waits fail on the dead context), and a skipped test counts as passed.
+const RUNNER: RunnerConfig = RunnerConfig {
+    prefix: "[it]",
+    usage: "usage: integration [--run <pattern>]",
+    timeout_env: "SSE_IT_SUITE_TIMEOUT",
+    default_timeout: Duration::from_mins(12),
+    timeout_rule: TimeoutRule::Clamped,
+    deadline_check: false,
+    tally: TallyStyle::PassedFailed,
+};
 
 /// Every test, in the order they run.
 const TESTS: &[Test] = &[
@@ -156,119 +157,40 @@ const TESTS: &[Test] = &[
 ];
 
 fn main() -> ExitCode {
+    let runner = Runner::new(RUNNER);
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let pattern = match run_pattern(&args) {
-        Ok(pattern) => pattern,
-        Err(message) => {
-            say(&format!(
-                "[it] {message}\nusage: integration [--run <pattern>]"
-            ));
-            return ExitCode::from(2);
-        }
-    };
-    let filter = match RunFilter::parse(&pattern) {
-        Ok(filter) => filter,
-        Err(error) => {
-            say(&format!("[it] {error}"));
-            return ExitCode::FAILURE;
-        }
-    };
-    let names: Vec<&str> = TESTS.iter().map(|test| test.name).collect();
-    let selected = match filter.select(&names) {
+    let (filter, tests) = match runner.select(&args, TESTS) {
         Ok(selected) => selected,
-        Err(error) => {
-            say(&format!("[it] {error}"));
-            return ExitCode::FAILURE;
-        }
+        Err(code) => return ExitCode::from(code),
     };
-    say(&format!(
-        "[it] selected {} of {} tests",
-        selected.len(),
-        names.len()
-    ));
-    let tests: Vec<&Test> = TESTS
-        .iter()
-        .filter(|test| selected.contains(&test.name))
-        .collect();
-
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match runner.runtime() {
         Ok(runtime) => runtime,
-        Err(error) => {
-            say(&format!("[it] runtime: {error}"));
-            return ExitCode::FAILURE;
-        }
+        Err(code) => return ExitCode::from(code),
     };
-    runtime.block_on(run_suite(filter, &tests))
+    runtime.block_on(run_suite(&runner, filter, &tests))
 }
 
-/// The `--run` value: `--run <pattern>` or `--run=<pattern>`, the last one winning as Go's flag
-/// package lets it.
-fn run_pattern(args: &[String]) -> Result<String, String> {
-    let mut pattern = String::new();
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
-        if let Some(value) = arg.strip_prefix("--run=") {
-            value.clone_into(&mut pattern);
-        } else if arg == "--run" {
-            rest.next()
-                .ok_or_else(|| "flag needs an argument: --run".to_owned())?
-                .clone_into(&mut pattern);
-        } else {
-            return Err(format!("unknown argument {arg:?}"));
-        }
-    }
-    Ok(pattern)
-}
-
-/// The suite context: ends at the deadline, or on SIGINT or SIGTERM, so the waits return and
-/// teardown runs instead of the process being killed mid-test.
-fn suite_context() -> Result<Context, String> {
-    let raw = std::env::var(ENV_SUITE_TIMEOUT).unwrap_or_default();
-    let timeout = if raw.is_empty() {
-        DEFAULT_SUITE_TIMEOUT
-    } else {
-        let nanos =
-            duration::parse(&raw).map_err(|error| format!("parse {ENV_SUITE_TIMEOUT}: {error}"))?;
-        Duration::from_nanos(nanos.max(0).unsigned_abs())
-    };
-    let ctx = Context::background().with_timeout(timeout);
-    let mut interrupt =
-        signal(SignalKind::interrupt()).map_err(|error| format!("watch SIGINT: {error}"))?;
-    let mut terminate =
-        signal(SignalKind::terminate()).map_err(|error| format!("watch SIGTERM: {error}"))?;
-    let cancel = ctx.clone();
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-        cancel.cancel();
-    });
-    Ok(ctx)
-}
-
-async fn run_suite(filter: RunFilter, tests: &[&Test]) -> ExitCode {
-    let ctx = match suite_context() {
+async fn run_suite(runner: &Runner, filter: RunFilter, tests: &[&Test]) -> ExitCode {
+    // The suite context: ends at the deadline, or on SIGINT or SIGTERM, so the waits return and
+    // teardown runs instead of the process being killed mid-test.
+    let ctx = match runner
+        .suite_timeout(|key| std::env::var(key).ok())
+        .and_then(|timeout| runner.suite_context(timeout))
+    {
         Ok(ctx) => ctx,
-        Err(message) => {
-            say(&format!("[it] {message}"));
-            return ExitCode::FAILURE;
-        }
+        Err(code) => return ExitCode::from(code),
     };
     let spec = match spec_from_env(|key| std::env::var(key).ok()) {
         Ok(spec) => spec,
         Err(error) => {
-            say(&format!("[it] spec from env: {error}"));
+            runner.say(&format!("spec from env: {error}"));
             return ExitCode::FAILURE;
         }
     };
     let binary = PathBuf::from(&spec.binary);
     if spec.binary.is_empty() || !binary.exists() {
-        say(&format!(
-            "[it] {ENV_BINARY} must name the built exporter binary (make test-integration \
+        runner.say(&format!(
+            "{ENV_BINARY} must name the built exporter binary (make test-integration \
              sets it): {:?}",
             spec.binary
         ));
@@ -281,12 +203,12 @@ async fn run_suite(filter: RunFilter, tests: &[&Test]) -> ExitCode {
     let up_cluster = match up(&ctx, spec).await {
         Ok(cluster) => cluster,
         Err(error) => {
-            say(&format!("[it] cluster up: {error}"));
+            runner.say(&format!("cluster up: {error}"));
             return ExitCode::FAILURE;
         }
     };
-    say(&format!(
-        "[it] cluster {env_id} up in {} ({} nodes)",
+    runner.say(&format!(
+        "cluster {env_id} up in {} ({} nodes)",
         go_duration(Duration::from_millis(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
         )),
@@ -295,7 +217,7 @@ async fn run_suite(filter: RunFilter, tests: &[&Test]) -> ExitCode {
     let swarm = match up_cluster.manager.client() {
         Ok(client) => client,
         Err(error) => {
-            say(&format!("[it] manager client: {error}"));
+            runner.say(&format!("manager client: {error}"));
             return ExitCode::FAILURE;
         }
     };
@@ -303,25 +225,14 @@ async fn run_suite(filter: RunFilter, tests: &[&Test]) -> ExitCode {
         cluster: up_cluster,
         swarm,
         exporter_binary: binary,
-        filter,
         ctx: ctx.clone(),
     });
 
-    let mut failed = 0_usize;
-    for test in tests {
-        if !run_test(test.name, &suite().ctx, test.run).await {
-            failed += 1;
-        }
-    }
-    say(&format!(
-        "[it] {} selected, {} passed, {failed} failed",
-        tests.len(),
-        tests.len() - failed
-    ));
+    let failed = runner.run_tests(tests, &suite().ctx, &filter).await.failed;
 
     if failed > 0 && keep_on_failure {
-        say(&format!(
-            "[it] tests failed; keeping cluster {env_id} (manager {}). Clean up with:\n  {}",
+        runner.say(&format!(
+            "tests failed; keeping cluster {env_id} (manager {}). Clean up with:\n  {}",
             cluster().manager.docker_host,
             cleanup_command(&env_id)
         ));
@@ -335,15 +246,13 @@ async fn run_suite(filter: RunFilter, tests: &[&Test]) -> ExitCode {
         ExitCode::SUCCESS
     };
     if let Err(error) = cluster().down(&teardown).await {
-        say(&format!(
-            "[it] cluster down: {error}\nClean up with:\n  {}",
+        runner.say(&format!(
+            "cluster down: {error}\nClean up with:\n  {}",
             cleanup_command(&env_id)
         ));
         code = ExitCode::FAILURE;
     } else if let Err(message) = harness::assert_nothing_left(&teardown, cluster()).await {
-        say(&format!(
-            "[it] cluster down left resources behind: {message}"
-        ));
+        runner.say(&format!("cluster down left resources behind: {message}"));
         code = ExitCode::FAILURE;
     }
     code

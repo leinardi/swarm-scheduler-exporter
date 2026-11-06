@@ -43,8 +43,8 @@ use futures_util::StreamExt as _;
 use hyper::Method;
 use regex::Regex;
 use serde_json::Value;
-use testenv::context::Context;
-use testenv::envid::resource_name;
+use testenv::config::ENV_IDS;
+use testenv_core::context::Context;
 
 use crate::http::{get, request, scrape_metrics};
 use crate::launcher::{Launch, free_port, local_addr};
@@ -377,7 +377,7 @@ impl SocketProxy {
             ..ContainerCreateBody::default()
         };
         let options = CreateContainerOptions {
-            name: Some(resource_name(&cluster().spec.env_id, "socket-proxy")),
+            name: Some(ENV_IDS.resource_name(&cluster().spec.env_id, "socket-proxy")),
             ..CreateContainerOptions::default()
         };
         let created = op(ctx, host.create_container(Some(options), body))
