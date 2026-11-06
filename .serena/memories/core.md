@@ -12,7 +12,7 @@ The README "Migrating" section lists the intended differences from 1.x (Go) and 
 
 ## Source map
 
-- Shared code is rust-common's (git dependency pinned by `rev`): clock,
+- Shared code is rust-common's (git dependency pinned by tag `v0.4.0`): clock,
   tracing-setup, docker-client, service-kit, testenv-core,
   repo-meta. A per-project difference is a parameter there, never a fork here; fixes land in
   rust-common first.
