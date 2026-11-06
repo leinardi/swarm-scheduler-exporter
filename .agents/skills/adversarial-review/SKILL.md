@@ -229,10 +229,10 @@ string that no longer matches the code is a finding.
 
 ### Endpoint and image hardening
 
-- The HTTP server keeps its four deadlines (`server::TIMEOUTS` in `src/server.rs`: read header
-  5s, read 10s, write 15s, idle 60s), enforced per connection by go-http's I/O wrapper (`TimedIo`),
-  because hyper's own header timeout also closes idle keep-alive connections. Removing one, or
-  serving a connection outside the wrapper, is a finding.
+- The HTTP server keeps its two deadlines (`server::HEADER_READ_TIMEOUT` 5s and
+  `server::WRITE_STALL_TIMEOUT` 15s in `src/server.rs`), enforced per connection by service-kit's
+  server, and a drain bounded by the shared shutdown deadline. Removing one, or serving a
+  connection outside `service_kit::http::serve`, is a finding.
 - `/metrics` and `/healthz` take no input that becomes work: no query parameter, header or
   body may trigger a Docker call, widen a scrape, or allocate per request beyond the
   exposition itself.

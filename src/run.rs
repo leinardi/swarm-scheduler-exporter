@@ -51,7 +51,7 @@ use crate::collector::types::CustomLabels;
 use crate::docker::{self, Client, DockerApi};
 use crate::healthcheck::run_healthcheck;
 use crate::metrics;
-use crate::server::{self, App, Exposition, HealthFn, MetricsFn, MetricsRequest};
+use crate::server::{self, Exposition, HealthFn, MetricsFn};
 use crate::version::{COMMIT, DATE, VERSION};
 use clock::{Clock, SystemClock};
 use prometheus_client::registry::Registry;
@@ -285,19 +285,17 @@ impl<D: DockerApi> Poller<D> {
 }
 
 /// The endpoints Go's `server.NewMuxWithHealth` serves: `/healthz` from `health`, and
-/// `/metrics` from `registry` as OpenMetrics text, with `Date` from `clock` and the server's
-/// errors through the log.
-#[must_use]
-pub fn app(health: Health, registry: Arc<Registry>, clock: Arc<dyn Clock>) -> App {
+/// `/metrics` from `registry` as OpenMetrics text; anything else is a 404.
+pub fn app(health: Health, registry: Arc<Registry>) -> axum::Router {
     let health: HealthFn = Box::new(move || {
         let (healthy, reason) = health.snapshot_now();
         (healthy, reason.to_owned())
     });
-    let metrics: MetricsFn = Box::new(move |_: &MetricsRequest| Exposition {
+    let metrics: MetricsFn = Box::new(move || Exposition {
         content_type: metrics::CONTENT_TYPE.to_owned(),
         body: metrics::render(&registry).into_bytes(),
     });
-    App::new(health, metrics, clock)
+    server::router(health, metrics)
 }
 
 /// Writes `text` to stdout or stderr, as Go's `fmt.Fprint` does, ignoring a write error.
@@ -421,7 +419,7 @@ where
     let workers = start_workers(&root, docker, &metrics, poll_delay, &clock);
 
     register_runtime_metrics(&mut registry);
-    let app = Arc::new(app(metrics.health.clone(), Arc::new(registry), clock));
+    let app = app(metrics.health.clone(), Arc::new(registry));
     let deadline: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
     let code = server::serve_until_done(&root, workers.join(), &args.listen_addr, app, {
         let deadline = Arc::clone(&deadline);

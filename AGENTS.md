@@ -74,8 +74,9 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
     types and the timeouts its callers put around them.
   - `src/collector/` — the collectors and the reconciler (`reconciler/`), which is the one owner of
     the service and node caches and of every gauge derived from them.
-  - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` on go-http, with the exporter's
-    `TIMEOUTS`, listen-error prefix and log callback.
+  - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` as an axum router on service-kit's
+    HTTP server, with the exporter's timeouts, the listen-error prefix, the bind and the shared
+    drain deadline.
   - `src/labels.rs` — sanitizing and validating custom label keys; `src/version.rs` — the build
     stamps (`service_kit::buildinfo!`).
   - `tests/` — the black-box tests: the Engine API wire captures (`engine_wire.rs`, against
@@ -105,9 +106,9 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
 dependency pinned by commit (`rev = "..."`, while the upstream-stack work is in flight) in
 `[workspace.dependencies]`: go-compat (the Go library ports), clock (the `Clock` trait),
-tracing-setup (the logger's subscriber; the code logs with `tracing` macros), go-http (the
-server), docker-engine (the Engine API client), service-kit (the runtime, the signals, the stamps,
-the `process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
+tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-engine (the
+Engine API client), service-kit (the runtime, the signals, the stamps, the HTTP server, the
+`process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
 meta-tests' checks). The exporter keeps only what is its own.
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
@@ -118,8 +119,8 @@ meta-tests' checks). The exporter keeps only what is its own.
 - The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
   otherwise:
   the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
-  `process-metrics`; Q2); go-http's `TIMEOUTS`
-  (read header 5s, read 10s, write 15s, idle 60s) and the `http listen:` prefix;
+  `process-metrics`; Q2); the server's header-read (5s) and write-stall (15s) timeouts and the
+  `http listen:` prefix (Q13);
   docker-engine's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
   response-header timeout (`RESPONSE_HEADER_TIMEOUT`); the log flags (Q4:
   `--log-format` text|json, `--log-level` debug|info|warn|error, an unknown value refused by clap),

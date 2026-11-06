@@ -21,7 +21,6 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 clock = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 go-compat = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
-go-http = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 go-slog = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
 service-kit = { git = "https://github.com/leinardi/rust-common", rev = "16ea3044310039235b50846d4ddc58e355f8120c" }
@@ -96,10 +95,10 @@ docker-engine = { workspace = true, features = ["tcp", "tls"] }
 # The build stamps (buildinfo!), the runtime main builds, its shutdown bounded by the shutdown
 # budget (run_until_exit), the lazy SIGINT and SIGTERM watch, and the `process_*` collector
 # (`process-metrics`, rust-common).
-service-kit = { workspace = true, features = ["runtime", "process-metrics"] }
-# Go's net/http server on hyper (rust-common): the mux's answers, header order and framing, the
-# four server deadlines, net.Listen's bind and the drain.
-go-http.workspace = true
+service-kit = { workspace = true, features = ["runtime", "process-metrics", "http"] }
+# The HTTP/1 server on hyper (`http`, rust-common): the header-read and write-stall timeouts and
+# the tracked drain; the routes are axum's.
+axum = { version = "0.8.9", default-features = false }
 # Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
 # the way Go does (go-compat), so none of jiff's tzdb or system features is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
@@ -125,7 +124,7 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # CancellationToken, Go's context cancellation for the long-lived tasks.
 tokio-util = { version = "0.7.20", default-features = false }
-# The metrics and health endpoints' status and header types (their server is go-http's). The
+# The metrics and health endpoints' status and header types (their server is service-kit's). The
 # healthcheck (S3): hyper-util's legacy client, which reads no proxy variable and follows no
 # redirect.
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
@@ -142,8 +141,6 @@ serde = { version = "1.0.229", features = ["derive"] }
 [dev-dependencies]
 # The fake engine core, its request recorder and OrPanic, for the Docker tests.
 docker-engine = { workspace = true, features = ["tcp", "tls", "test-util"] }
-# The Go wire captures' replay (read_captures, replay, exchange).
-go-http = { workspace = true, features = ["testing"] }
 # The paused clock (start_paused) needs the test runtime.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",

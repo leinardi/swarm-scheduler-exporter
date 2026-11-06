@@ -38,6 +38,7 @@ use tokio_util::sync::CancellationToken;
 
 use clock::{Clock, SystemClock};
 use prometheus_client::registry::Registry;
+use service_kit::http::Lifecycle;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
@@ -47,7 +48,7 @@ use swarm_scheduler_exporter::docker::{DockerApi, Error, EventStream, Filters, S
 use swarm_scheduler_exporter::run::{
     Metrics, MetricsOptions, SHUTDOWN_BUDGET, Workers, app, register_metrics, start_workers,
 };
-use swarm_scheduler_exporter::server::{self, TIMEOUTS};
+use swarm_scheduler_exporter::server;
 
 /// How long a lifecycle test waits for what it expects, as Go's `waitUntil` and `waitWorkers`.
 const WAIT: Duration = Duration::from_secs(5);
@@ -219,15 +220,20 @@ async fn serve_endpoints(
     let addr = listener
         .local_addr()
         .unwrap_or_else(|error| panic!("local address: {error}"));
-    let app = Arc::new(app(metrics.health.clone(), Arc::clone(registry), clock()));
-    let shutdown = cancel.clone().cancelled_owned();
-    tokio::spawn(server::serve(
-        listener,
-        app,
-        TIMEOUTS,
-        shutdown,
-        Instant::now,
-    ));
+    let router = app(metrics.health.clone(), Arc::clone(registry));
+    let lifecycle = Lifecycle::new();
+    let cancel = cancel.clone();
+    tokio::spawn(async move {
+        let serving = server::serve(listener, router, &lifecycle, Duration::from_secs(1));
+        tokio::pin!(serving);
+        tokio::select! {
+            _ = &mut serving => {}
+            () = cancel.cancelled() => {
+                lifecycle.stop();
+                serving.await;
+            }
+        }
+    });
     addr
 }
 
