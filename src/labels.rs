@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::{LazyLock, Mutex, PoisonError};
 
-use crate::logger::{self, Attr};
+use go_slog::Attr;
 
 /// A reasonable upper bound on a sanitized name's length; Prometheus has no hard limit.
 const MAX_LABEL_NAME_LEN: usize = 100;
@@ -166,7 +166,7 @@ fn emit_warning(warning: &HighCardinalityWarning) {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(warning.clone());
-    logger::global().warn(
+    go_slog::global().warn(
         HIGH_CARDINALITY_MESSAGE,
         &[
             Attr::string("label", &warning.label),
@@ -582,16 +582,17 @@ mod tests {
     /// The warning reaches the global logger at warn level, with Go's message and attributes.
     #[test]
     fn high_cardinality_warning_is_logged_at_warn() {
-        let sink = logger::MemorySink::default();
-        logger::set_global(logger::Logger::new(
-            logger::Config {
-                format: logger::Format::Text,
-                level: logger::Level::INFO,
+        let sink = go_slog::MemorySink::default();
+        go_slog::set_global(go_slog::Logger::new(
+            go_slog::Config {
+                format: go_slog::Format::Text,
+                level: go_slog::Level::INFO,
                 include_time: false,
+                plain_style: go_slog::PlainStyle::Quoted,
             },
             Box::new(sink.clone()),
             jiff::tz::TimeZone::UTC,
-            std::sync::Arc::new(crate::go_compat::time_layout::go_zero_time),
+            std::sync::Arc::new(go_compat::time_layout::go_zero_time),
         ));
         maybe_warn_high_cardinality("logged_key", "aabbccddeeff0011");
         let line = "level=WARN msg=\"label appears high-cardinality; consider avoiding IDs/hashes as \

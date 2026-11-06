@@ -38,11 +38,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::docker::types::{Node, Placement, Task};
 use crate::docker::{DockerApi, with_docker_timeout};
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
-use crate::logger::{Attr, Logger};
-use crate::metrics::{
+use go_prom::{
     BuildError, Collector, Desc, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotCollector,
     constant_desc,
 };
+use go_slog::{Attr, Logger};
 
 use super::desired::{node_eligible, placement_from_metadata};
 use super::error::CallError;

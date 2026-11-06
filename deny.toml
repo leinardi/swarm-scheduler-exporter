@@ -32,8 +32,8 @@ allow = [
     # unicode-ident, (MIT OR Apache-2.0) AND Unicode-3.0: through proc-macro2 under clap_derive
     # in the exporter's own graph, and under meta's toml dev-dependency.
     "Unicode-3.0",
-    # ring (Apache-2.0 AND ISC), under rustls and tokio-rustls for the Docker TLS (and rcgen in
-    # the tests).
+    # ring (Apache-2.0 AND ISC), under rustls and tokio-rustls for the Docker TLS (docker-engine's
+    # `tls`).
     "Apache-2.0",
     # ring, rustls-webpki and untrusted.
     "ISC",
@@ -51,3 +51,5 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The shared crates (Cargo.toml [workspace.dependencies]), pinned by rev or tag.
+allow-git = ["https://github.com/leinardi/rust-common"]

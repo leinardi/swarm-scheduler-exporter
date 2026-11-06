@@ -28,8 +28,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::go_compat::float::from_int;
-use crate::metrics::{
+use go_compat::float::from_int;
+use go_prom::{
     Collector, Counter, CounterVec, DEF_BUCKETS, GaugeFunc, Histogram, Kind, RegisterError,
     Registry, constant_desc,
 };

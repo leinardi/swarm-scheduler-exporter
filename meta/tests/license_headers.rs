@@ -22,17 +22,12 @@
  * SOFTWARE.
  */
 
-//! Drives scripts/check-license-headers.sh: on this repository, and on scratch repositories that
-//! hold each kind of file it must reject or let through.
+//! Drives scripts/check-license-headers.sh through `repo_meta::scratch::HeaderHarness`: on this
+//! repository, and on scratch repositories that hold each kind of file it must reject or let
+//! through. Each set of cases holds one the checker must accept and one it must reject.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::process::{Command, Output};
-
-use meta::{gitenv, repo};
-
-const SCRIPT_PATH: &str = "scripts/check-license-headers.sh";
+use repo_meta::report;
+use repo_meta::scratch::{HeaderCase, HeaderHarness};
 
 /// A Rust file carrying the lines the check looks for; the last one is its eighth line.
 const RUST_HEADER: &str = r#"/*
@@ -72,10 +67,6 @@ echo ok
 
 const MAKEFILE: &str = "MK_COMMON_FILES       := docker.mk help.mk rust.mk\n";
 
-/// Scratch files under this prefix are written but never added: the check reads tracked files
-/// only.
-const UNTRACKED_PREFIX: &str = "untracked/";
-
 /// The hash-comment header without the shebang, as a Makefile or a Dockerfile carries it.
 fn hash_header() -> &'static str {
     SHELL_HEADER
@@ -83,110 +74,36 @@ fn hash_header() -> &'static str {
         .unwrap_or(SHELL_HEADER)
 }
 
-fn run_git(directory: &Path, args: &[&str]) {
-    let output = gitenv::isolate(Command::new("git").args(args).current_dir(directory))
-        .output()
-        .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+/// The Makefile every scratch repository holds unless a case brings its own: the checker reads the
+/// make-common files from its `MK_COMMON_FILES`.
+fn makefile() -> String {
+    format!("{}{MAKEFILE}", hash_header())
 }
 
-/// A git repository holding the checker, a Makefile (unless the case brings its own) and `files`,
-/// every one of them added except those under [`UNTRACKED_PREFIX`].
-fn scratch_repo(files: &[(&str, String)]) -> tempfile::TempDir {
-    let scratch = tempfile::tempdir().unwrap_or_else(|error| panic!("scratch directory: {error}"));
-    let directory = scratch.path();
-    let mut files = files.to_vec();
-    files.push((SCRIPT_PATH, repo::read(SCRIPT_PATH)));
-    if !files.iter().any(|(name, _)| *name == "Makefile") {
-        files.push(("Makefile", format!("{}{MAKEFILE}", hash_header())));
-    }
-
-    for (name, content) in &files {
-        let path = directory.join(name);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .unwrap_or_else(|error| panic!("create the directory of {name}: {error}"));
-        }
-        fs::write(&path, content).unwrap_or_else(|error| panic!("write {name}: {error}"));
-    }
-    fs::set_permissions(
-        directory.join(SCRIPT_PATH),
-        fs::Permissions::from_mode(0o700),
-    )
-    .unwrap_or_else(|error| panic!("make the checker executable: {error}"));
-
-    run_git(directory, &["init", "--quiet"]);
-    for (name, _) in &files {
-        if !name.starts_with(UNTRACKED_PREFIX) {
-            run_git(directory, &["add", "--", name]);
-        }
-    }
-    scratch
+/// Runs `check` with the harness: the checker at its path, the Makefile as a base file, and
+/// scratch files under `untracked/` written but never added, since the checker reads tracked
+/// files only.
+fn with_harness<T>(check: impl FnOnce(&HeaderHarness<'_>) -> T) -> T {
+    let makefile = makefile();
+    let base_files = [("Makefile", makefile.as_str())];
+    check(&HeaderHarness {
+        script: "scripts/check-license-headers.sh",
+        base_files: &base_files,
+        untracked_prefix: "untracked/",
+    })
 }
 
-/// Runs the checker kept at [`SCRIPT_PATH`] inside the repository at `directory`.
-fn run_checker(directory: &Path) -> Output {
-    gitenv::isolate(Command::new(directory.join(SCRIPT_PATH)).current_dir(directory))
-        .output()
-        .unwrap_or_else(|error| panic!("run the checker: {error}"))
+fn run_cases(cases: &[HeaderCase]) {
+    let problems = with_harness(|harness| harness.run_cases(&meta::repo(), cases));
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestRepositoryHeaders`. The repository passes its own check. Run with the repository's
 /// own git environment: under the commit hook it names the index being committed.
 #[test]
 fn repository_headers() {
-    let output = Command::new(repo::path(SCRIPT_PATH))
-        .current_dir(repo::root())
-        .output()
-        .expect("run the checker");
-    assert!(
-        output.status.success(),
-        "the repository fails its own license header check:\n{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// One scratch repository: its files, and whether the checker must accept it.
-struct HeaderCase {
-    name: &'static str,
-    files: Vec<(&'static str, String)>,
-    pass: bool,
-}
-
-fn case(name: &'static str, files: &[(&'static str, &str)], pass: bool) -> HeaderCase {
-    HeaderCase {
-        name,
-        files: files
-            .iter()
-            .map(|(path, content)| (*path, (*content).to_owned()))
-            .collect(),
-        pass,
-    }
-}
-
-fn run_cases(cases: Vec<HeaderCase>) {
-    let mut failures = Vec::new();
-    for HeaderCase { name, files, pass } in cases {
-        let scratch = scratch_repo(&files);
-        let output = run_checker(scratch.path());
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if pass && !output.status.success() {
-            failures.push(format!("{name}: rejected, want accepted:\n{text}"));
-        }
-        if !pass && output.status.success() {
-            failures.push(format!("{name}: accepted, want rejected:\n{text}"));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let problems = with_harness(|harness| harness.check_repository(&meta::repo()));
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestHeaderCases`, the notice on Rust files: present, missing, another licence, another
@@ -198,40 +115,40 @@ fn header_cases_for_the_notice() {
     let other_holder = RUST_HEADER.replace("Roberto Leinardi", "Someone Else");
     let at_the_edge = format!("{}{RUST_HEADER}", "// filler\n".repeat(22));
     let past_the_edge = format!("{}{RUST_HEADER}", "// filler\n".repeat(23));
-    run_cases(vec![
-        case(
+    run_cases(&[
+        HeaderCase::new(
             "rust file with the header",
             &[("src/x.rs", RUST_HEADER)],
             true,
         ),
-        case(
+        HeaderCase::new(
             "rust file without a header",
             &[("src/x.rs", "fn x() {}\n")],
             false,
         ),
-        case(
+        HeaderCase::new(
             "another licence's header",
             &[("src/x.rs", APACHE_HEADER)],
             false,
         ),
-        case(
+        HeaderCase::new(
             "another copyright holder",
-            &[("meta/src/x.rs", &other_holder)],
+            &[("meta/src/x.rs", other_holder.as_str())],
             false,
         ),
-        case(
+        HeaderCase::new(
             "rust testdata fixture",
             &[("tests/testdata/fixture.rs", "fn x() {}\n")],
             true,
         ),
-        case(
+        HeaderCase::new(
             "header ending on the last line of the window",
-            &[("src/x.rs", &at_the_edge)],
+            &[("src/x.rs", at_the_edge.as_str())],
             true,
         ),
-        case(
+        HeaderCase::new(
             "header ending one line past the window",
-            &[("src/x.rs", &past_the_edge)],
+            &[("src/x.rs", past_the_edge.as_str())],
             false,
         ),
     ]);
@@ -241,38 +158,38 @@ fn header_cases_for_the_notice() {
 #[test]
 fn header_cases_for_each_file_kind() {
     let dockerfile = format!("# syntax=docker/dockerfile:1.7\n{}", hash_header());
-    run_cases(vec![
-        case(
+    run_cases(&[
+        HeaderCase::new(
             "shell script with the header",
             &[("scripts/a.sh", SHELL_HEADER)],
             true,
         ),
-        case(
+        HeaderCase::new(
             "shell script without a header",
             &[("scripts/a.sh", "#!/usr/bin/env bash\necho\n")],
             false,
         ),
-        case(
+        HeaderCase::new(
             "dockerfile with the header after the syntax line",
-            &[("deployments/docker/Dockerfile", &dockerfile)],
+            &[("deployments/docker/Dockerfile", dockerfile.as_str())],
             true,
         ),
-        case(
+        HeaderCase::new(
             "dockerfile without a header",
             &[("deployments/docker/Dockerfile", "FROM scratch\n")],
             false,
         ),
-        case(
+        HeaderCase::new(
             "local make fragment, no header",
             &[(".mk/verify.mk", "x:\n")],
             false,
         ),
-        case(
+        HeaderCase::new(
             "make fragment make-common ships but MK_COMMON_FILES does not list, no header",
             &[(".mk/go.mk", "x:\n")],
             false,
         ),
-        case(
+        HeaderCase::new(
             "makefile without a header",
             &[("Makefile", MAKEFILE)],
             false,
@@ -281,16 +198,16 @@ fn header_cases_for_each_file_kind() {
 }
 
 /// Go: `TestHeaderCases`, what is never governed: untracked files, make-common's files, a
-/// testdata fixture, and Markdown, YAML and JSON.
+/// testdata fixture, and Markdown, YAML and JSON; and a neighbour of an exempt path, which is.
 #[test]
 fn header_cases_for_the_exemptions() {
-    run_cases(vec![
-        case(
+    run_cases(&[
+        HeaderCase::new(
             "untracked file without a header",
             &[("untracked/scratch.rs", "fn x() {}\n")],
             true,
         ),
-        case(
+        HeaderCase::new(
             "upstream make fragment",
             &[
                 (".mk/docker.mk", "x:\n"),
@@ -299,17 +216,27 @@ fn header_cases_for_the_exemptions() {
             ],
             true,
         ),
-        case(
+        HeaderCase::new(
             "bootstrap script",
             &[("scripts/bootstrap-mk-common.sh", "#!/bin/sh\n")],
             true,
         ),
-        case(
+        HeaderCase::new(
+            "a neighbour of the bootstrap script is governed",
+            &[("scripts/bootstrap-mk-common-local.sh", "#!/bin/sh\n")],
+            false,
+        ),
+        HeaderCase::new(
             "testdata fixture",
             &[("testenv/x/testdata/fixture.rs", "fn x() {}\n")],
             true,
         ),
-        case(
+        HeaderCase::new(
+            "a neighbour of a testdata directory is governed",
+            &[("testenv/x/testdatax/fixture.rs", "fn x() {}\n")],
+            false,
+        ),
+        HeaderCase::new(
             "markdown, yaml and json",
             &[
                 ("README.md", "# x\n"),
@@ -319,4 +246,39 @@ fn header_cases_for_the_exemptions() {
             true,
         ),
     ]);
+}
+
+/// Negative control of the harness on this repository's checker: a case whose expectation is
+/// wrong is reported, so a checker that accepted, or refused, everything could not pass the cases
+/// above.
+#[test]
+fn a_wrong_expectation_is_reported() {
+    let problems = with_harness(|harness| {
+        harness.run_cases(
+            &meta::repo(),
+            &[
+                HeaderCase::new(
+                    "no header, expected to pass",
+                    &[("src/x.rs", "fn x() {}\n")],
+                    true,
+                ),
+                HeaderCase::new(
+                    "the header, expected to fail",
+                    &[("src/x.rs", RUST_HEADER)],
+                    false,
+                ),
+            ],
+        )
+    });
+    let names: Vec<&str> = problems
+        .iter()
+        .map(|problem| problem.location.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "no header, expected to pass",
+            "the header, expected to fail"
+        ]
+    );
 }

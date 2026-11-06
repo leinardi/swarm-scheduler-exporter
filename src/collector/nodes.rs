@@ -29,10 +29,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::docker::types::Node;
-use crate::logger::{Attr, Logger};
-use crate::metrics::{
+use go_prom::{
     Collector, Kind, RegisterError, Registry, SnapshotBuilder, SnapshotFamily, constant_desc,
 };
+use go_slog::{Attr, Logger};
 
 /// The `role` label.
 pub const LABEL_NODE_ROLE: &str = "role";

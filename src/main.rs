@@ -27,32 +27,31 @@
 
 use std::io::Write as _;
 use std::process::ExitCode;
-use std::time::Duration;
 
-use swarm_scheduler_exporter::run::{run_with, shutdown_signal};
+use service_kit::runtime::{build_runtime, run_until_exit};
+use service_kit::signal::lazy_shutdown_signal;
+use swarm_scheduler_exporter::run::run_with;
 
 /// Builds the runtime by hand, rather than with `#[tokio::main]`, so its shutdown is bounded by
 /// what is left of the shutdown budget: dropping a runtime waits for its blocking tasks, with no
-/// bound at all.
+/// bound at all. The shutdown signal is the lazy one: its SIGINT and SIGTERM handlers are installed
+/// only once the shutdown watch `run_with` spawns first polls it, after the flags, the
+/// `--healthcheck` probe, the logger and the metrics, so a signal before then still terminates
+/// the process, as before Go's `signal.NotifyContext`.
 fn main() -> ExitCode {
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match build_runtime(None) {
         Ok(runtime) => runtime,
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "tokio runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let exit = runtime.block_on(run_with(
-        std::env::args_os(),
-        |key| std::env::var(key).ok(),
-        shutdown_signal(),
-    ));
-    let remaining = exit.deadline.map_or(Duration::ZERO, |deadline| {
-        deadline.saturating_duration_since(tokio::time::Instant::now())
+    let code = run_until_exit(runtime, || {
+        run_with(
+            std::env::args_os(),
+            |key| std::env::var(key).ok(),
+            lazy_shutdown_signal(),
+        )
     });
-    runtime.shutdown_timeout(remaining);
-    ExitCode::from(u8::try_from(exit.code).unwrap_or(1))
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
 }

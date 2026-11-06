@@ -22,24 +22,28 @@
  * SOFTWARE.
  */
 
-//! The server's tests: Go's three health handler tests and the framing rules here, the Go wire
-//! captures in [`wire`], the deadlines in [`timeouts`], and the listener, the drain and Go's
-//! `serveUntilDone` tests in [`shutdown`].
+//! The server's tests: Go's three health handler tests and the scrape the `/metrics` route
+//! reads, the Go wire captures in [`wire`], Go's `serveUntilDone` tests and the listen errors in
+//! [`shutdown`], and the regression tests of what go-http changed for the exporter: Go's service
+//! names, `net.Listen`'s literals, zones and resolver, and a read deadline brought forward while a
+//! read waits. The generic framing, routing, deadline and drain tests are go-http's own.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
-use bytes::Bytes;
 use jiff::Timestamp;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use super::*;
-use crate::clock::FakeClock;
-use crate::logger::Level;
-use crate::metrics::exposition;
 use crate::test_support::capture_logs;
+use go_clock::FakeClock;
+use go_compat::errno::io_error_text;
+use go_http::{ConnState, TimedIo};
+use go_prom::exposition;
+use go_slog::Level;
 
+mod parity;
 mod shutdown;
-mod timeouts;
 mod wire;
 
 /// The time of the Go captures, so `Date` compares exactly.
@@ -50,7 +54,7 @@ fn capture_time() -> Timestamp {
 /// An exposition of `body` in the text format, as promhttp answers a scrape with no `Accept`.
 fn text_exposition(body: &'static [u8]) -> Exposition {
     Exposition {
-        content_type: exposition::content_type(None),
+        content_type: exposition::content_type(go_prom::ExpfmtVersion::V0_71_0, None),
         content_encoding: None,
         body: body.to_vec(),
     }
@@ -70,24 +74,32 @@ fn healthy_app() -> App {
     app_with(true, "", text_exposition(b"m 1\n"))
 }
 
-/// Serves one connection of `app` over a duplex and returns the client end.
-fn connect(app: App) -> DuplexStream {
-    let (client, server_io) = tokio::io::duplex(1 << 20);
-    let connection = connection(server_io, Arc::new(app), Timeouts::EXPORTER);
-    tokio::spawn(async move {
-        let _ = connection.await;
+/// The exporter's routes plus a `/slow` one, which waits `duration` before it answers, for the
+/// drain tests.
+fn slow_app(duration: Duration) -> App {
+    let mux = mux(
+        Box::new(|| (true, String::new())),
+        Box::new(|_| text_exposition(b"m 1\n")),
+    )
+    .route_async("/slow", move |_| async move {
+        tokio::time::sleep(duration).await;
+        Reply::new(
+            StatusCode::OK,
+            vec![(CONTENT_TYPE, HeaderValue::from_static(TEXT_PLAIN))],
+            "slow done\n",
+        )
     });
-    client
+    App::with_mux(
+        mux,
+        Arc::new(FakeClock::new(capture_time())),
+        capture_logs(Level::INFO).0,
+    )
 }
 
 /// Sends `request` on a fresh connection of `app` and returns everything the server wrote
 /// before it closed.
 async fn exchange(app: App, request: &[u8]) -> Vec<u8> {
-    let mut client = connect(app);
-    client.write_all(request).await.unwrap();
-    let mut response = Vec::new();
-    let _ = client.read_to_end(&mut response).await;
-    response
+    go_http::testing::exchange(app.server, TIMEOUTS, request).await
 }
 
 async fn exchange_text(app: App, request: &str) -> String {
@@ -136,50 +148,6 @@ async fn health_handler_unhealthy_empty_reason() {
     assert!(response.ends_with("\r\n\r\nunhealthy\n"), "{response}");
 }
 
-/// Go's framing: up to 2 KiB a `Content-Length`, above it chunks of 2 KiB.
-#[tokio::test(start_paused = true)]
-async fn bodies_above_2_kib_are_chunked() {
-    let exact = vec![b'x'; 2048].leak();
-    let response = exchange(
-        app_with(true, "", text_exposition(exact)),
-        b"GET /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-    )
-    .await;
-    let text = String::from_utf8_lossy(&response);
-    assert!(text.contains("\r\nContent-Length: 2048\r\n"), "{text}");
-    assert!(!text.contains("Transfer-Encoding"), "{text}");
-
-    let over = vec![b'x'; 4097].leak();
-    let response = exchange(
-        app_with(true, "", text_exposition(over)),
-        b"GET /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-    )
-    .await;
-    let text = String::from_utf8_lossy(&response);
-    let (head, body) = text.split_once("\r\n\r\n").unwrap();
-    assert!(
-        head.ends_with("\r\nConnection: close\r\nTransfer-Encoding: chunked"),
-        "{head}"
-    );
-    assert!(!head.contains("Content-Length"), "{head}");
-    let x2048 = "x".repeat(2048);
-    assert_eq!(
-        body,
-        format!("800\r\n{x2048}\r\n800\r\n{x2048}\r\n1\r\nx\r\n0\r\n\r\n")
-    );
-
-    // HEAD: neither header, as Go writes it.
-    let response = exchange(
-        app_with(true, "", text_exposition(over)),
-        b"HEAD /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-    )
-    .await;
-    let text = String::from_utf8_lossy(&response);
-    assert!(!text.contains("Content-Length"), "{text}");
-    assert!(!text.contains("Transfer-Encoding"), "{text}");
-    assert!(text.ends_with("\r\n\r\n"), "{text}");
-}
-
 /// promhttp reads the first `Accept`, every `Accept-Encoding` and the `name[]` filter; a gzip
 /// answer carries its `Content-Encoding` ahead of the `Content-Type`.
 #[tokio::test(start_paused = true)]
@@ -191,7 +159,7 @@ async fn the_scrape_request_reaches_the_metrics_function() {
         Box::new(move |scrape: &MetricsRequest| {
             recorded.lock().unwrap().push(scrape.clone());
             Exposition {
-                content_type: exposition::content_type(None),
+                content_type: exposition::content_type(go_prom::ExpfmtVersion::V0_71_0, None),
                 content_encoding: Some("gzip"),
                 body: b"z".to_vec(),
             }
@@ -246,37 +214,23 @@ async fn a_scrape_without_names_has_no_filter() {
     assert_eq!(*seen.lock().unwrap(), [MetricsRequest::default()]);
 }
 
-/// Go's `LookupPort` answers, from a Go program.
+/// An I/O error message (listen, accept, the Docker client) quotes Go's `syscall.Errno` text for every errno Go names, not only
+/// the ones the exporter's own table listed, and Go's `errno <n>` for one it does not (Linux's
+/// internal 524): a full disk reads `no space left on device`, as Go printed it, not Rust's
+/// `No space left on device (os error 28)`.
 #[test]
-fn ports_parse_as_go_s() {
-    assert_eq!(parse_port("8888"), Ok(8888));
-    assert_eq!(parse_port("+80"), Ok(80));
-    assert_eq!(
-        parse_port("70000"),
-        Err("address 70000: invalid port".to_owned())
-    );
-    assert_eq!(parse_port("-1"), Err("address -1: invalid port".to_owned()));
-    assert_eq!(
-        parse_port("http"),
-        Err("lookup tcp/http: unknown port".to_owned())
-    );
-    assert_eq!(parse_port(""), Ok(0));
-    assert_eq!(parse_port("+"), Ok(0));
-    assert_eq!(parse_port("-0"), Ok(0));
-    assert_eq!(parse_port("08"), Ok(8));
-    assert_eq!(
-        parse_port("0x10"),
-        Err("lookup tcp/0x10: unknown port".to_owned())
-    );
-}
-
-/// A slow route for the deadline and drain tests: it waits `duration`.
-fn sleeping(duration: Duration) -> SlowRoute {
-    Arc::new(move || Box::pin(tokio::time::sleep(duration)))
-}
-
-fn slow_app(duration: Duration) -> App {
-    let mut app = healthy_app();
-    app.slow = Some(sleeping(duration));
-    app
+fn io_error_text_quotes_go_s_whole_errno_table() {
+    for (errno, want) in [
+        (28, "no space left on device"),
+        (3, "no such process"),
+        (71, "protocol error"),
+        (524, "errno 524"),
+        (98, "address already in use"),
+    ] {
+        assert_eq!(
+            io_error_text(&io::Error::from_raw_os_error(errno)),
+            want,
+            "errno {errno}"
+        );
+    }
 }

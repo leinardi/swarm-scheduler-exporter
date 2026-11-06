@@ -29,9 +29,9 @@ use std::sync::mpsc as std_mpsc;
 
 use crate::collector::replicas_state::TaskCounter;
 use crate::docker::types::{GoTime, Placement};
-use crate::metrics::Collector;
-use crate::metrics::testing::{gather_series, series_id};
 use crate::test_support::FakeDocker;
+use go_prom::Collector;
+use go_prom::testing::{gather_series, series_id};
 
 use super::*;
 

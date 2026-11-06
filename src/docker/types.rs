@@ -31,27 +31,15 @@
 //! introduces reaches the collectors' fallback rules instead of failing the whole list. A field
 //! Go holds behind a pointer is an `Option`, so its presence stays visible.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 
-use crate::go_compat::time_layout::{go_zero_time, is_go_zero_time};
+use docker_engine::types::null_default;
+use go_compat::time_layout::{go_zero_time, is_go_zero_time};
 
-use super::error::Error;
-
-/// Labels, as the daemon sends them.
-pub type Labels = BTreeMap<String, String>;
-
-/// Go decodes a JSON `null` into the zero value; derived serde would refuse it.
-fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
+pub use docker_engine::types::Labels;
 
 /// A Go `time.Time` decoded from the wire: an instant, Go's zero time when missing or `null`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -468,50 +456,6 @@ pub struct Actor {
     /// `ID`.
     #[serde(rename = "ID", deserialize_with = "null_default")]
     pub id: String,
-}
-
-/// Decodes the first JSON value of `body` the way Go's `json.NewDecoder(body).Decode(&out)`
-/// does: leading whitespace skipped, whatever follows the value ignored, a `null` the zero value,
-/// and an empty body `EOF`.
-pub(crate) fn decode_first<T>(body: &[u8]) -> Result<T, Error>
-where
-    T: Default + for<'de> Deserialize<'de>,
-{
-    match serde_json::Deserializer::from_slice(body)
-        .into_iter::<Option<T>>()
-        .next()
-    {
-        None => Err(Error::decode("EOF".to_owned())),
-        Some(Ok(value)) => Ok(value.unwrap_or_default()),
-        Some(Err(error)) => {
-            let message = if error.is_eof() {
-                "unexpected EOF".to_owned()
-            } else {
-                error.to_string()
-            };
-            Err(Error::decode(message).with_source(error))
-        }
-    }
-}
-
-/// Decodes a list the way Go decodes it into a slice: `null` is an empty list and a `null`
-/// element the zero value.
-pub(crate) fn decode_list<T>(body: &[u8]) -> Result<Vec<T>, Error>
-where
-    T: Default + for<'de> Deserialize<'de>,
-{
-    decode_first::<Vec<Nullable<T>>>(body)
-        .map(|items| items.into_iter().map(|item| item.0).collect())
-}
-
-/// A list element Go would decode from `null` into the zero value.
-#[derive(Debug, Default)]
-struct Nullable<T>(T);
-
-impl<'de, T: Default + Deserialize<'de>> Deserialize<'de> for Nullable<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        null_default(deserializer).map(Self)
-    }
 }
 
 #[cfg(test)]

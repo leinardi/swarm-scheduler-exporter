@@ -65,34 +65,64 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 `[workspace.lints]` set:
 
 - the root package, `swarm-scheduler-exporter` (`src/`, `tests/`): the shipped binary.
-  - `src/main.rs`, `src/run.rs`, `src/cli.rs` — the flags (clap), the runtime, the signal watch
-    and the shutdown budget; `src/healthcheck.rs` is `--healthcheck` (the image is distroless:
-    there is no shell or curl a `HEALTHCHECK` could run instead).
-  - `src/docker/` — the exporter's own HTTP/1 Docker client (unix socket, TCP, TLS with rustls),
-    the version negotiation and ping, and `DockerApi`, the read-only trait all collector code
-    reaches Docker through.
+  - `src/main.rs`, `src/run.rs`, `src/cli.rs` — the flags (clap), the startup order and the
+    shutdown budget, on service-kit's runtime and lazy shutdown signal; `src/healthcheck.rs` is
+    `--healthcheck` (the image is distroless: there is no shell or curl a `HEALTHCHECK` could run
+    instead).
+  - `src/docker/` — `DockerApi`, the read-only trait all collector code reaches Docker through, on
+    a `Client` newtype over docker-engine's client (features `tcp` and `tls`), the exporter's API
+    types and the timeouts its callers put around them.
   - `src/collector/` — the collectors and the reconciler (`reconciler/`), which is the one owner of
     the service and node caches and of every gauge derived from them.
-  - `src/metrics/` — the in-tree Prometheus registry, families, text exposition, the `process_*`
-    collector and the promhttp handler with its content negotiation.
-  - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` on hyper.
-  - `src/logger/` — the slog-compatible JSON and text handlers; `src/labels.rs` — sanitizing and
-    validating custom label keys; `src/clock.rs` — the injected clock; `src/version.rs` — the
-    build stamps.
-  - `src/go_compat/` — the Go behaviours the contract depends on, ported deliberately (duration
-    and float formatting, `SplitHostPort`, the local time zone, `strconv.Quote`).
+  - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` on go-http, with the exporter's
+    `TIMEOUTS`, listen-error prefix and log callback.
+  - `src/labels.rs` — sanitizing and validating custom label keys; `src/version.rs` — the build
+    stamps (`service_kit::buildinfo!`).
   - `tests/` — the black-box tests: the Engine API wire captures (`engine_wire.rs`, against
-    `tests/support/fake_engine.rs`), the exposition, the logger and `go_compat` golden files.
-- `testenv/` — the DinD Swarm harness, with bollard behind its `integration` feature (the
-  exporter package depends on it in no table; `meta/tests/docker_boundary.rs` checks it), and the
-  integration suite's runner and tests under `testenv/tests/integration`.
-- `meta/` — the meta-tests, which check the repository rather than the exporter, with their
-  helpers in `meta/src` (`repo`, `gitenv`, the Dockerfile and Markdown readers).
+    `tests/support/fake_engine.rs`), the exposition, the registry, the run lifecycle and the logger
+    golden files.
+- `testenv/` — the DinD Swarm harness: the cluster, its bring-up and teardown and the suite's
+  names (`config.rs`) over testenv-core, with bollard behind its `integration` feature (the
+  exporter package names none of testenv, testenv-core and bollard in any table;
+  `meta/tests/docker_boundary.rs` checks it),
+  and the integration suite's runner and tests under `testenv/tests/integration`.
+- `meta/` — the meta-tests, which check the repository rather than the exporter by running
+  repo-meta's checks with this repository's parameters.
 - `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
 - `scripts/` — the licence-header check, the suppression ratchet, the make-common bootstrap and the
   Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`).
+
+### Shared code: rust-common
+
+The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
+dependency pinned by the release tag (`tag = "v0.2.1"`) in `[workspace.dependencies]`, with
+`version = "0.2"`, the tag's `<major>.<minor>`: go-compat (the Go library ports), go-clock (the
+`Clock` trait), go-slog (the logger), go-prom (the registry, the text exposition, the `process_*`
+collector and promhttp), go-http (the server), docker-engine (the Engine API client), service-kit
+(the runtime, the signals, the stamps), testenv-core (the harness's generic half) and repo-meta
+(the meta-tests' checks). The exporter keeps only what is its own.
+
+- Where this exporter behaves differently from another project, the difference is a parameter of
+  the shared crate, passed from here, never a fork of the code into this repository.
+- A fix to shared code lands in rust-common first; this repository then moves its pin: change
+  the `tag` on every rust-common line (and `version` when the tag's `<major>.<minor>` moves),
+  run `cargo fetch` (not `cargo update -p`), and check that `git diff Cargo.lock` touches only
+  the rust-common lines.
+- The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
+  otherwise:
+  `ExpfmtVersion::V0_71_0` (prometheus/common v0.71.0's negotiation); go-http's `TIMEOUTS`
+  (read header 5s, read 10s, write 15s, idle 60s) and the `http listen:` prefix;
+  docker-engine's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
+  response-header timeout (`RESPONSE_HEADER_TIMEOUT`); go-slog's `PlainStyle::Quoted` (the plain
+  format as the exporter wrote it) and `parse_level_strict`/`parse_format_strict` (Q4: an unknown
+  value is refused); `lazy_shutdown_signal`, whose handlers are installed only once the shutdown
+  watch first polls it, so a signal during startup still terminates the process, as in Go before its
+  `signal.NotifyContext` call; the `buildinfo!` defaults `dev`, `none` and `unknown`, an empty stamp
+  kept.
+- Two workspace policies are the exporter's own: `panic = "unwind"` (the reconciler recovers a
+  panicking step; see the invariants) and `unsafe_code = "forbid"`, with no exemption.
 
 ### Generated or vendored: never hand-edit
 
@@ -109,10 +139,12 @@ The full list, with what counts as a finding, is in `.agents/skills/adversarial-
 The ones to keep in mind while writing code:
 
 - **Read-only against Docker, enforced in code.** A `:ro` socket bind does not make the API
-  read-only. `DockerApi` exposes list, inspect and events calls only, and the client sends `GET`
-  only, plus one `HEAD /_ping`. `meta/tests/docker_boundary.rs` holds it there: requests are built
-  in one place, ask only for paths the shipped socket-proxy allowlist grants, and bollard (which
-  the harness creates and removes things with) stays out of the exporter package.
+  read-only. `DockerApi` exposes list, inspect and events calls only, and docker-engine, built
+  without its `write` and `attach` features, sends `GET` only, plus one `HEAD /_ping`.
+  `meta/tests/docker_boundary.rs` holds it there: no manifest enables those features, only
+  `src/docker` names the crate and builds no request of its own, the paths are only those the
+  shipped socket-proxy allowlist grants, and bollard (which the harness creates and removes things
+  with) stays out of the exporter package.
 - **Metrics are the public contract.** A renamed metric or a changed label set updates the README's
   Metrics section (and any alert example) in the same change. No label fed by an unbounded value.
 - **Series lifecycle.** A removed resource's series are deleted, never set to 0; known state sets
@@ -129,15 +161,18 @@ The ones to keep in mind while writing code:
   path.
 - **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `Zoned::now`,
   `SystemTime::now` and `std::time::Instant::now`; the time comes from the `Clock` trait, so tests
-  drive it with tokio's paused clock. Only `src/clock.rs` reads the wall clock.
+  drive it with tokio's paused clock. The time comes only through `go_clock::Clock`; the one
+  wall-clock read is go-clock's `SystemClock`, in rust-common, so this repository has no
+  `disallowed_methods` exemption.
 - **Health means published data.** The health snapshot is evaluated at scrape time; nothing marks
   health from the poller itself.
 
 ## Conventions worth knowing
 
 - The version strings come from `SWARM_SCHEDULER_EXPORTER_VERSION`, `_COMMIT` and `_DATE` at
-  compile time (`src/version.rs`, `option_env!`), set by the make targets, the Dockerfile and the
-  release workflow; unset, they read `dev`, `none` and `unknown`.
+  compile time (`src/version.rs`, `service_kit::buildinfo!`), set by the make targets, the
+  Dockerfile and the release workflow; unset, they read `dev`, `none` and `unknown`, and an empty
+  one stays empty.
 - Lints are silenced only with `#[expect(lint, reason = "...")]`: `allow_attributes` is denied,
   the reason is mandatory, and an `#[expect]` that stops firing fails the build.
 - Fixtures under `testdata/` are byte-for-byte captures (Engine API wire captures, golden files);
@@ -167,7 +202,7 @@ Run before considering an edit done. `make check` applies to every row.
 | You edited | Run |
 | --- | --- |
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
-| `Cargo.toml`, `Cargo.lock`, `deny.toml` | `make rust-deny` (network) |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
 | `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
 | `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
@@ -176,6 +211,11 @@ Run before considering an edit done. `make check` applies to every row.
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
 | `meta/**` | `cargo test -p meta` |
 | `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
+
+To work on a shared crate from here, add an uncommitted
+`[patch."https://github.com/leinardi/rust-common"]` table to the root `Cargo.toml`, one
+`<name> = { path = "../rust-common/crates/<name>" }` line per rust-common crate the workspace uses
+(Cargo resolves two copies otherwise), and remove it before committing: CI cannot see the path.
 
 ## Project skills
 

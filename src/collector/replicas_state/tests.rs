@@ -36,9 +36,9 @@ use crate::collector::nodes::{
 use crate::collector::types::display_name;
 use crate::docker::Error;
 use crate::docker::types::{GoTime, NodeSpec, NodeStatus, TaskStatus, Version};
-use crate::logger::Level;
-use crate::metrics::testing::{gather_series, series_id};
 use crate::test_support::{FakeDocker, capture_logs, schedulable_node};
+use go_prom::testing::{gather_series, series_id};
+use go_slog::Level;
 
 const REPLICAS_STATE_NAME: &str = "swarm_task_replicas_state";
 const RUNNING_REPLICAS_NAME: &str = "swarm_service_running_replicas";

@@ -24,76 +24,9 @@
 
 use std::time::Duration;
 
+use docker_engine::with_bare_deadline;
+
 use super::*;
-
-#[test]
-fn filters_marshal_as_go_sorted_and_escaped() {
-    let filters = Filters::new().add("type", &["service", "node"]);
-    assert_eq!(
-        filters.to_json(),
-        r#"{"type":{"node":true,"service":true}}"#
-    );
-    let filters = Filters::new()
-        .add("type", &["service"])
-        .add("label", &["a<b&c>\"d\\\n\u{1}\u{2028}é"])
-        .add("type", &["node"]);
-    assert_eq!(
-        filters.to_json(),
-        r#"{"label":{"a\u003cb\u0026c\u003e\"d\\\n\u0001\u2028é":true},"type":{"node":true,"service":true}}"#
-    );
-    assert!(Filters::new().is_empty());
-    assert_eq!(Filters::new().to_json(), "{}");
-}
-
-#[test]
-fn queries_encode_as_url_values() {
-    let filters = Filters::new().add("type", &["service", "node"]);
-    let mut pairs = [
-        (
-            "since",
-            since_parameter("2026-09-20T10:00:00.5Z".parse().unwrap()),
-        ),
-        ("filters", filters.to_json()),
-    ];
-    assert_eq!(
-        encode_query(&mut pairs),
-        "filters=%7B%22type%22%3A%7B%22node%22%3Atrue%2C%22service%22%3Atrue%7D%7D\
-         &since=1789898400.500000000"
-    );
-    assert_eq!(encode_query(&mut [("all", "1".to_owned())]), "all=1");
-    assert_eq!(
-        encode_query(&mut [("k y", "a b+c/é~".to_owned())]),
-        "k+y=a+b%2Bc%2F%C3%A9~"
-    );
-}
-
-#[test]
-fn since_is_seconds_and_nine_digits_of_nanoseconds() {
-    let since = |text: &str| since_parameter(text.parse().unwrap());
-    assert_eq!(since("2026-09-20T10:00:00Z"), "1789898400.000000000");
-    assert_eq!(
-        since("2026-09-20T10:00:00.000000001Z"),
-        "1789898400.000000001"
-    );
-    // The reconnect case of the engine-wire test: 500ms before an event at …300.2.
-    assert_eq!(
-        since_parameter(jiff::Timestamp::from_nanosecond(1_789_902_299_700_000_000).unwrap()),
-        "1789902299.700000000"
-    );
-    // Go's Unix() rounds down, and Nanosecond() is never negative.
-    assert_eq!(since("1969-12-31T23:59:59.25Z"), "-1.250000000");
-}
-
-#[test]
-fn an_empty_id_is_refused_before_any_request() {
-    let error = trim_id("service", " \t").unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "invalid service name or ID: value is empty"
-    );
-    assert_eq!(error.kind(), crate::docker::ErrorKind::InvalidParameter);
-    assert_eq!(trim_id("container", " c-1 ").unwrap(), "c-1");
-}
 
 #[tokio::test(start_paused = true)]
 async fn the_timeouts_end_a_call_with_deadline_exceeded() {
@@ -127,8 +60,8 @@ async fn a_shared_deadline_bounds_calls_together() {
         tokio::time::sleep(Duration::from_secs(7)).await;
         Ok::<_, Error>(())
     };
-    with_deadline(deadline, slow).await.unwrap();
-    let error = with_deadline(deadline, async {
+    with_bare_deadline(deadline, slow).await.unwrap();
+    let error = with_bare_deadline(deadline, async {
         tokio::time::sleep(Duration::from_secs(7)).await;
         Ok::<_, Error>(())
     })

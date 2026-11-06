@@ -31,7 +31,7 @@ use super::*;
 use crate::collector::metrics_ids::SERVICE_MODE_REPLICATED;
 use crate::collector::types::display_name;
 use crate::docker::types::UpdateStatus;
-use crate::metrics::testing::gather_series;
+use go_prom::testing::gather_series;
 
 /// Go's `makeTestMetadata`.
 fn test_metadata(stack: &str, service: &str, mode: &str) -> ServiceMetadata {

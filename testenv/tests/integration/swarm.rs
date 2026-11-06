@@ -42,8 +42,8 @@ use bollard::query_parameters::{
     UpdateServiceOptions,
 };
 use jiff::Timestamp;
-use testenv::context::{Context, Ended};
 use testenv::metrics_text::{Labels, labels};
+use testenv_core::context::{Context, Ended};
 
 use crate::testing::{Fatal, OrFatal as _, TestHandle, cluster, swarm};
 use crate::wait::{LABEL_SERVICE, LABEL_STACK, poll_until};

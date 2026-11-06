@@ -36,7 +36,6 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{self, Args};
-use crate::clock::{Clock, SystemClock};
 use crate::collector::containers::{ContainersConfig, ContainersState};
 use crate::collector::desired::ReplicaGauges;
 use crate::collector::exporter_metrics::ExporterMetrics;
@@ -48,38 +47,22 @@ use crate::collector::reconciler::{
 use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
-use crate::docker::{self, Client, DockerApi, Settings};
+use crate::docker::{self, Client, DockerApi};
 use crate::healthcheck::run_healthcheck;
-use crate::logger::{self, Attr, Logger};
-use crate::metrics::exposition::render;
-use crate::metrics::process::ProcessCollector;
-use crate::metrics::promhttp::HandlerMetrics;
-use crate::metrics::{Collector, RegisterError, Registry};
 use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
+use go_clock::{Clock, SystemClock};
+use go_prom::ExpfmtVersion;
+use go_prom::exposition::render;
+use go_prom::process::ProcessCollector;
+use go_prom::promhttp::HandlerMetrics;
+use go_prom::{Collector, RegisterError, Registry};
+use go_slog::{Attr, Logger};
+use service_kit::runtime::Exit;
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
 /// runtime's shutdown all come out of it. 10s is Docker's default stop grace period.
 pub const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
-
-/// How [`run_with`] ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Exit {
-    /// The process exit code.
-    pub code: i32,
-    /// The shutdown deadline, once the server stopped: what is left of it bounds the runtime's
-    /// shutdown in `main`.
-    pub deadline: Option<Instant>,
-}
-
-impl Exit {
-    fn code(code: i32) -> Self {
-        Self {
-            code,
-            deadline: None,
-        }
-    }
-}
 
 /// What the families are built with.
 #[derive(Debug, Clone)]
@@ -359,6 +342,7 @@ pub fn app(
         let accept_encoding: Vec<&str> =
             request.accept_encoding.iter().map(String::as_str).collect();
         let exposition = render(
+            ExpfmtVersion::V0_71_0,
             &families,
             request.accept.as_deref(),
             &accept_encoding,
@@ -408,7 +392,7 @@ pub async fn run_with<I, T>(
     args: I,
     getenv: impl Fn(&str) -> Option<String>,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) -> Exit
+) -> Exit<i32>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString>,
@@ -417,24 +401,25 @@ where
         Ok(args) => args,
         Err(exit) => {
             print(exit.stdout, &exit.message);
-            return Exit::code(exit.code);
+            return Exit::early(exit.code);
         }
     };
     // A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no logger, no
     // metric and no Docker client.
     if args.healthcheck {
-        return Exit::code(run_healthcheck(&args.listen_addr, &mut io::stdout()).await);
+        return Exit::early(run_healthcheck(&args.listen_addr, &mut io::stdout()).await);
     }
     if let Err(error) = cli::check_poll_delay(args.poll_delay) {
         print(false, &format!("{error}\n"));
-        return Exit::code(1);
+        return Exit::early(1);
     }
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let logger = logger::configure(
-        logger::Config {
+    let logger = go_slog::configure(
+        go_slog::Config {
             format: args.log_format,
             level: args.log_level,
             include_time: args.log_time,
+            plain_style: go_slog::PlainStyle::Quoted,
         },
         Arc::clone(&clock),
         &getenv,
@@ -457,7 +442,7 @@ where
         }
         Err(error) => {
             logger.error("invalid custom labels", &[Attr::error("err", &error)]);
-            return Exit::code(1);
+            return Exit::early(1);
         }
     };
     // Checked by check_poll_delay: at least one second.
@@ -479,11 +464,11 @@ where
 
     // Configured from DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY.
     // The API version is negotiated lazily, on the first request.
-    let settings = match Settings::from_env(&getenv) {
+    let settings = match docker::settings_from_env(&getenv) {
         Ok(settings) => settings,
         Err(error) => {
             logger.error("docker client init failed", &[Attr::error("err", &error)]);
-            return Exit::code(1);
+            return Exit::early(1);
         }
     };
     if let Err(error) = docker::version::validate_client_api_version(settings.client_version()) {
@@ -491,7 +476,7 @@ where
             "unsupported Docker API version",
             &[Attr::error("err", &error)],
         );
-        return Exit::code(1);
+        return Exit::early(1);
     }
     let docker = Arc::new(Client::new(settings));
 
@@ -517,23 +502,5 @@ where
     Exit {
         code,
         deadline: deadline.get().copied(),
-    }
-}
-
-/// Resolves on the first SIGINT or SIGTERM. The handlers stay installed for the life of the
-/// process, so later signals are swallowed, as with Go's `signal.NotifyContext` until `run`
-/// returns. Signals cannot be watched when the runtime has no signal driver; then it never
-/// resolves.
-pub async fn shutdown_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut interrupt), Ok(mut terminate)) = (
-        signal(SignalKind::interrupt()),
-        signal(SignalKind::terminate()),
-    ) else {
-        return std::future::pending().await;
-    };
-    tokio::select! {
-        _ = interrupt.recv() => {}
-        _ = terminate.recv() => {}
     }
 }

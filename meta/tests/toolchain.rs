@@ -22,82 +22,95 @@
  * SOFTWARE.
  */
 
-//! The repository's tooling pins: one Rust line across rust-toolchain.toml, Cargo.toml, the image
-//! and every CI toolchain step; the image's toolchain patch and its musl standard libraries; one
-//! zig and one cargo-zigbuild between the image and CI; one ShellCheck between the hook and CI; one
-//! Trivy between the release and the scheduled scan; the always-run hooks running once; no flag
-//! that makes a gate pass on nothing; and no meta-test that skips on a missing tool.
+//! The repository's tooling pins: one exact Rust release across rust-toolchain.toml, the image and
+//! every CI toolchain step, with Cargo.toml's `rust-version` on its line; the image's musl
+//! standard libraries for that release; one zig and one cargo-zigbuild between the image and CI;
+//! one ShellCheck between the hook and CI; one Trivy between the release and the scheduled scan;
+//! the rustdoc gate; the always-run hooks running once; no flag that makes a gate pass on
+//! nothing; and no meta-test that skips on a missing tool. The checks are repo-meta's, with this
+//! repository's files and pins; the negative controls run them on altered copies.
 
-use std::collections::BTreeMap;
+use repo_meta::ci::{MAKE_COMMON_RUSTDOC, always_run_problems};
+use repo_meta::toolchain::{
+    RustVersion, ToolchainRef, ZigRecord, ci_toolchain_problems, image_rust_problems, rust_release,
+    rust_version_problems, shellcheck_problems, trivy_problems, zigbuild_action_problems,
+};
+use repo_meta::tools::tool_lookup_problems;
+use repo_meta::vacuous::{AllowedFragment, VacuousFlags};
+use repo_meta::{report, yaml};
 
-use meta::repo;
-use regex::Regex;
-use serde_yaml_ng::Value;
-
-const RUST_TOOLCHAIN_ACTION: &str = "dtolnay/rust-toolchain";
+const TOOLCHAIN: &str = "rust-toolchain.toml";
 const DOCKERFILE: &str = "deployments/docker/Dockerfile";
 const SETUP_ZIGBUILD: &str = ".github/actions/setup-zigbuild/action.yaml";
+const SETUP_SHELLCHECK: &str = ".github/actions/setup-shellcheck/action.yaml";
+const PRE_COMMIT: &str = ".pre-commit-config.yaml";
+const CI: &str = ".github/workflows/ci.yaml";
+
+/// The exact release rust-toolchain.toml pins.
+fn release() -> String {
+    rust_release(TOOLCHAIN, &meta::repo().read(TOOLCHAIN))
+        .unwrap_or_else(|problem| panic!("{problem}"))
+}
+
+fn parse(file: &str, content: &str) -> yaml::Value {
+    yaml::parse(file, content).unwrap_or_else(|problem| panic!("{problem}"))
+}
+
+/// Every YAML file under .github, the workflows and the composite actions, parsed.
+fn github_documents() -> Vec<(String, yaml::Value)> {
+    let repo = meta::repo();
+    let files = repo.files_under(".github", &[".yaml", ".yml"]);
+    assert!(
+        files.iter().any(|file| file == CI),
+        "the scan saw no CI workflow: {files:?}"
+    );
+    files
+        .into_iter()
+        .map(|file| {
+            let document = parse(&file, &repo.read(&file));
+            (file, document)
+        })
+        .collect()
+}
 
 /// Rustdoc warnings must fail local verification and the required Rust CI job, over every
 /// feature: make-common's rust.mk documents `$(RUST_FEATURES)`, which defaults to
 /// `--all-features`, and the Makefile must not narrow it.
-fn rustdoc_gate_present(fragment: &str, makefile: &str, workflow: &str) -> bool {
-    let verify = fragment.lines().any(|line| {
-        line.starts_with("verify-rust:")
-            && line.split_whitespace().any(|target| target == "rust-doc")
-    });
-    let recipe = fragment.contains(
-        "rust-doc: ## Check the Rust documentation, warnings as errors\n\tRUSTDOCFLAGS=\"$(RUSTDOCFLAGS) -D warnings\" $(CARGO) doc --workspace $(RUST_FEATURES) --no-deps --locked\n",
-    );
-    let features = fragment
-        .lines()
-        .any(|line| line == "RUST_FEATURES ?= --all-features")
-        && !makefile
-            .lines()
-            .any(|line| line.trim_start().starts_with("RUST_FEATURES"));
-    let workflow: Value = serde_yaml_ng::from_str(workflow)
-        .unwrap_or_else(|error| panic!("parse the CI workflow: {error}"));
-    let ci = workflow
-        .get("jobs")
-        .and_then(|jobs| jobs.get("rust"))
-        .and_then(|job| job.get("steps"))
-        .and_then(Value::as_sequence)
-        .is_some_and(|steps| {
-            steps.iter().any(|step| {
-                step.get("run").and_then(Value::as_str) == Some("make rust-doc")
-                    && step.get("if").is_none()
-                    && step.get("continue-on-error").is_none()
-            })
-        });
-    verify && recipe && features && ci
-}
-
 #[test]
 fn rust_documentation_is_a_required_gate() {
-    assert!(rustdoc_gate_present(
-        &repo::read(".mk/rust.mk"),
-        &repo::read("Makefile"),
-        &repo::read(".github/workflows/ci.yaml"),
-    ));
+    let repo = meta::repo();
+    let problems = MAKE_COMMON_RUSTDOC.problems(
+        &repo.read(".mk/rust.mk"),
+        &repo.read("Makefile"),
+        &parse(CI, &repo.read(CI)),
+    );
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Negative controls reject gates missing from verify or CI, allowing warnings, or documenting
 /// fewer than every feature.
 #[test]
 fn weakened_rustdoc_gates_are_refused() {
-    let fragment = repo::read(".mk/rust.mk");
-    let makefile = repo::read("Makefile");
-    let workflow = repo::read(".github/workflows/ci.yaml");
+    let repo = meta::repo();
+    let fragment = repo.read(".mk/rust.mk");
+    let makefile = repo.read("Makefile");
+    let workflow = repo.read(CI);
+    let refused = |fragment: &str, makefile: &str, workflow: &str| {
+        !MAKE_COMMON_RUSTDOC
+            .problems(fragment, makefile, &parse(CI, workflow))
+            .is_empty()
+    };
+    assert!(!refused(&fragment, &makefile, &workflow));
     for broken in [
         fragment.replace("rust-test rust-doc", "rust-test"),
         fragment.replace(" -D warnings", ""),
         fragment.replace("RUST_FEATURES ?= --all-features", "RUST_FEATURES ?="),
     ] {
         assert_ne!(broken, fragment, "a negative control changed nothing");
-        assert!(!rustdoc_gate_present(&broken, &makefile, &workflow));
+        assert!(refused(&broken, &makefile, &workflow), "{broken}");
     }
     let narrowed = format!("{makefile}\nRUST_FEATURES := --features x\n");
-    assert!(!rustdoc_gate_present(&fragment, &narrowed, &workflow));
+    assert!(refused(&fragment, &narrowed, &workflow));
     for broken in [
         workflow.replace("run: make rust-doc", "run: echo missing documentation gate"),
         workflow.replace(
@@ -110,269 +123,53 @@ fn weakened_rustdoc_gates_are_refused() {
         ),
     ] {
         assert_ne!(broken, workflow, "a negative control changed nothing");
-        assert!(!rustdoc_gate_present(&fragment, &makefile, &broken));
+        assert!(refused(&fragment, &makefile, &broken));
     }
 }
 
-fn re(pattern: &str) -> Regex {
-    Regex::new(pattern).unwrap_or_else(|error| panic!("invalid pattern {pattern}: {error}"))
-}
-
-/// One place a version is written: a file and the pattern whose first group is the version there.
-struct PinSource {
-    file: String,
-    pattern: Regex,
-}
-
-fn source(file: &str, pattern: &str) -> PinSource {
-    PinSource {
-        file: file.to_owned(),
-        pattern: re(pattern),
-    }
-}
-
-/// Fails unless every source writes the pin and all of them agree.
-fn expect_one_value(what: &str, sources: &[PinSource]) {
-    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut problems = Vec::new();
-    for pin in sources {
-        let content = repo::read(&pin.file);
-        let mut matched = false;
-        for captures in pin.pattern.captures_iter(&content) {
-            matched = true;
-            found
-                .entry(captures[1].to_owned())
-                .or_default()
-                .push(pin.file.clone());
-        }
-        if !matched {
-            problems.push(format!(
-                "{what}: {} does not write it ({})",
-                pin.file, pin.pattern
-            ));
-        }
-    }
-    if found.len() > 1 {
-        let values: Vec<String> = found
-            .iter()
-            .map(|(value, files)| {
-                let mut files = files.clone();
-                files.dedup();
-                format!("{value} in {}", files.join(", "))
-            })
-            .collect();
-        problems.push(format!("{what} is not one value: {}", values.join("; ")));
-    }
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
-}
-
-/// One step, in a workflow or a composite action, that uses an action.
-#[derive(Debug)]
-struct ActionStep {
-    file: String,
-    /// The `uses:` value without its `@ref`.
-    action: String,
-    with: BTreeMap<String, String>,
-}
-
-/// Every mapping with a `uses:` key anywhere in the document: job steps and composite action
-/// steps alike.
-fn parse_action_steps(file: &str, content: &str) -> Vec<ActionStep> {
-    fn walk(file: &str, node: &Value, steps: &mut Vec<ActionStep>) {
-        match node {
-            Value::Mapping(mapping) => {
-                if let Some(Value::String(uses)) = mapping.get("uses") {
-                    let action = uses
-                        .split_once('@')
-                        .map_or(uses.as_str(), |(action, _)| action);
-                    let with = mapping
-                        .get("with")
-                        .and_then(Value::as_mapping)
-                        .map(|inputs| {
-                            inputs
-                                .iter()
-                                .filter_map(|(key, value)| {
-                                    let value = match value {
-                                        Value::String(text) => text.clone(),
-                                        Value::Number(number) => number.to_string(),
-                                        Value::Bool(flag) => flag.to_string(),
-                                        Value::Null
-                                        | Value::Sequence(_)
-                                        | Value::Mapping(_)
-                                        | Value::Tagged(_) => return None,
-                                    };
-                                    Some((key.as_str()?.to_owned(), value))
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    steps.push(ActionStep {
-                        file: file.to_owned(),
-                        action: action.to_owned(),
-                        with,
-                    });
-                }
-                for value in mapping.values() {
-                    walk(file, value, steps);
-                }
-            }
-            Value::Sequence(sequence) => {
-                for value in sequence {
-                    walk(file, value, steps);
-                }
-            }
-            Value::Null
-            | Value::Bool(_)
-            | Value::Number(_)
-            | Value::String(_)
-            | Value::Tagged(_) => {}
-        }
-    }
-
-    let document: Value =
-        serde_yaml_ng::from_str(content).unwrap_or_else(|error| panic!("parse {file}: {error}"));
-    let mut steps = Vec::new();
-    walk(file, &document, &mut steps);
-    steps
-}
-
-/// The Rust step rules: a toolchain step names an exact version, never a channel like stable,
-/// which the Rust line test would not see move.
-fn rust_pin_problems(steps: &[ActionStep]) -> Vec<String> {
-    let exact = re(r"^\d+\.\d+\.\d+$");
-    steps
-        .iter()
-        .filter(|step| step.action == RUST_TOOLCHAIN_ACTION)
-        .filter_map(|step| match step.with.get("toolchain") {
-            Some(toolchain) if exact.is_match(toolchain) => None,
-            Some(toolchain) => Some(format!(
-                "{}: {} installs {toolchain:?}; name the exact version of rust-toolchain.toml",
-                step.file, step.action
-            )),
-            None => Some(format!(
-                "{}: {} names no toolchain; name the exact version of rust-toolchain.toml",
-                step.file, step.action
-            )),
-        })
-        .collect()
-}
-
-fn github_yaml() -> Vec<String> {
-    let files = repo::files_under(".github", &[".yaml", ".yml"]);
-    assert!(
-        !files.is_empty(),
-        "no YAML files under .github; the scan would check nothing"
-    );
-    files
-}
-
-fn github_steps() -> Vec<ActionStep> {
-    github_yaml()
-        .iter()
-        .flat_map(|file| parse_action_steps(file, &repo::read(file)))
-        .collect()
-}
-
-/// Go: `TestGoLineIsOneValue` and `TestRustToolchainIsOneValue`. The Rust line (major.minor) is
-/// one value across rust-toolchain.toml, the MSRV in Cargo.toml, the build stage's image tag and
-/// every CI toolchain step. The MSRV names no patch, so the exact release is checked by
-/// `rust_toolchain_is_one_release` below.
+/// Go: `TestGoLineIsOneValue`. The MSRV in Cargo.toml is the line (major.minor) of the exact
+/// release rust-toolchain.toml pins, or a release of that line: it names no patch, so a consumer
+/// on an earlier patch release still builds.
 #[test]
-fn rust_line_is_one_value() {
-    let mut sources = vec![
-        source(
-            "rust-toolchain.toml",
-            r#"(?m)^channel = "(\d+\.\d+)(?:\.\d+)?"$"#,
-        ),
-        source(
-            "Cargo.toml",
-            r#"(?m)^rust-version = "(\d+\.\d+)(?:\.\d+)?"$"#,
-        ),
-        source(DOCKERFILE, r"dhi\.io/rust:(\d+\.\d+)[.-]"),
-    ];
-    let mut steps = 0;
-    for file in github_yaml() {
-        if parse_action_steps(&file, &repo::read(&file))
-            .iter()
-            .any(|step| step.action == RUST_TOOLCHAIN_ACTION)
-        {
-            steps += 1;
-            sources.push(source(
-                &file,
-                r"(?m)^\s*toolchain:\s*(\d+\.\d+)(?:\.\d+)?\s*$",
-            ));
-        }
-    }
-    assert!(
-        steps > 0,
-        "no {RUST_TOOLCHAIN_ACTION} step found under .github"
+fn rust_version_is_the_toolchain_line() {
+    let problems = rust_version_problems(
+        "Cargo.toml",
+        &meta::repo().read("Cargo.toml"),
+        &release(),
+        RustVersion::Line,
     );
-    expect_one_value("Rust line", &sources);
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
-/// The exact Rust release, patch included, is one value across rust-toolchain.toml, the build
-/// stage's image tag and every CI toolchain step, so the release binaries, the image's binary and
-/// the tested build come from the same compiler.
+/// Go: `TestRustToolchainIsOneValue`. Every CI step that sets up Rust installs the exact release
+/// rust-toolchain.toml pins, never a channel like stable or a release without its patch, so the
+/// release binaries and the tested build come from the same compiler.
 #[test]
-fn rust_toolchain_is_one_release() {
-    let mut sources = vec![
-        source(
-            "rust-toolchain.toml",
-            r#"(?m)^channel = "(\d+\.\d+\.\d+)"$"#,
-        ),
-        source(DOCKERFILE, r"dhi\.io/rust:(\d+\.\d+\.\d+)-"),
-    ];
-    for file in github_yaml() {
-        if parse_action_steps(&file, &repo::read(&file))
-            .iter()
-            .any(|step| step.action == RUST_TOOLCHAIN_ACTION)
-        {
-            sources.push(source(&file, r"(?m)^\s*toolchain:\s*(\d+\.\d+\.\d+)\s*$"));
-        }
-    }
-    expect_one_value("Rust release", &sources);
+fn ci_installs_the_toolchain_release() {
+    let problems = ci_toolchain_problems(&github_documents(), &release(), ToolchainRef::Input);
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
-/// The build stage's standard libraries are written for the image's exact toolchain: the
-/// `RUST_VERSION` argument is the version in the image tag.
+/// The image's build stage builds with the exact release rust-toolchain.toml pins (its
+/// `dhi.io/rust` tag), and its musl standard libraries are written for that toolchain: the
+/// `RUST_VERSION` argument is the release in the tag.
 #[test]
-fn image_toolchain_patch_is_the_standard_library_version() {
-    let dockerfile = repo::read(DOCKERFILE);
-    let tag = re(r"dhi\.io/rust:(\d+\.\d+\.\d+)-")
-        .captures(&dockerfile)
-        .map(|captures| captures[1].to_owned());
-    let argument = re(r"(?m)^ARG RUST_VERSION=(\S+)$")
-        .captures(&dockerfile)
-        .map(|captures| captures[1].to_owned());
-    assert!(
-        tag.is_some(),
-        "the build stage's tag names no exact Rust version"
+fn image_builds_with_the_toolchain_release() {
+    let problems = image_rust_problems(
+        DOCKERFILE,
+        &meta::repo().read(DOCKERFILE),
+        &release(),
+        RustVersion::Exact,
     );
-    assert_eq!(
-        tag, argument,
-        "the image's Rust and the RUST_VERSION of its musl standard libraries differ"
-    );
-}
-
-/// Go: `TestActionStepsArePinned`. Every Rust toolchain step under .github names an exact version.
-#[test]
-fn rust_toolchain_steps_are_pinned() {
-    let steps = github_steps();
-    let problems = rust_pin_problems(&steps);
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.action == RUST_TOOLCHAIN_ACTION),
-        "no {RUST_TOOLCHAIN_ACTION} step found under .github; the rule would check nothing"
-    );
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestActionPinRules`, the negative control of the step rules: each unpinned form is a
-/// problem.
+/// problem, and so is another action's `toolchain` input naming another release (repo-meta holds
+/// every CI toolchain input to the release, not only dtolnay/rust-toolchain's).
 #[test]
 fn rust_toolchain_pin_rules() {
-    let steps = parse_action_steps(
+    let sample = parse(
         "sample.yaml",
         r"jobs:
   test:
@@ -392,56 +189,58 @@ fn rust_toolchain_pin_rules() {
           toolchain: nightly
 ",
     );
-    assert_eq!(steps.len(), 5, "{steps:?}");
-    let problems = rust_pin_problems(&steps);
-    assert_eq!(problems.len(), 3, "{problems:#?}");
+    let problems = ci_toolchain_problems(
+        &[("sample.yaml".to_owned(), sample)],
+        "1.98.0",
+        ToolchainRef::Input,
+    );
+    assert_eq!(problems.len(), 4, "{problems:#?}");
 }
 
-/// The release binaries and the image are built with the same zig, from the same archive.
+/// The negative control of the image rule: a tag and a `RUST_VERSION` that differ, an image on
+/// another release, and a `COPY --from=` of another release's image, are refused.
 #[test]
-fn zig_is_one_version() {
-    expect_one_value(
-        "zig",
-        &[
-            source(DOCKERFILE, r"(?m)^ARG ZIG_VERSION=(\S+)$"),
-            source(SETUP_ZIGBUILD, r#"ZIG_VERSION:\s*"?([\d.]+)"#),
-        ],
-    );
-    // The x86_64 archive is downloaded in both places, so its digest is one value too: a bump
-    // that moves one copy fails here rather than in the first release that runs it.
-    expect_one_value(
-        "zig x86_64 sha256",
-        &[
-            source(
-                DOCKERFILE,
-                r"amd64\) zig_arch=x86_64; zig_sha256=([0-9a-f]{64}) ;;",
-            ),
-            source(SETUP_ZIGBUILD, r"ZIG_SHA256:\s*([0-9a-f]{64})"),
-        ],
-    );
+fn image_rust_rules() {
+    let dockerfile = meta::repo().read(DOCKERFILE);
+    let release = release();
+    let check = |content: &str| {
+        image_rust_problems(DOCKERFILE, content, &release, RustVersion::Exact).is_empty()
+    };
+    assert!(check(&dockerfile));
+    let argument = format!("ARG RUST_VERSION={release}\n");
+    let tag = format!("dhi.io/rust:{release}-");
+    for broken in [
+        dockerfile.replacen(&argument, "ARG RUST_VERSION=1.0.0\n", 1),
+        dockerfile.replacen(&tag, "dhi.io/rust:1.0.0-", 1),
+        dockerfile
+            .replacen(&argument, "ARG RUST_VERSION=1.0.0\n", 1)
+            .replacen(&tag, "dhi.io/rust:1.0.0-", 1),
+        format!(
+            "{dockerfile}COPY --from=dhi.io/rust:1.97.0-debian13-dev /usr/local/rustup \
+             /usr/local/rustup\n"
+        ),
+    ] {
+        assert_ne!(broken, dockerfile, "a negative control changed nothing");
+        assert!(!check(&broken), "{broken}");
+    }
 }
 
-/// The release binaries and the image are built with the same cargo-zigbuild, from the same
-/// archive.
+/// The release binaries and the image are built with the same zig and the same cargo-zigbuild,
+/// from the same `x86_64` archives: both download those, so a bump that moves one copy fails here
+/// rather than in the first release that runs it.
 #[test]
-fn cargo_zigbuild_is_one_version() {
-    expect_one_value(
-        "cargo-zigbuild",
-        &[
-            source(DOCKERFILE, r"(?m)^ARG CARGO_ZIGBUILD_VERSION=(\S+)$"),
-            source(SETUP_ZIGBUILD, r#"CARGO_ZIGBUILD_VERSION:\s*"?([\d.]+)"#),
-        ],
+fn zig_and_cargo_zigbuild_are_one_version() {
+    let repo = meta::repo();
+    let dockerfile = repo.read(DOCKERFILE);
+    let problems = zigbuild_action_problems(
+        SETUP_ZIGBUILD,
+        &repo.read(SETUP_ZIGBUILD),
+        ZigRecord::Dockerfile {
+            file: DOCKERFILE,
+            content: &dockerfile,
+        },
     );
-    expect_one_value(
-        "cargo-zigbuild x86_64 sha256",
-        &[
-            source(
-                DOCKERFILE,
-                r"amd64\) zigbuild_asset=x86_64-unknown-linux-musl; zigbuild_sha256=([0-9a-f]{64}) ;;",
-            ),
-            source(SETUP_ZIGBUILD, r"CARGO_ZIGBUILD_SHA256:\s*([0-9a-f]{64})"),
-        ],
-    );
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestShellCheckIsOneVersion`. droast's ShellCheck bridge runs the `shellcheck` on `PATH`,
@@ -449,53 +248,27 @@ fn cargo_zigbuild_is_one_version() {
 /// (its rev adds a fourth component for the wrapper), which Dependabot moves.
 #[test]
 fn shellcheck_is_one_version() {
-    expect_one_value(
-        "ShellCheck",
-        &[
-            source(
-                ".pre-commit-config.yaml",
-                r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)",
-            ),
-            source(
-                ".github/actions/setup-shellcheck/action.yaml",
-                r#"SHELLCHECK_VERSION:\s*["']?(v[\d.]+)"#,
-            ),
-        ],
+    let repo = meta::repo();
+    let problems = shellcheck_problems(
+        PRE_COMMIT,
+        &repo.read(PRE_COMMIT),
+        SETUP_SHELLCHECK,
+        &repo.read(SETUP_SHELLCHECK),
     );
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestTrivyIsOneVersion`. The release scan and the scheduled scan of the published image
-/// use one Trivy, so a finding means the same in both (docs/release.md).
+/// install one exact Trivy, so a finding means the same in both (docs/release.md).
 #[test]
 fn trivy_is_one_version() {
-    let trivy = r#"(?m)^\s*TRIVY_VERSION:\s*["']?(v\d+\.\d+\.\d+)"#;
-    expect_one_value(
-        "Trivy",
-        &[
-            source(".github/workflows/release.yaml", trivy),
-            source(".github/workflows/scheduled-scan.yaml", trivy),
-        ],
-    );
-}
-
-/// The hooks of .pre-commit-config.yaml by id, as written; an id with aliases (the actionlint,
-/// shellcheck and yamllint variants) appears more than once.
-fn pre_commit_hooks() -> Vec<(String, Value)> {
-    let config: Value = serde_yaml_ng::from_str(&repo::read(".pre-commit-config.yaml"))
-        .unwrap_or_else(|error| panic!("parse .pre-commit-config.yaml: {error}"));
-    let repos = config
-        .get("repos")
-        .and_then(Value::as_sequence)
-        .unwrap_or_else(|| panic!(".pre-commit-config.yaml has no repos list"));
-    repos
-        .iter()
-        .filter_map(|entry| entry.get("hooks").and_then(Value::as_sequence))
-        .flatten()
-        .map(|hook| {
-            let id = hook.get("id").and_then(Value::as_str).unwrap_or_default();
-            (id.to_owned(), hook.clone())
-        })
-        .collect()
+    let repo = meta::repo();
+    let workflows = repo.read_all(&[
+        ".github/workflows/release.yaml".to_owned(),
+        ".github/workflows/scheduled-scan.yaml".to_owned(),
+    ]);
+    let problems = trivy_problems(&workflows);
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// The hooks that read the whole tree rather than the files pre-commit passes, so each one runs
@@ -508,80 +281,25 @@ const ALWAYS_RUN_HOOKS: [&str; 3] = ["check-license-headers", "check-suppression
 /// included.
 #[test]
 fn always_run_hooks_run_once() {
-    let hooks = pre_commit_hooks();
-    let mut problems = Vec::new();
-    for id in ALWAYS_RUN_HOOKS {
-        let found: Vec<&Value> = hooks
-            .iter()
-            .filter(|(hook_id, _)| hook_id == id)
-            .map(|(_, hook)| hook)
-            .collect();
-        let [hook] = found.as_slice() else {
-            problems.push(format!(
-                "hook {id} appears {} times, want once",
-                found.len()
-            ));
-            continue;
-        };
-        if hook.get("always_run").and_then(Value::as_bool) != Some(true) {
-            problems.push(format!("hook {id} does not set always_run: true"));
-        }
-        if hook.get("pass_filenames").and_then(Value::as_bool) != Some(false) {
-            problems.push(format!("hook {id} does not set pass_filenames: false"));
-        }
-        let stages: Option<Vec<&str>> = hook
-            .get("stages")
-            .and_then(Value::as_sequence)
-            .map(|stages| stages.iter().filter_map(Value::as_str).collect());
-        if stages.as_deref() != Some(["pre-commit"].as_slice()) {
-            problems.push(format!(
-                "hook {id} runs at stages {stages:?}, want exactly [pre-commit]"
-            ));
-        }
-    }
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    let config = parse(PRE_COMMIT, &meta::repo().read(PRE_COMMIT));
+    let hooks =
+        yaml::pre_commit_hooks(PRE_COMMIT, &config).unwrap_or_else(|problem| panic!("{problem}"));
+    let problems = always_run_problems(&hooks, &ALWAYS_RUN_HOOKS);
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
-/// A flag that turns a gate with nothing to check, or a failing one, into a pass.
-struct VacuousFlag {
-    name: &'static str,
-    pattern: Regex,
+/// The flags none of the files that define gates may carry: the core set and the Rust set (a test
+/// run that only compiles, capped or allowed lints, tests skipped by name, a member excluded, a
+/// clippy run without `-D warnings`), outside [`ALLOWED_FRAGMENTS`].
+fn vacuous_flags() -> VacuousFlags {
+    VacuousFlags::core().with_rust()
 }
 
-/// The flags none of the files that define gates may carry, outside [`ALLOWED_FRAGMENTS`].
-fn vacuous_flags() -> Vec<VacuousFlag> {
-    [
-        ("|| true", r"\|\|\s*(true\b|:(\s|;|$)|exit\s+0\b)"),
-        ("make's - recipe prefix", r"^\t[@+]*-"),
-        (".IGNORE", r"^\.IGNORE\b"),
-        (
-            "make --ignore-errors",
-            r"\$\(MAKE\).*\s(-[a-zA-Z]*i[a-zA-Z]*|--ignore-errors)\b",
-        ),
-        ("continue-on-error", r"continue-on-error"),
-        (
-            "if: false",
-            r#"\bif:\s*(["']?false["']?\s*$|["']?\$\{\{\s*false\s*\}\}["']?)"#,
-        ),
-    ]
-    .into_iter()
-    .map(|(name, pattern)| VacuousFlag {
-        name,
-        pattern: re(pattern),
-    })
-    .collect()
-}
-
-/// One exact piece of shell, in one file, whose `|| true` is not a gate passing on nothing; the
-/// reason says why. A line is allowed only when the flag is gone once the fragment is removed, so
-/// a second `|| true` on the same line is still caught.
-struct AllowedFragment {
-    file: &'static str,
-    fragment: &'static str,
-    reason: &'static str,
-}
-
-const ALLOWED_FRAGMENTS: [AllowedFragment; 2] = [
+/// The exact pieces of shell, each in one file, whose `|| true` is not a gate passing on nothing;
+/// the reason says why. A line is allowed only when the flag is gone once the fragment is
+/// removed, so a second `|| true` on the same line is still caught, and an entry that matches
+/// nothing is a problem.
+const ALLOWED_FRAGMENTS: [AllowedFragment<'static>; 2] = [
     AllowedFragment {
         file: ".github/workflows/release.yaml",
         fragment: r#"{ grep -E "$RELEASE_TAG_REGEX" || true; }"#,
@@ -595,68 +313,28 @@ const ALLOWED_FRAGMENTS: [AllowedFragment; 2] = [
     },
 ];
 
-/// The flags on `content`'s lines, after removing the fragments allowed in `file`, as
-/// `<line>: <flag>: <text>`; `used` records which allowlist entries matched.
-fn vacuous_hits(
-    flags: &[VacuousFlag],
-    file: &str,
-    content: &str,
-    used: &mut [bool; ALLOWED_FRAGMENTS.len()],
-) -> Vec<String> {
-    let mut hits = Vec::new();
-    for (index, line) in content.split('\n').enumerate() {
-        let mut line = line.to_owned();
-        for (allowed_index, allowed) in ALLOWED_FRAGMENTS.iter().enumerate() {
-            if allowed.file == file && line.contains(allowed.fragment) {
-                line = line.replace(allowed.fragment, "");
-                used[allowed_index] = true;
-            }
-        }
-        for flag in flags {
-            if flag.pattern.is_match(&line) {
-                hits.push(format!("{}: {}: {}", index + 1, flag.name, line.trim()));
-            }
-        }
-    }
-    hits
-}
-
 /// Go: `TestNoVacuousFlags`. Scans the files that define gates: the Makefile and the make
 /// fragments, the pre-commit configuration and every YAML file under .github, the workflows
 /// included.
 #[test]
 fn no_vacuous_flags() {
-    let flags = vacuous_flags();
-    let fragments = repo::files_under(".mk", &[".mk"]);
+    let repo = meta::repo();
+    let fragments = repo.files_under(".mk", &[".mk"]);
     assert!(
         !fragments.is_empty(),
         "no make fragments found under .mk/; the scan would check nothing"
     );
-    let workflows = repo::files_under(".github", &[".yaml", ".yml"]);
+    let workflows = repo.files_under(".github", &[".yaml", ".yml"]);
     assert!(
         !workflows.is_empty(),
         "no YAML found under .github; the checks would see nothing"
     );
-    let mut files = vec!["Makefile".to_owned(), ".pre-commit-config.yaml".to_owned()];
+    let mut files = vec!["Makefile".to_owned(), PRE_COMMIT.to_owned()];
     files.extend(fragments);
     files.extend(workflows);
 
-    let mut used = [false; ALLOWED_FRAGMENTS.len()];
-    let mut problems = Vec::new();
-    for file in &files {
-        for hit in vacuous_hits(&flags, file, &repo::read(file), &mut used) {
-            problems.push(format!("{file}:{hit}"));
-        }
-    }
-    for (allowed, used) in ALLOWED_FRAGMENTS.iter().zip(used) {
-        if !used {
-            problems.push(format!(
-                "the allowlist entry {:?} in {} ({}) matches nothing; remove it",
-                allowed.fragment, allowed.file, allowed.reason
-            ));
-        }
-    }
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    let problems = vacuous_flags().problems(&repo.read_all(&files), &ALLOWED_FRAGMENTS);
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestVacuousFlagsAreRecognized`, the negative control: each flag, written as a gate would
@@ -665,6 +343,11 @@ fn no_vacuous_flags() {
 fn vacuous_flags_are_recognized() {
     let flags = vacuous_flags();
     let mut used = [false; ALLOWED_FRAGMENTS.len()];
+    let mut hits = |file: &str, sample: &str| {
+        flags
+            .hits(file, sample, &ALLOWED_FRAGMENTS, &mut used)
+            .len()
+    };
     for sample in [
         "\tcargo test --workspace || true",
         "\tcargo test --workspace ||:",
@@ -679,19 +362,22 @@ fn vacuous_flags_are_recognized() {
         "    if: ${{ false }}",
         "    if: 'false'",
         "    if: \"${{ false }}\"",
+        "\t$(CARGO) test --workspace --locked --no-run",
+        "        entry: cargo test --workspace --locked -- --skip slow",
+        "\t$(CARGO) clippy --workspace --all-targets --all-features --locked",
     ] {
         assert!(
-            !vacuous_hits(&flags, "Makefile", sample, &mut used).is_empty(),
+            hits("Makefile", sample) > 0,
             "no vacuous flag found in {sample:?}"
         );
     }
 
     let release = ".github/workflows/release.yaml";
     let allowed = r#"  { grep -E "$RELEASE_TAG_REGEX" || true; } | sort -V"#;
-    let hits = vacuous_hits(&flags, release, allowed, &mut used);
-    assert!(
-        hits.is_empty(),
-        "the allowed fragment was flagged: {hits:?}"
+    assert_eq!(
+        hits(release, allowed),
+        0,
+        "the allowed fragment was flagged"
     );
 
     let extended = format!("{allowed} || true");
@@ -704,10 +390,17 @@ fn vacuous_flags_are_recognized() {
         ),
     ] {
         assert!(
-            !vacuous_hits(&flags, file, sample, &mut used).is_empty(),
+            hits(file, sample) > 0,
             "{file}: {sample:?} passed through the allowlist"
         );
     }
+
+    // An entry that matches nothing is a problem, so it cannot outlive the code it excuses.
+    let problems = flags.problems(
+        &[(release.to_owned(), "jobs: {}\n".to_owned())],
+        &ALLOWED_FRAGMENTS,
+    );
+    assert_eq!(problems.len(), ALLOWED_FRAGMENTS.len(), "{problems:?}");
 }
 
 /// Go: `TestToolGateListIsClosed`. No meta-test may skip on a missing tool: none looks a tool up
@@ -716,22 +409,31 @@ fn vacuous_flags_are_recognized() {
 /// that needs an external tool fails without it.
 #[test]
 fn no_meta_test_skips_on_a_missing_tool() {
-    let own_lookup =
-        re(r"\bsplit_paths\(|\bvar_os\(\s*\x22PATH\x22|Command::new\(\s*\x22which\x22");
-    let sources = repo::files_under("meta", &[".rs"]);
+    let repo = meta::repo();
+    let sources = repo.files_under("meta", &[".rs"]);
     assert!(
         sources.iter().any(|path| path == "meta/tests/toolchain.rs"),
         "the walk did not reach meta/tests: {sources:?}"
     );
-    for path in &sources {
-        assert!(
-            !own_lookup.is_match(&repo::read(path)),
-            "{path} looks a tool up on PATH; a meta-test needing a tool must fail without it"
-        );
-    }
+    let problems = tool_lookup_problems(&repo.read_all(&sources), &[]);
+    assert!(problems.is_empty(), "{}", report(&problems));
 
     // The negative control. The samples are split so this file does not match its own check.
-    assert!(own_lookup.is_match(concat!("let found = env::split", "_paths(&paths);")));
-    assert!(own_lookup.is_match(concat!("std::env::var", "_os(\x22PATH\x22)")));
-    assert!(own_lookup.is_match(concat!("Command::new(\x22wh", "ich\x22)")));
+    for sample in [
+        concat!("let found = env::split", "_paths(&paths);"),
+        concat!("std::env::var", "_os(\x22PATH\x22)"),
+        concat!("Command::new(\x22wh", "ich\x22)"),
+        concat!(
+            "use testenv_core::tool",
+            "gate::Gate;\n\nfn droast(gate: &Gate) {\n    let _ = gate.look",
+            "up(\x22droast\x22);\n}\n"
+        ),
+    ] {
+        let files = [("meta/tests/x.rs".to_owned(), sample.to_owned())];
+        assert_eq!(
+            tool_lookup_problems(&files, &[]).len(),
+            1,
+            "{sample:?} was not recognised"
+        );
+    }
 }

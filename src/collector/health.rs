@@ -32,9 +32,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use crate::clock::Clock;
-use crate::metrics::{Collector, GaugeFunc, GaugeVec, Kind};
-use crate::metrics::{RegisterError, Registry, constant_desc};
+use go_clock::Clock;
+use go_prom::{Collector, GaugeFunc, GaugeVec, Kind};
+use go_prom::{RegisterError, Registry, constant_desc};
 
 use super::metrics_ids::{EXPORTER_SUBSYSTEM, NAMESPACE};
 use super::must;

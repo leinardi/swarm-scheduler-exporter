@@ -24,109 +24,77 @@
 
 //! The line between the plain `cargo test` and the Docker-driving integration suite, which
 //! `cargo test --workspace` in CI and the cargo-test hook run without Docker: everything that
-//! reaches a daemon sits behind testenv's `integration` feature, and no other test target drives
-//! the docker CLI.
+//! reaches a daemon sits behind testenv's `integration` feature, every testenv test target
+//! requires it, no plain test command turns it on, and no other test target drives the docker
+//! CLI. The checks are `repo_meta::integration`'s.
 
 use std::collections::BTreeSet;
-use std::sync::LazyLock;
 
-use meta::repo;
-use regex::Regex;
-use toml::Table;
+use repo_meta::integration::{IntegrationGate, cargo_test_commands, docker_drivers};
+use repo_meta::{Problem, report};
+
+const GATE: IntegrationGate<'static> = IntegrationGate {
+    feature: "integration",
+    src_dir: "testenv/src",
+    manifest: "testenv/Cargo.toml",
+    suite: "integration",
+    integration_files: &[
+        ".mk/integration-test.mk",
+        ".github/workflows/integration.yaml",
+    ],
+};
+
+/// The crate whose use drives a daemon: bollard, the SDK the harness creates and removes things
+/// with. The exporter's own client is held to the read-only rules of `docker_boundary.rs`.
+const CLIENTS: &[&str] = &["bollard"];
 
 const HARNESS_LIB: &str = "testenv/src/lib.rs";
-const HARNESS_MANIFEST: &str = "testenv/Cargo.toml";
-const FEATURE: &str = "integration";
 
-fn regex(pattern: &str) -> Regex {
-    Regex::new(pattern).unwrap_or_else(|error| panic!("invalid pattern {pattern}: {error}"))
-}
-
-/// What reaches a Docker daemon from a source file: the SDK imported or named in code (not in a
-/// comment or a string, as the boundary test's own fixtures do), or the docker CLI as a child.
-static DRIVES_DOCKER: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r"(?m)^\s*(?:pub )?use bollard\b|^[^\x22/\n]*\bbollard::|Command::new\(\s*\x22docker\x22")
-});
-/// A module declaration in lib.rs, with the attribute lines right above it.
-static MODULE: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r"(?m)^((?:#\[[^\n]*\]\n)*)(?:pub(?:\([a-z]+\))? )?mod ([a-z_][a-z0-9_]*);")
-});
-
-/// The modules lib.rs declares without the `integration` feature gate.
-fn ungated_modules(lib: &str) -> BTreeSet<String> {
-    let gate = format!("#[cfg(feature = \x22{FEATURE}\x22)]");
-    MODULE
-        .captures_iter(lib)
-        .filter(|captures| !captures[1].contains(&gate))
-        .map(|captures| captures[2].to_owned())
-        .collect()
-}
-
-/// The files of `files` (path and text) that drive Docker.
-fn docker_drivers(files: &[(String, String)]) -> Vec<&str> {
-    files
-        .iter()
-        .filter(|(_, text)| DRIVES_DOCKER.is_match(text))
-        .map(|(path, _)| path.as_str())
-        .collect()
-}
-
-fn read_all(paths: &[String]) -> Vec<(String, String)> {
-    paths
-        .iter()
-        .map(|path| (path.clone(), repo::read(path)))
-        .collect()
-}
-
-/// Go: `TestIntegrationTreesAreTagged`. Every harness module that reaches Docker is compiled only
-/// with the `integration` feature, and the suite itself is a test target that requires it.
+/// Go: `TestIntegrationTreesAreTagged`. Every harness source built without the `integration`
+/// feature (lib.rs and each module it declares without the gate) stays off Docker; the feature
+/// exists and is off by default, and every testenv test target, the suite among them, requires
+/// exactly it.
 #[test]
 fn integration_tree_is_gated() {
-    let ungated = ungated_modules(&repo::read(HARNESS_LIB));
+    let repo = meta::repo();
+    let lib = repo.read(HARNESS_LIB);
     assert!(
-        !ungated.is_empty(),
+        !GATE.gated_modules(&lib).is_empty(),
+        "no module of {HARNESS_LIB} is behind the integration feature; the gate checks nothing"
+    );
+    let ungated = GATE.ungated_sources(&lib, &repo.files_under(GATE.src_dir, &[".rs"]));
+    assert!(
+        ungated.iter().any(|path| path != HARNESS_LIB),
         "no ungated module in {HARNESS_LIB}; the check would pass on nothing"
     );
-    let ungated_files: Vec<String> = repo::files_under("testenv/src", &[".rs"])
-        .into_iter()
-        .filter(|path| {
-            let module = path
-                .trim_start_matches("testenv/src/")
-                .split(['/', '.'])
-                .next()
-                .unwrap_or_default();
-            ungated.contains(module)
-        })
-        .collect();
-    let sources = read_all(&ungated_files);
-    let drivers = docker_drivers(&sources);
-    assert!(
-        drivers.is_empty(),
-        "harness modules built without the {FEATURE} feature reach Docker: {drivers:?}"
-    );
+    let mut problems = docker_drivers(&repo.read_all(&ungated), CLIENTS);
+    problems.extend(GATE.manifest_problems(&repo.read(GATE.manifest)));
+    assert!(problems.is_empty(), "{}", report(&problems));
+}
 
-    let manifest: Table = repo::read(HARNESS_MANIFEST)
-        .parse()
-        .unwrap_or_else(|error| panic!("parse {HARNESS_MANIFEST}: {error}"));
-    let suite = manifest
-        .get("test")
-        .and_then(toml::Value::as_array)
-        .and_then(|targets| {
-            targets
-                .iter()
-                .find(|target| target.get("name").and_then(toml::Value::as_str) == Some(FEATURE))
-        })
-        .unwrap_or_else(|| panic!("{HARNESS_MANIFEST} declares no [[test]] named {FEATURE}"));
-    let required: Vec<&str> = suite
-        .get("required-features")
-        .and_then(toml::Value::as_array)
-        .map(|features| features.iter().filter_map(toml::Value::as_str).collect())
-        .unwrap_or_default();
-    assert_eq!(
-        required,
-        [FEATURE],
-        "the {FEATURE} suite must require exactly the {FEATURE} feature"
+/// No plain test command (the Makefile and its fragments, the pre-commit configuration, every
+/// workflow and action) turns the `integration` feature on: only the integration fragment and
+/// workflow may.
+#[test]
+fn plain_test_commands_leave_the_feature_off() {
+    let repo = meta::repo();
+    let mut files = vec!["Makefile".to_owned(), ".pre-commit-config.yaml".to_owned()];
+    files.extend(repo.files_under(".mk", &[".mk"]));
+    files.extend(repo.files_under(".github", &[".yaml", ".yml"]));
+    let sources = repo.read_all(&files);
+    let commands: usize = sources
+        .iter()
+        .map(|(_, content)| cargo_test_commands(content))
+        .sum();
+    assert!(
+        commands > 0,
+        "no cargo test command found in {files:?}; the check would pass on nothing"
     );
+    let problems: Vec<Problem> = sources
+        .iter()
+        .flat_map(|(file, content)| GATE.plain_test_problems(file, content))
+        .collect();
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestUntaggedTestsAvoidDocker`. No source of the exporter, its tests or the meta crate
@@ -134,33 +102,59 @@ fn integration_tree_is_gated() {
 /// harness behind the feature drives a daemon.
 #[test]
 fn plain_tests_avoid_docker() {
+    let repo = meta::repo();
     let mut paths = Vec::new();
     for tree in ["src", "tests", "meta"] {
-        paths.extend(repo::files_under(tree, &[".rs"]));
+        paths.extend(repo.files_under(tree, &[".rs"]));
     }
     assert!(
         paths.len() > 10,
         "only {} sources found; the check would pass on nothing",
         paths.len()
     );
-    let sources = read_all(&paths);
-    let drivers = docker_drivers(&sources);
-    assert!(
-        drivers.is_empty(),
-        "sources outside the gated harness reach Docker: {drivers:?}"
-    );
+    let problems = docker_drivers(&repo.read_all(&paths), CLIENTS);
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestDockerCheckRecognizesItsTargets`. The negative controls: a gated declaration is
-/// recognised, an ungated one is reported, and both ways of reaching Docker are found.
+/// recognised, an ungated one is scanned, both ways of reaching Docker are found, and a feature
+/// turned on in a plain test command is refused.
 #[test]
 fn separation_rules_are_recognized() {
     let lib = "#[cfg(feature = \x22integration\x22)]\nmod dind;\n\
                #[cfg(feature = \x22integration\x22)]\npub mod context;\n\
                mod error;\npub mod redact;\n#[cfg(test)]\nmod tests;\n";
     assert_eq!(
-        ungated_modules(lib),
-        BTreeSet::from(["error".to_owned(), "redact".to_owned(), "tests".to_owned()])
+        GATE.gated_modules(lib),
+        BTreeSet::from(["context".to_owned(), "dind".to_owned()])
+    );
+    let paths: Vec<String> = [
+        "testenv/src/lib.rs",
+        "testenv/src/dind.rs",
+        "testenv/src/context/mod.rs",
+        "testenv/src/error.rs",
+        "testenv/src/redact.rs",
+        "testenv/src/tests.rs",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    assert_eq!(
+        GATE.ungated_sources(lib, &paths),
+        [
+            "testenv/src/lib.rs",
+            "testenv/src/error.rs",
+            "testenv/src/redact.rs",
+            "testenv/src/tests.rs"
+        ]
+    );
+    // A module also declared without the gate (a stub for the plain build) is built there, so
+    // it is not gated and its files are scanned.
+    let doubled = "#[cfg(feature = \x22integration\x22)]\nmod dind;\n\
+                   #[cfg(not(feature = \x22integration\x22))]\nmod dind;\n";
+    assert_eq!(GATE.gated_modules(doubled), BTreeSet::new());
+    assert_eq!(
+        GATE.ungated_sources(doubled, &["testenv/src/dind.rs".to_owned()]),
+        ["testenv/src/dind.rs"]
     );
 
     let files = [
@@ -182,5 +176,22 @@ fn separation_rules_are_recognized() {
             "    let client = bollard::Docker::connect();".to_owned(),
         ),
     ];
-    assert_eq!(docker_drivers(&files), ["a.rs", "b.rs", "e.rs"]);
+    let found: Vec<String> = docker_drivers(&files, CLIENTS)
+        .into_iter()
+        .map(|problem| problem.location)
+        .collect();
+    assert_eq!(found, ["a.rs", "b.rs", "e.rs"]);
+
+    let enabled = "\t$(CARGO) test --workspace --locked --features integration";
+    assert_eq!(GATE.plain_test_problems(".mk/rust.mk", enabled).len(), 1);
+    assert_eq!(
+        GATE.plain_test_problems(".mk/integration-test.mk", enabled),
+        []
+    );
+    let without = "[features]\nintegration = []\n\n[[test]]\nname = \x22integration\x22\n";
+    assert_eq!(
+        GATE.manifest_problems(without).len(),
+        1,
+        "a suite without the feature"
+    );
 }

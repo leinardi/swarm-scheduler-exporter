@@ -41,6 +41,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context as TaskContext, Poll};
 
 use bytes::Bytes;
+use go_clock::{Clock as _, SystemClock};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt as _, Full};
 use hyper::body::{Body, Frame, Incoming};
@@ -52,7 +53,6 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use regex::Regex;
-use swarm_scheduler_exporter::clock::{Clock as _, SystemClock};
 use tokio::net::TcpListener;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 

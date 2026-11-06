@@ -26,7 +26,7 @@
 
 use std::time::Duration;
 
-use testenv::context::Context;
+use testenv_core::context::Context;
 use tokio::process::Command;
 
 use crate::launcher::Launch;

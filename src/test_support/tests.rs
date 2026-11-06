@@ -128,9 +128,9 @@ async fn fake_events_stream_from_the_channel_and_end_when_it_closes() {
 
 #[test]
 fn capture_logs_records_what_is_logged_at_the_level() {
-    let (logger, sink) = capture_logs(crate::logger::Level::INFO);
+    let (logger, sink) = capture_logs(go_slog::Level::INFO);
     logger.debug("hidden", &[]);
-    logger.warn("shown", &[crate::logger::Attr::string("key", "value")]);
+    logger.warn("shown", &[go_slog::Attr::string("key", "value")]);
     assert_eq!(sink.contents(), "level=WARN shown key=value\n");
 }
 

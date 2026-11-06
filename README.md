@@ -674,7 +674,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the daemon answers 2xx; a failed connect goes straight to the warn path |
 | Q7 | Reconnect backoff | The 500ms backoff reset only after a stream that carried an event, so a quiet cluster behind a proxy backed off to 30s | It resets after any stream that connected |
 | Q8 | Shutdown | 10s for the HTTP drain, then an unbounded wait for the workers | One 10s budget from the signal to exit, covering the drain and the workers |
-| Q9 | Error texts | Library errors in Go's and the Docker SDK's wording | Library errors in Rust's wording; every prefix and message the exporter writes itself is unchanged |
+| Q9 | Error texts | Library errors in Go's and the Docker SDK's wording | Library errors in Rust's wording; every prefix and message the exporter writes itself is unchanged, and an OS error number reads as Go's `syscall.Errno` text (`errno <n>` for one Go does not name) |
 | Q10 | Panic recovery | `reconciler recovered from panic` with a Go stack trace | The same record, with the panic message and a Rust backtrace |
 | Q11 | Docker wire | User-Agent `moby-client/…`; one version ping per concurrent first request | User-Agent `swarm-scheduler-exporter/<version>`; concurrent first requests share one ping; every other request detail unchanged |
 | Q12 | Go runtime environment | `GOMAXPROCS`, `GOMEMLIMIT`, `GOGC` and `GODEBUG` tuned the process | No effect; the worker count follows the CPUs available to the container |

@@ -36,7 +36,7 @@ use jiff::tz::TimeZone;
 pub(crate) use fake_docker::{FakeDocker, FakeEvent};
 
 use crate::docker::types::{Node, NodeDescription, NodeSpec, NodeStatus, Platform};
-use crate::logger::{Config, Format, Level, Logger, MemorySink};
+use go_slog::{Config, Format, Level, Logger, MemorySink};
 
 /// How often [`eventually`] checks its condition.
 const EVENTUALLY_INTERVAL: Duration = Duration::from_millis(10);
@@ -50,6 +50,7 @@ pub(crate) fn capture_logs(level: Level) -> (Logger, MemorySink) {
             format: Format::Plain,
             level,
             include_time: false,
+            plain_style: go_slog::PlainStyle::Quoted,
         },
         Box::new(sink.clone()),
         TimeZone::UTC,

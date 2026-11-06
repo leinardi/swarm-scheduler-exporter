@@ -37,7 +37,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::*;
-use crate::clock::FakeClock;
 use crate::collector::desired::labels_for_metadata;
 use crate::collector::health::Timestamps;
 use crate::collector::metrics_ids::{
@@ -54,8 +53,9 @@ use crate::docker::types::{
 use crate::docker::{
     DOCKER_REQUEST_TIMEOUT, Error, EventStream, Filters, StreamError, StreamErrorKind,
 };
-use crate::logger::{Level, MemorySink};
 use crate::test_support::{FakeEvent, capture_logs, eventually, schedulable_node};
+use go_clock::FakeClock;
+use go_slog::{Level, MemorySink};
 
 mod listener;
 mod poll;
@@ -97,10 +97,11 @@ fn state_checking_reconciler() -> (Reconciler<TestDocker>, Arc<AtomicUsize>) {
         Timestamp::from_second(1_767_225_600).unwrap()
     });
     let logger = Logger::new(
-        crate::logger::Config {
-            format: crate::logger::Format::Plain,
+        go_slog::Config {
+            format: go_slog::Format::Plain,
             level: Level::DEBUG,
             include_time: false,
+            plain_style: go_slog::PlainStyle::Quoted,
         },
         Box::new(StateCheckingSink {
             shared: Arc::clone(&shared),
@@ -667,7 +668,7 @@ impl Fixture {
     }
 
     fn desired_series(&self) -> usize {
-        let registry = crate::metrics::Registry::new();
+        let registry = go_prom::Registry::new();
         self.collectors.replica_gauges.register(&registry).unwrap();
         registry
             .gather()

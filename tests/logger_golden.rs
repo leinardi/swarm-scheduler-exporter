@@ -34,10 +34,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use go_compat::time_layout;
+use go_slog::{Attr, Config, Format, Level, Logger, MemorySink};
 use jiff::Timestamp;
 use jiff::tz::{Offset, TimeZone};
-use swarm_scheduler_exporter::go_compat::time_layout;
-use swarm_scheduler_exporter::logger::{Attr, Config, Format, Level, Logger, MemorySink};
 
 /// The record time, 2026-10-25T14:03:04.567891234+01:00.
 fn record_time() -> Timestamp {
@@ -327,6 +327,7 @@ fn compare(format: Format, include_time: bool, file: &str) {
                 format,
                 level: Level(-100),
                 include_time,
+                plain_style: go_slog::PlainStyle::Quoted,
             },
             Box::new(sink.clone()),
             TimeZone::fixed(cet()),

@@ -30,9 +30,9 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use swarm_scheduler_exporter::go_compat::duration;
-use testenv::context::Context;
+use go_compat::duration;
 use testenv::metrics_text::{Labels, Scrape, format_series, format_value, labels};
+use testenv_core::context::Context;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::http::scrape_metrics;

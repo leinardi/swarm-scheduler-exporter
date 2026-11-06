@@ -24,6 +24,8 @@
 
 use std::path::PathBuf;
 
+use docker_engine::types::{decode_first, decode_list};
+
 use super::*;
 
 const FIXTURE_SETS: [&str; 2] = ["api-1.51", "api-1.56"];

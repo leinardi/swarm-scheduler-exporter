@@ -22,65 +22,73 @@
  * SOFTWARE.
  */
 
-//! The read-only Docker Engine client, in-tree on hyper (S1): the transport and moby client
-//! v0.6.0's lazy API version negotiation, the read-only [`DockerApi`] on top of it, the
-//! [`types`] it decodes and the [`events`] stream.
+//! The exporter's side of the Docker Engine API: [`DockerApi`], the read-only calls all collector
+//! code reaches Docker through, the [`types`] they decode, and the timeouts the callers put around
+//! them. The transport is rust-common's `docker-engine` (moby client v0.6.0's requests, its lazy
+//! API version negotiation, its error wording and the event stream), built from the environment
+//! by [`settings_from_env`] as the Go exporter's `newDockerClient` built its client.
 //!
-//! - [`Settings::from_env`] reads `DOCKER_HOST`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and
-//!   `DOCKER_API_VERSION` as the Go exporter's `newDockerClient` does (moby's `FromEnv` parts on a
-//!   transport it owns), with one change: a certificate path without `DOCKER_TLS_VERIFY` is refused
-//!   instead of connecting without server verification (Q5).
-//! - [`Client`] sends HTTP/1.1 only, with no proxy: unix sockets with the `api.moby.localhost`
-//!   host, TCP with or without TLS 1.2+, a 10s dial and a 10s TLS handshake timeout, a 30s
-//!   response-header timeout, up to two idle connections kept for 30s, and on TCP Go's
-//!   `Accept-Encoding: gzip` with the transparent decompression that comes with it.
-//! - The first request pings `/_ping` (`HEAD`, then `GET`) and negotiates the API version down
-//!   from 1.56; a failed negotiation is not an error, exactly as in moby, and concurrent first
-//!   requests share one ping (Q11).
+//! - `DOCKER_HOST`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and `DOCKER_API_VERSION` are read by
+//!   [`Settings::from_env`], with one change from Go: a certificate path without
+//!   `DOCKER_TLS_VERIFY` is refused instead of connecting without server verification (Q5).
+//! - [`Client`] is the crate's client behind [`DockerApi`] alone: HTTP/1.1 only, with no proxy,
+//!   the `User-Agent` `swarm-scheduler-exporter/<version>` and a [`RESPONSE_HEADER_TIMEOUT`] of
+//!   30s.
+//! - Every call is bounded by the caller with the bare `context deadline exceeded`
+//!   ([`with_docker_timeout`], [`with_bare_timeout`], [`with_bare_deadline`]).
 //!
-//! Read-only by construction: the request builder only makes `GET` requests, `HEAD` is set in
-//! one place, the ping, on `/_ping`, and [`DockerApi`] has list, inspect and events calls only.
+//! Read-only by construction: the exporter enables none of the crate's write features, so the
+//! client sends `GET` only, plus one `HEAD /_ping`, and [`DockerApi`] has list, inspect and events
+//! calls only.
 
 mod api;
-mod client;
-mod connect;
-mod error;
-pub mod events;
-mod host;
-mod pool;
-mod tls;
 pub mod types;
-pub mod version;
 
 pub use api::{
-    CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, ClientEventStream, DOCKER_REQUEST_TIMEOUT,
-    DockerApi, EventStream, Filters, since_parameter, with_deadline, with_docker_timeout,
-    with_timeout,
+    CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, Client, ClientEventStream,
+    DOCKER_REQUEST_TIMEOUT, DockerApi, EventStream, with_docker_timeout,
 };
-pub use client::{Body, Client, Settings};
-pub use error::{ConfigError, Error, ErrorKind};
-pub use events::{StreamError, StreamErrorKind};
-pub use tls::PathError;
-pub use version::{MAX_API_VERSION, MIN_API_VERSION, UnsupportedApiVersion};
+pub use docker_engine::{
+    ConfigError, Error, ErrorKind, Filters, Settings, StreamError, StreamErrorKind,
+    since_parameter, version, with_bare_deadline, with_bare_timeout,
+};
 
 use std::time::Duration;
-
-/// moby's `DefaultDockerHost` on Unix.
-pub const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
-
-/// moby's `DummyHost`: the `Host` header of requests over a unix socket.
-pub const DUMMY_HOST: &str = "api.moby.localhost";
-
-/// go-connections' dial timeout, unix and TCP alike.
-pub const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The Go exporter's `dockerTLSHandshakeTimeout`.
-pub const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The Go exporter's `dockerResponseHeaderTimeout`: from the request written to the response
 /// headers, so a daemon that accepts a connection and never answers cannot hold the event stream
 /// forever.
 pub const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The program name of the `User-Agent`, and the whole of it when the version stamp cannot be
+/// sent in a header.
+const PROGRAM: &str = "swarm-scheduler-exporter";
+
+/// The client settings the Go exporter's `newDockerClient` builds: [`Settings::from_env`] with
+/// `getenv` for `os.Getenv`, the exporter's `User-Agent` and the [`RESPONSE_HEADER_TIMEOUT`]. A
+/// pinned API version's range is checked by [`version::validate_client_api_version`], as the Go
+/// exporter checks it after this.
+///
+/// # Errors
+///
+/// [`ConfigError`]: `configure TLS from DOCKER_CERT_PATH=<path>: …` for the TLS material, and
+/// `docker client: …` for a host or API version moby refuses.
+pub fn settings_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Settings, ConfigError> {
+    Ok(Settings::from_env(getenv)?
+        .user_agent(user_agent(crate::version::VERSION))?
+        .response_header_timeout(Some(RESPONSE_HEADER_TIMEOUT)))
+}
+
+/// `swarm-scheduler-exporter/<version>`, or the bare program name when the version stamp holds
+/// something no header may carry.
+fn user_agent(version: &str) -> String {
+    let user_agent = format!("{PROGRAM}/{version}");
+    if Settings::check_user_agent(&user_agent).is_ok() {
+        user_agent
+    } else {
+        PROGRAM.to_owned()
+    }
+}
 
 #[cfg(test)]
 mod tests;

@@ -26,9 +26,7 @@
 //! daemon or inside the nodes. Cut down from runhold's harness to `DinD` only: no provider
 //! interface, no Multipass, a single manager.
 
-use std::collections::{BTreeMap, HashMap};
-use std::fmt;
-use std::future::Future;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -39,26 +37,26 @@ use bollard::models::{
     NodeState, PortBinding, SwarmInitRequest, SwarmJoinRequest,
 };
 use bollard::query_parameters::{
-    CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
-    ListNetworksOptions, ListNodesOptions, RemoveContainerOptions, StartContainerOptions,
+    CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListNodesOptions,
+    StartContainerOptions,
 };
 use futures_util::StreamExt as _;
+use go_clock::{Clock as _, SystemClock};
+use go_compat::duration;
+use go_slog::Attr;
 use jiff::Timestamp;
-use swarm_scheduler_exporter::clock::{Clock as _, SystemClock};
-use swarm_scheduler_exporter::go_compat::duration;
-use swarm_scheduler_exporter::logger::Attr;
+use testenv_core::context::Context;
+use testenv_core::host::{self, HostSweep, OP_TIMEOUT, with_timeout};
+use testenv_core::redact::RedactingLogger;
+use testenv_core::sweep_rules::{
+    DEFAULT_STALE_AFTER, Owner, SweepRules, current_owner, stale_after_from_env,
+};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::Error;
-use crate::cluster::{Cluster, DEFAULT_DIND_IMAGE, Node, NodeRole, Spec, labels};
-use crate::context::{Context, Ended};
-use crate::envid::{LABEL_ENV_ID, label_filter, resource_name};
+use crate::cluster::{Cluster, DEFAULT_DIND_IMAGE, Node, NodeRole, Spec};
+use crate::config::{ENV_IDS, ENV_STALE_AFTER, LABELS, RESOURCES, cleanup_command};
 use crate::images::load_workload_image;
-use crate::redact::RedactingLogger;
-use crate::sweep_rules::{
-    Found, LABEL_OWNER, LABEL_PID_NAMESPACE, LABEL_STARTED, Owner, SweepRules, current_owner,
-    stale_after_from_env,
-};
 
 const DIND_DAEMON_PORT: &str = "2375/tcp";
 const SWARM_MANAGE_PORT: &str = "2377";
@@ -66,15 +64,21 @@ const DAEMON_READY_WAIT: Duration = Duration::from_secs(60);
 const SWARM_READY_WAIT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Bounds one ordinary Docker call, so a hung daemon fails that call instead of stalling the run
-/// until the suite deadline.
-pub(crate) const OP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bounds swarm init and join, which wait for Raft and TLS bootstrap.
 const SWARM_OP_TIMEOUT: Duration = Duration::from_secs(90);
 /// Bounds one image pull, save or load, which move whole images.
 pub(crate) const IMAGE_TRANSFER_TIMEOUT: Duration = Duration::from_mins(5);
 /// Bounds the removal of a failed bring-up.
 const TEARDOWN_TIMEOUT: Duration = Duration::from_mins(2);
+
+/// The sweep and cleanup of runs on the host daemon: containers with their volumes, then
+/// networks, each call bounded by [`OP_TIMEOUT`] (so a hung daemon fails that call instead of
+/// stalling the run until the suite deadline).
+const HOST_SWEEP: HostSweep = HostSweep {
+    labels: LABELS,
+    resources: RESOURCES,
+    op_timeout: OP_TIMEOUT,
+};
 
 /// Brings up a fresh cluster for `spec`: a bridge network, one manager and `spec.workers` workers
 /// as privileged `DinD` containers, the workload image loaded on every node, and a Swarm whose
@@ -105,7 +109,7 @@ pub async fn up(ctx: &Context, mut spec: Spec) -> Result<Cluster, Error> {
     let host_client = host_client()?;
     let started_at = SystemClock.now();
 
-    sweep(ctx, &host_client, &rules, &log).await;
+    HOST_SWEEP.sweep(ctx, &host_client, &rules, &log).await;
 
     match bring_up(ctx, &spec, &owner, started_at, &host_client, &log).await {
         Ok((nodes, workload_image_id)) => Ok(Cluster {
@@ -125,7 +129,10 @@ pub async fn up(ctx: &Context, mut spec: Spec) -> Result<Cluster, Error> {
                 );
             } else {
                 let teardown = ctx.without_cancel().with_timeout(TEARDOWN_TIMEOUT);
-                if let Err(cleanup_error) = cleanup(&teardown, &host_client, &spec.env_id).await {
+                if let Err(cleanup_error) = HOST_SWEEP
+                    .cleanup(&teardown, &host_client, &spec.env_id)
+                    .await
+                {
                     log.warn(
                         "bring-up failed and cleanup was incomplete",
                         &[Attr::string("err", cleanup_error.to_string())],
@@ -145,7 +152,9 @@ impl Cluster {
     ///
     /// Every removal that failed, joined.
     pub async fn down(&self, ctx: &Context) -> Result<(), Error> {
-        cleanup(ctx, &self.host_client, &self.spec.env_id).await
+        HOST_SWEEP
+            .cleanup(ctx, &self.host_client, &self.spec.env_id)
+            .await
     }
 
     /// Pulls `image_ref` on the host daemon unless it is already there.
@@ -231,17 +240,6 @@ impl Node {
     }
 }
 
-/// A shell command that removes every container (with its volumes) and network of the run
-/// `env_id` from the host.
-#[must_use]
-pub fn cleanup_command(env_id: &str) -> String {
-    let filter = format!("label={}", label_filter(env_id));
-    format!(
-        "docker ps -aq --filter {filter} | xargs -r docker rm -fv; docker network ls -q --filter \
-         {filter} | xargs -r docker network rm"
-    )
-}
-
 /// The host daemon's client, from the environment by bollard's rules, which are narrower than
 /// Go's `client.FromEnv`: `DOCKER_HOST` (the local socket by default), and TLS only when
 /// `DOCKER_TLS_VERIFY` is set, with the certificates from `DOCKER_CERT_PATH` (or `~/.docker`).
@@ -275,8 +273,8 @@ async fn bring_up(
 ) -> Result<(Vec<Node>, String), Error> {
     ensure_host_image(ctx, host_client, &spec.dind_image, log).await?;
 
-    let labels = labels(&spec.env_id, owner, started_at);
-    let network_name = resource_name(&spec.env_id, "net");
+    let labels = LABELS.run_labels(&spec.env_id, owner, started_at);
+    let network_name = ENV_IDS.resource_name(&spec.env_id, "net");
     create_bridge_network(ctx, host_client, &network_name, &labels).await?;
 
     let mut nodes = provision_nodes(ctx, host_client, spec, &network_name, &labels).await?;
@@ -373,7 +371,7 @@ async fn start_node(
     hostname: &str,
     role: NodeRole,
 ) -> Result<Node, Error> {
-    let name = resource_name(&spec.env_id, hostname);
+    let name = ENV_IDS.resource_name(&spec.env_id, hostname);
 
     let body = ContainerCreateBody {
         image: Some(spec.dind_image.clone()),
@@ -657,273 +655,17 @@ pub(crate) async fn ensure_host_image(
 
 // --- Teardown ---
 
-/// The sweep rules for this process: now, this host, the configured window and a PID check on
-/// this host.
+/// The sweep rules for this process: now, this host, the configured window
+/// ([`ENV_STALE_AFTER`], an hour by default) and a PID check on this host.
 fn default_sweep_rules(self_id: &str, owner: &Owner) -> Result<SweepRules, Error> {
-    Ok(SweepRules {
-        now: SystemClock.now(),
-        stale_after: stale_after_from_env(|key| std::env::var(key).ok())?,
-        host: owner.host.clone(),
-        pid_namespace: owner.pid_namespace.clone(),
-        self_id: self_id.to_owned(),
-        alive: Box::new(process_alive),
-    })
-}
-
-/// Whether `pid` exists on this host: signal 0 checks without delivering, and a permission error
-/// still means the process is there. A PID outside `pid_t` names no process: Linux keeps PIDs
-/// under 2^22.
-fn process_alive(pid: i64) -> bool {
-    let Some(pid) = i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-    else {
-        return false;
-    };
-    match rustix::process::test_kill_process(pid) {
-        Ok(()) => true,
-        Err(errno) => errno == rustix::io::Errno::PERM,
-    }
-}
-
-/// Removes the environments of earlier runs that `rules` finds abandoned: leaks from runs that
-/// were killed before their teardown ran. An environment that may still belong to a running test,
-/// on this host or another, is left alone, and the reason is logged.
-async fn sweep(ctx: &Context, host_client: &Docker, rules: &SweepRules, log: &RedactingLogger) {
-    for env in list_environments(ctx, host_client, log).await {
-        let verdict = rules.decide(env);
-        if !verdict.remove {
-            if verdict.env.id != rules.self_id {
-                log.debug(
-                    "sweep: keeping environment",
-                    &[
-                        Attr::string("other_envid", verdict.env.id.clone()),
-                        Attr::string("reason", verdict.reason.clone()),
-                    ],
-                );
-            }
-            continue;
-        }
-
-        log.info(
-            "sweep: removing leaked environment",
-            &[
-                Attr::string("leaked_envid", verdict.env.id.clone()),
-                Attr::string("reason", verdict.reason.clone()),
-            ],
-        );
-
-        if let Err(error) = cleanup(ctx, host_client, &verdict.env.id).await {
-            log.warn(
-                "sweep: cleanup incomplete",
-                &[
-                    Attr::string("leaked_envid", verdict.env.id.clone()),
-                    Attr::string("err", error.to_string()),
-                ],
-            );
-        }
-    }
-}
-
-/// Adds one resource's labels to the environment they name.
-fn record(by_id: &mut BTreeMap<String, Found>, labels: Option<&HashMap<String, String>>) {
-    let Some(labels) = labels else {
-        return;
-    };
-    let Some(env_id) = labels.get(LABEL_ENV_ID).filter(|id| !id.is_empty()) else {
-        return;
-    };
-    let found = by_id.entry(env_id.clone()).or_insert_with(|| Found {
-        id: env_id.clone(),
-        ..Found::default()
-    });
-    // A helper container may carry the envid alone; the owner and start time come from
-    // whichever resource has them.
-    for (field, key) in [
-        (&mut found.owner, LABEL_OWNER),
-        (&mut found.started, LABEL_STARTED),
-        (&mut found.pid_namespace, LABEL_PID_NAMESPACE),
-    ] {
-        if field.is_empty()
-            && let Some(value) = labels.get(key)
-        {
-            value.clone_into(field);
-        }
-    }
-}
-
-/// Every environment with a container or network on the host daemon, from their labels. A
-/// listing that fails is logged and leaves that kind of resource out: the sweep is best-effort,
-/// and `down` still removes the run's own resources by envid.
-async fn list_environments(
-    ctx: &Context,
-    host_client: &Docker,
-    log: &RedactingLogger,
-) -> Vec<Found> {
-    let filters = HashMap::from([("label".to_owned(), vec![LABEL_ENV_ID.to_owned()])]);
-    let mut by_id = BTreeMap::new();
-
-    match with_timeout(
-        ctx,
-        OP_TIMEOUT,
-        host_client.list_containers(Some(ListContainersOptions {
-            all: true,
-            filters: Some(filters.clone()),
-            ..ListContainersOptions::default()
-        })),
-    )
-    .await
-    {
-        Ok(containers) => {
-            for container in &containers {
-                record(&mut by_id, container.labels.as_ref());
-            }
-        }
-        Err(error) => log.warn(
-            "sweep: list containers",
-            &[Attr::string("err", error.to_string())],
-        ),
-    }
-
-    match with_timeout(
-        ctx,
-        OP_TIMEOUT,
-        host_client.list_networks(Some(ListNetworksOptions {
-            filters: Some(filters),
-        })),
-    )
-    .await
-    {
-        Ok(networks) => {
-            for network in &networks {
-                record(&mut by_id, network.labels.as_ref());
-            }
-        }
-        Err(error) => log.warn(
-            "sweep: list networks",
-            &[Attr::string("err", error.to_string())],
-        ),
-    }
-
-    by_id.into_values().collect()
-}
-
-/// Removes every container (with its anonymous /var/lib/docker volume) and every network labeled
-/// with `env_id`. It keeps going past individual failures and returns them joined.
-async fn cleanup(ctx: &Context, host_client: &Docker, env_id: &str) -> Result<(), Error> {
-    let filters = HashMap::from([("label".to_owned(), vec![label_filter(env_id)])]);
-    let mut errors = Vec::new();
-
-    let containers = with_timeout(
-        ctx,
-        OP_TIMEOUT,
-        host_client.list_containers(Some(ListContainersOptions {
-            all: true,
-            filters: Some(filters.clone()),
-            ..ListContainersOptions::default()
-        })),
-    )
-    .await
-    .unwrap_or_else(|error| {
-        errors.push(Error::new(format!("list containers: {error}")));
-        Vec::new()
-    });
-    for container in containers {
-        let id = container.id.unwrap_or_default();
-        let removed = with_timeout(
-            ctx,
-            OP_TIMEOUT,
-            host_client.remove_container(
-                &id,
-                Some(RemoveContainerOptions {
-                    force: true,
-                    v: true,
-                    ..RemoveContainerOptions::default()
-                }),
-            ),
-        )
-        .await;
-        if let Err(error) = removed
-            && !error.is_not_found()
-        {
-            errors.push(Error::new(format!("remove container {id}: {error}")));
-        }
-    }
-
-    let networks = with_timeout(
-        ctx,
-        OP_TIMEOUT,
-        host_client.list_networks(Some(ListNetworksOptions {
-            filters: Some(filters),
-        })),
-    )
-    .await
-    .unwrap_or_else(|error| {
-        errors.push(Error::new(format!("list networks: {error}")));
-        Vec::new()
-    });
-    for network in networks {
-        let id = network.id.unwrap_or_default();
-        let removed = with_timeout(ctx, OP_TIMEOUT, host_client.remove_network(&id)).await;
-        if let Err(error) = removed
-            && !error.is_not_found()
-        {
-            errors.push(Error::new(format!("remove network {id}: {error}")));
-        }
-    }
-
-    Error::join(errors).map_or(Ok(()), Err)
+    let now = SystemClock.now();
+    let stale_after = stale_after_from_env(ENV_STALE_AFTER, DEFAULT_STALE_AFTER, |key| {
+        std::env::var(key).ok()
+    })?;
+    Ok(host::sweep_rules(now, stale_after, self_id, owner))
 }
 
 // --- Helpers ---
-
-/// A Docker call that failed, or the context it ran under ended first.
-#[derive(Debug)]
-pub(crate) enum OpError {
-    Docker(DockerError),
-    Ended(Ended),
-}
-
-impl OpError {
-    /// containerd's `errdefs.IsNotFound`: the daemon answered 404.
-    fn is_not_found(&self) -> bool {
-        matches!(
-            self,
-            Self::Docker(DockerError::DockerResponseServerError {
-                status_code: 404,
-                ..
-            })
-        )
-    }
-}
-
-impl fmt::Display for OpError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Docker(error) => error.fmt(formatter),
-            Self::Ended(ended) => ended.fmt(formatter),
-        }
-    }
-}
-
-impl From<DockerError> for OpError {
-    fn from(error: DockerError) -> Self {
-        Self::Docker(error)
-    }
-}
-
-/// Runs one Docker call under its own deadline derived from `ctx`.
-pub(crate) async fn with_timeout<T, E: Into<OpError>>(
-    ctx: &Context,
-    timeout: Duration,
-    call: impl Future<Output = Result<T, E>>,
-) -> Result<T, OpError> {
-    ctx.with_timeout(timeout)
-        .run(call)
-        .await
-        .map_err(OpError::Ended)?
-        .map_err(Into::into)
-}
 
 /// Calls `check` every [`POLL_INTERVAL`] until it succeeds, `timeout` elapses, or `ctx` ends.
 /// The error names what was awaited and carries the check's last error.

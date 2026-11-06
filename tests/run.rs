@@ -37,20 +37,20 @@ use jiff::tz::TimeZone;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use swarm_scheduler_exporter::clock::{Clock, SystemClock};
+use go_clock::{Clock, SystemClock};
+use go_prom::promhttp::HandlerMetrics;
+use go_prom::{Registry, Value};
+use go_slog::{Config, Format, Level, Logger};
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
     ContainerInspect, ContainerSummary, Event, Node, Service, Task,
 };
 use swarm_scheduler_exporter::docker::{DockerApi, Error, EventStream, Filters, StreamError};
-use swarm_scheduler_exporter::logger::{Config, Format, Level, Logger};
-use swarm_scheduler_exporter::metrics::promhttp::HandlerMetrics;
-use swarm_scheduler_exporter::metrics::{Registry, Value};
 use swarm_scheduler_exporter::run::{
     Metrics, MetricsOptions, SHUTDOWN_BUDGET, Workers, app, register_metrics, start_workers,
 };
-use swarm_scheduler_exporter::server::{self, Timeouts};
+use swarm_scheduler_exporter::server::{self, TIMEOUTS};
 
 /// How long a lifecycle test waits for what it expects, as Go's `waitUntil` and `waitWorkers`.
 const WAIT: Duration = Duration::from_secs(5);
@@ -164,6 +164,7 @@ fn quiet_logger() -> Logger {
             format: Format::Text,
             level: Level::INFO,
             include_time: false,
+            plain_style: go_slog::PlainStyle::Quoted,
         },
         Box::new(std::io::sink()),
         TimeZone::UTC,
@@ -248,7 +249,7 @@ async fn serve_endpoints(
     tokio::spawn(server::serve(
         listener,
         app,
-        Timeouts::EXPORTER,
+        TIMEOUTS,
         shutdown,
         Instant::now,
     ));

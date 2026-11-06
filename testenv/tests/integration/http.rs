@@ -32,8 +32,8 @@ use http_body_util::{BodyExt as _, Empty};
 use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use testenv::context::Context;
 use testenv::metrics_text::Scrape;
+use testenv_core::context::Context;
 
 /// Bounds one request to the exporter.
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
