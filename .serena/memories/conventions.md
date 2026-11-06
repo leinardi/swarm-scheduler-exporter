@@ -9,7 +9,8 @@ repeatedly bite:
 - `unwrap_used`/`expect_used` denied outside `#[test]`/`#[cfg(test)]`; helpers in `tests/*.rs` and
   `testenv/tests/` are not covered.
 - `print_stdout`/`print_stderr` denied: output goes through the logger or an explicit `writeln!`.
-- `disallowed_methods`: no wall-clock read outside `src/clock.rs`; use the injected `Clock`.
+- `disallowed_methods`: no wall-clock read; use the injected `go_clock::Clock` (`SystemClock`
+  lives in rust-common, so there is no exemption here).
 - `large_futures`: `Box::pin` a big future rather than suppressing it.
 
 Suppressions: only `#[expect(lint, reason = "...")]`, ratcheted per lint against

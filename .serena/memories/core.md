@@ -11,11 +11,14 @@ The README "Migrating from 1.x" section lists the only intended differences from
 
 ## Source map
 
-- `src/main.rs` (hand-built tokio runtime, one shutdown budget), `src/run.rs` (startup order,
-  workers, HTTP server), `src/cli.rs` (clap, double-dash flags), `src/healthcheck.rs`
-  (`--healthcheck`), `src/version.rs` (compile-time stamps), `src/clock.rs` (the only wall clock).
-- `src/docker/`: the in-tree read-only Docker client (transport, ping and version negotiation, TLS,
-  endpoints, events stream, API types). GET only, plus `HEAD /_ping`.
+- Shared code is rust-common's (git dependency pinned by `rev`): go-compat, go-clock, go-slog,
+  go-prom, go-http, docker-engine, service-kit, testenv-core, repo-meta. A per-project difference is
+  a parameter there, never a fork here; fixes land in rust-common first.
+- `src/main.rs` (service-kit's runtime and lazy shutdown signal, one shutdown budget), `src/run.rs`
+  (startup order, workers, HTTP server), `src/cli.rs` (clap, double-dash flags),
+  `src/healthcheck.rs` (`--healthcheck`), `src/version.rs` (`service_kit::buildinfo!` stamps).
+- `src/docker/`: `DockerApi` (read-only trait) on a `Client` newtype over docker-engine (`tcp`,
+  `tls`), the API types and timeouts. GET only, plus `HEAD /_ping`.
 - `src/collector/`:
   - `reconciler/`: the single owner of the service/node caches and derived gauges (`mod.rs`
     cycle, resync, retries; `poll.rs` the poll snapshot/verdict exchange; `listener.rs` the
@@ -23,19 +26,17 @@ The README "Migrating from 1.x" section lists the only intended differences from
   - `desired.rs` (placement eligibility, desired/schedulable), `replicas_state.rs` (task counting,
     `at_desired`), `service_update.rs`, `nodes.rs`, `containers.rs` (opt-in), `health.rs`,
     `exporter_metrics.rs`.
-- `src/metrics/`: in-tree registry and families, the Go-compatible text encoder (`text.rs`), the
-  promhttp negotiation (`exposition.rs`), process and promhttp collectors, snapshot families.
-- `src/go_compat/`: Go library behaviour ported for byte parity (durations, floats, quoting,
-  time layouts, sort, strings, net/ip, host:port).
-- `src/labels.rs` (custom label keys), `src/logger/` (slog-compatible text/json/plain),
-  `src/server.rs` (`/metrics`, `/healthz` on hyper).
+- `src/labels.rs` (custom label keys), `src/server.rs` (`/metrics`, `/healthz` on go-http,
+  `TIMEOUTS`). Metrics are go-prom's (`ExpfmtVersion::V0_71_0`), the logger go-slog's
+  (`PlainStyle::Quoted`, strict parsers), the Go ports go-compat's.
 - `tests/`: `engine_wire.rs` (fake Engine replaying `tests/testdata/engine_wire/`),
   `exposition.rs` (byte diff against the Go `/metrics` capture), `run.rs` (lifecycle, flags).
-- `testenv/`: the DinD Swarm harness; bollard and every Docker-driving module behind its
-  `integration` feature; `tests/integration/` is the `harness = false` suite that runs the release
-  binary (`SSE_IT_BINARY`).
-- `meta/`: meta-tests over the repository (toolchain pins, Dockerfile, docs links, licence
-  headers, suppression ratchet, Docker SDK boundary), no Docker needed.
+- `testenv/`: the DinD Swarm harness over testenv-core; bollard and every Docker-driving module
+  behind its `integration` feature; `tests/integration/` is the `harness = false` suite that runs
+  the release binary (`SSE_IT_BINARY`).
+- `meta/`: meta-tests over the repository, repo-meta's checks with this repository's parameters
+  (toolchain pins, Dockerfile, docs links, licence headers, suppression ratchet) plus the local
+  Docker SDK boundary, no Docker needed.
 - User-facing contract: the README Metrics section (and alert examples).
 
 ## Non-obvious anchors
