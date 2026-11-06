@@ -434,7 +434,7 @@ async fn pins_requests_and_metrics(set: &str) {
     handle.ready().await;
     assert_eq!(
         wire(&engine),
-        ["GET /services", "GET /nodes"],
+        ["GET /v1.51/services", "GET /v1.51/nodes"],
         "first resync"
     );
 
@@ -443,7 +443,7 @@ async fn pins_requests_and_metrics(set: &str) {
     poll_and_publish_replicas_state(&*client, &handle, &cancel)
         .await
         .or_panic();
-    assert_eq!(&wire(&engine)[2..], ["GET /tasks"], "task poll");
+    assert_eq!(&wire(&engine)[2..], ["GET /v1.51/tasks"], "task poll");
 
     // Phase 3: the container poll, the list and one inspect per running or exited container, in
     // list order (the paused one is not inspected).
@@ -456,11 +456,11 @@ async fn pins_requests_and_metrics(set: &str) {
     assert_eq!(
         &wire(&engine)[3..],
         [
-            "GET /containers/json?all=true&size=false",
-            "GET /containers/c-compose-web/json",
-            "GET /containers/c-compose-worker/json",
-            "GET /containers/c-plain/json",
-            "GET /containers/c-swarm-api/json",
+            "GET /v1.51/containers/json?all=true&size=false",
+            "GET /v1.51/containers/c-compose-web/json",
+            "GET /v1.51/containers/c-compose-worker/json",
+            "GET /v1.51/containers/c-plain/json",
+            "GET /v1.51/containers/c-swarm-api/json",
         ],
         "container poll"
     );

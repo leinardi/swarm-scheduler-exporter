@@ -63,11 +63,17 @@ pub const CONTAINERS_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 /// of a poll, so a slow daemon cannot hold a poll for the inspect cap times a per-call timeout.
 pub const CONTAINERS_INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long [`DockerApi::events`] waits for the stream's first sign of life before it counts the
-/// stream as connected. bollard opens the request when the stream is first polled and says
-/// nothing when the response headers arrive, so a refused connection or a non-2xx answer shows up
-/// as the first item; a quiet stream has none, and is connected once this has passed without one.
+/// How long [`DockerApi::events`] waits for the stream's first sign of life before it probes the
+/// daemon. bollard opens the request when the stream is first polled and says nothing when the
+/// response headers arrive, so a refused connection or a non-2xx answer shows up as the first
+/// item; a quiet stream has none, and is connected once this has passed and the probe
+/// ([`EVENTS_PROBE_TIMEOUT`]) was answered.
 pub const EVENTS_CONNECT_GRACE: Duration = Duration::from_secs(2);
+
+/// The bound of the liveness probe [`DockerApi::events`] makes once the grace has passed without a
+/// sign of life: a `GET /version` on a connection of its own, so a host that swallows packets or a
+/// daemon that accepts and never answers is a failed connect, not a connected stream.
+pub const EVENTS_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The Docker calls the collectors make. Every one but [`DockerApi::events`] is a single request
 /// and response, which the caller bounds with [`with_docker_timeout`] (or the container
@@ -176,6 +182,7 @@ pub struct Client {
     /// API version negotiated then, unless the configuration pins one.
     docker: OnceCell<Docker>,
     events_grace: Duration,
+    probe_timeout: Duration,
 }
 
 impl Client {
@@ -194,6 +201,7 @@ impl Client {
             config,
             docker: OnceCell::new(),
             events_grace: EVENTS_CONNECT_GRACE,
+            probe_timeout: EVENTS_PROBE_TIMEOUT,
         })
     }
 
@@ -201,6 +209,13 @@ impl Client {
     #[must_use]
     pub fn with_events_grace(mut self, grace: Duration) -> Self {
         self.events_grace = grace;
+        self
+    }
+
+    /// The same client with another [`EVENTS_PROBE_TIMEOUT`], for tests.
+    #[must_use]
+    pub fn with_probe_timeout(mut self, timeout: Duration) -> Self {
+        self.probe_timeout = timeout;
         self
     }
 
@@ -349,7 +364,15 @@ impl DockerApi for Client {
         }
         let mut stream: Wire = Box::pin(docker.events(Some(options.build())));
         let first = match tokio::time::timeout(self.events_grace, stream.next()).await {
-            Err(_quiet) => None,
+            Err(_quiet) => {
+                // Nothing yet: the daemon may be quiet or unreachable. Only an answer to a
+                // request of its own says which.
+                with_bare_timeout(self.probe_timeout, async {
+                    docker.version().await.map_err(engine_error)
+                })
+                .await?;
+                None
+            }
             Ok(None) => Some(Err(StreamError::eof())),
             Ok(Some(Err(error))) => return Err(engine_error(error)),
             Ok(Some(Ok(message))) => Some(Ok(convert::event(message))),

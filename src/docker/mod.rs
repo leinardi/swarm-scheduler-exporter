@@ -32,7 +32,8 @@
 //!   `tcp://` with `DOCKER_TLS_VERIFY` (certificates from `DOCKER_CERT_PATH`, or `$HOME/.docker`).
 //!   `DOCKER_TLS` (TLS without verification) is refused rather than ignored, as are a
 //!   `DOCKER_CERT_PATH` without `DOCKER_TLS_VERIFY` on a `tcp://` host (Q5) and a pinned
-//!   version that is not `<major>.<minor>` or is below [`query::MIN_API_VERSION`]; without a pin
+//!   version that is not `<major>.<minor>` or is outside [`query::MIN_API_VERSION`] to
+//!   [`query::MAX_API_VERSION`]; without a pin
 //!   the version is negotiated with the first call.
 //! - [`Client`] is the crate's client behind [`DockerApi`] alone, with the `User-Agent`
 //!   `swarm-scheduler-exporter/<version>` and a [`RESPONSE_HEADER_TIMEOUT`] of 30s.
@@ -51,7 +52,8 @@ pub mod types;
 
 pub use api::{
     CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, Client, ClientEventStream,
-    DOCKER_REQUEST_TIMEOUT, DockerApi, EVENTS_CONNECT_GRACE, EventStream, with_docker_timeout,
+    DOCKER_REQUEST_TIMEOUT, DockerApi, EVENTS_CONNECT_GRACE, EVENTS_PROBE_TIMEOUT, EventStream,
+    with_docker_timeout,
 };
 pub use docker_client::{Config, ConnectError};
 pub use error::{
@@ -75,7 +77,7 @@ const PROGRAM: &str = "swarm-scheduler-exporter";
 pub enum SettingsError {
     /// `docker_client::Config::from_env` refused the environment.
     Config(ConnectError),
-    /// A `DOCKER_API_VERSION` pin below the supported minimum.
+    /// A `DOCKER_API_VERSION` pin outside the supported range.
     Version(query::UnsupportedApiVersion),
     /// `DOCKER_CERT_PATH` with a `tcp://` host and no `DOCKER_TLS_VERIFY` (Q5): the certificates
     /// would be ignored and the daemon spoken to in the clear.
@@ -117,7 +119,7 @@ impl From<query::UnsupportedApiVersion> for SettingsError {
 /// # Errors
 ///
 /// [`SettingsError`]: the environment `docker-client` refuses (an unknown scheme, TLS without
-/// certificates, a malformed `DOCKER_API_VERSION`), a pin below the minimum, or certificates
+/// certificates, a malformed `DOCKER_API_VERSION`), a pin outside the supported range, or certificates
 /// without `DOCKER_TLS_VERIFY` (Q5).
 pub fn settings_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Config, SettingsError> {
     let set = |name: &str| getenv(name).is_some_and(|value| !value.is_empty());

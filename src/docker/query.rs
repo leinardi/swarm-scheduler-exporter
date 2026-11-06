@@ -83,7 +83,11 @@ pub fn since_parameter(since: Timestamp) -> String {
 /// service, task and node objects it reads (`JobStatus`, `ReplicatedJob`) are served from.
 pub const MIN_API_VERSION: (usize, usize) = (1, 40);
 
-/// A `DOCKER_API_VERSION` pin below [`MIN_API_VERSION`].
+/// The newest Engine API version the exporter is tested against: a pin above it is refused at
+/// startup instead of failing every request when the daemon does not know it.
+pub const MAX_API_VERSION: (usize, usize) = (1, 56);
+
+/// A `DOCKER_API_VERSION` pin outside [`MIN_API_VERSION`] to [`MAX_API_VERSION`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnsupportedApiVersion {
     version: String,
@@ -93,29 +97,33 @@ impl fmt::Display for UnsupportedApiVersion {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "unsupported Docker API version {} (DOCKER_API_VERSION): the minimum is {}.{}",
-            self.version, MIN_API_VERSION.0, MIN_API_VERSION.1
+            "unsupported Docker API version {} (DOCKER_API_VERSION): supported range is {}.{} to {}.{}",
+            self.version,
+            MIN_API_VERSION.0,
+            MIN_API_VERSION.1,
+            MAX_API_VERSION.0,
+            MAX_API_VERSION.1
         )
     }
 }
 
 impl std::error::Error for UnsupportedApiVersion {}
 
-/// The pinned API version must be at least [`MIN_API_VERSION`]. The format (`<major>.<minor>`) is
-/// `docker-client`'s check, made when the settings are read; a pin that passes it and is below the
-/// minimum, used as it is with no negotiation, would only surface as failing requests. There is
-/// no maximum: the engine refuses a version it does not know.
+/// The pinned API version must lie in [`MIN_API_VERSION`] to [`MAX_API_VERSION`]. The format
+/// (`<major>.<minor>`) is `docker-client`'s check, made when the settings are read; a pin that
+/// passes it and is outside the range, used as it is with no negotiation, would only surface as
+/// failing requests.
 ///
 /// # Errors
 ///
-/// [`UnsupportedApiVersion`] for a version below the minimum, or one that is not
+/// [`UnsupportedApiVersion`] for a version outside the range, or one that is not
 /// `<major>.<minor>`.
 pub fn validate_client_api_version(version: &str) -> Result<(), UnsupportedApiVersion> {
     let parsed = version.split_once('.').and_then(|(major, minor)| {
         Some((major.parse::<usize>().ok()?, minor.parse::<usize>().ok()?))
     });
     match parsed {
-        Some(found) if found >= MIN_API_VERSION => Ok(()),
+        Some(found) if (MIN_API_VERSION..=MAX_API_VERSION).contains(&found) => Ok(()),
         _ => Err(UnsupportedApiVersion {
             version: version.to_owned(),
         }),

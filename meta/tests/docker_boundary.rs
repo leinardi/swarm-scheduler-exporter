@@ -268,6 +268,7 @@ static WRITE_CALL: LazyLock<Regex> = LazyLock::new(|| {
 /// The event stream and the version negotiation, the two calls that are not `list_*` or
 /// `inspect_*`.
 static EVENTS_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\.\s*events\s*\("));
+static VERSION_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\.\s*version\s*\("));
 static NEGOTIATE_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\bnegotiate(?:_version)?\s*\("));
 static METHOD: LazyLock<Regex> = LazyLock::new(|| regex(r"\bMethod::[A-Za-z_]+"));
 static REQUEST_BUILT: LazyLock<Regex> =
@@ -344,6 +345,11 @@ fn client_violations(sources: &[(&str, &str)], env: &str) -> Vec<String> {
             EVENTS_CALL
                 .find_iter(text)
                 .map(|_| ("events".to_owned(), "events".to_owned())),
+        );
+        sections.extend(
+            VERSION_CALL
+                .find_iter(text)
+                .map(|_| ("version".to_owned(), "version".to_owned())),
         );
         sections.extend(
             NEGOTIATE_CALL

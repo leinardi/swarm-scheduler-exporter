@@ -86,11 +86,11 @@ fn settings_from_env_refuse_what_no_engine_could_be_reached_with() {
     );
     assert_eq!(
         message(&[("DOCKER_API_VERSION", "abc")]),
-        "unsupported Docker API version abc (DOCKER_API_VERSION): the minimum is 1.40"
+        "unsupported Docker API version abc (DOCKER_API_VERSION): supported range is 1.40 to 1.56"
     );
     assert_eq!(
         message(&[("DOCKER_API_VERSION", "1.39")]),
-        "unsupported Docker API version 1.39 (DOCKER_API_VERSION): the minimum is 1.40"
+        "unsupported Docker API version 1.39 (DOCKER_API_VERSION): supported range is 1.40 to 1.56"
     );
     assert_eq!(
         message(&[
@@ -109,7 +109,11 @@ fn settings_from_env_refuse_what_no_engine_could_be_reached_with() {
     ]))
     .unwrap();
     assert!(message(&[("DOCKER_TLS", "1")]).starts_with("docker client: DOCKER_TLS"));
-    for pin in ["1.40", "1.51", "1.56", "2.0", ""] {
+    assert_eq!(
+        message(&[("DOCKER_API_VERSION", "1.57")]),
+        "unsupported Docker API version 1.57 (DOCKER_API_VERSION): supported range is 1.40 to 1.56"
+    );
+    for pin in ["1.40", "1.51", "1.56", ""] {
         settings_from_env(env(&[("DOCKER_API_VERSION", pin)])).unwrap();
     }
 }
@@ -141,6 +145,7 @@ fn client(engine: &FakeEngine) -> Client {
     Client::new(config)
         .unwrap()
         .with_events_grace(Duration::from_millis(150))
+        .with_probe_timeout(Duration::from_millis(300))
 }
 
 fn wire(engine: &FakeEngine) -> Vec<String> {
@@ -155,10 +160,8 @@ const SERVICE: &str =
     r#"{"ID":"svc-api","Spec":{"Name":"web_api","Mode":{"Replicated":{"Replicas":3}}}}"#;
 const EVENT: &str = r#"{"Type":"service","Action":"update","Actor":{"ID":"svc-api"},"time":1789902300,"timeNano":1789902300200000000}"#;
 
-/// The calls send the requests the Go exporter sent, with the exporter's `User-Agent`. bollard
-/// 0.21.1 sends them without the `/v1.xx` prefix whatever version the client holds (its `Uri`
-/// joins an absolute path onto the prefixed base), so the engine answers in its own current API;
-/// the exporter reads only fields that every supported version carries.
+/// The calls send the requests the Go exporter sent, under the pinned version's prefix and with
+/// the exporter's `User-Agent`.
 #[tokio::test]
 async fn the_calls_send_the_requests_of_the_go_exporter() {
     let engine = FakeEngine::start(&[
@@ -188,12 +191,12 @@ async fn the_calls_send_the_requests_of_the_go_exporter() {
     assert_eq!(
         wire(&engine),
         [
-            "GET /services",
-            "GET /nodes",
-            "GET /services/svc-api",
-            "GET /tasks",
-            "GET /containers/json?all=true&size=false",
-            "GET /containers/c-1/json",
+            "GET /v1.51/services",
+            "GET /v1.51/nodes",
+            "GET /v1.51/services/svc-api",
+            "GET /v1.51/tasks",
+            "GET /v1.51/containers/json?all=true&size=false",
+            "GET /v1.51/containers/c-1/json",
         ]
     );
     for request in engine.requests() {
@@ -252,9 +255,9 @@ async fn a_stalled_body_is_cut_by_the_callers_timeout() {
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
-/// Without a pinned version the first call asks the engine for its own (`GET /version`), once;
-/// a pinned one is used as it is, with no such request. (The version does not reach the request
-/// path, see the test of the requests.)
+/// Without a pinned version the first call asks the engine for its own (`GET /version`, itself
+/// unversioned), once, and every later request carries it; a pinned one is used as it is, with
+/// no such request.
 #[tokio::test]
 async fn the_api_version_is_negotiated_once_unless_pinned() {
     let engine = FakeEngine::start(&[
@@ -268,7 +271,10 @@ async fn the_api_version_is_negotiated_once_unless_pinned() {
     let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
     client.node_list().await.unwrap();
     client.node_list().await.unwrap();
-    assert_eq!(wire(&engine), ["GET /version", "GET /nodes", "GET /nodes"]);
+    assert_eq!(
+        wire(&engine),
+        ["GET /version", "GET /v1.43/nodes", "GET /v1.43/nodes"]
+    );
 }
 
 /// The stream asks for the events since the resume point, filtered to the types given.
@@ -338,19 +344,46 @@ async fn a_refused_events_request_yields_no_stream() {
     assert!(error.to_string().contains("no events today"), "{error}");
 }
 
-/// A quiet stream, headers sent and nothing after, is connected once the grace has passed.
+/// A quiet stream, headers sent and nothing after, is connected once the grace has passed and
+/// the daemon has answered the probe.
 #[tokio::test]
-async fn a_quiet_stream_is_connected_after_the_grace() {
-    let engine = FakeEngine::start(&[("/events", Reply::Stalled)]).unwrap();
+async fn a_quiet_stream_is_connected_once_the_daemon_answers_the_probe() {
+    let engine = FakeEngine::start(&[
+        ("/events", Reply::Stalled),
+        ("/version", Reply::ok(r#"{"ApiVersion":"1.51"}"#)),
+    ])
+    .unwrap();
     let client = client(&engine);
     let started = tokio::time::Instant::now();
     let stream = client.events(Timestamp::UNIX_EPOCH, &Filters::new()).await;
     assert!(stream.is_ok());
     assert!(started.elapsed() >= Duration::from_millis(150));
+    assert!(
+        wire(&engine)
+            .iter()
+            .any(|line| line == "GET /v1.51/version")
+    );
+}
+
+/// A daemon that accepts the connection and never answers, to the stream and to the probe alike,
+/// is a failed connect: no stream, so no "connected", no backoff reset and no resync.
+#[tokio::test]
+async fn a_daemon_that_never_answers_is_a_failed_connect() {
+    let engine =
+        FakeEngine::start(&[("/events", Reply::Stalled), ("/version", Reply::Stalled)]).unwrap();
+    let client = client(&engine);
+    let started = tokio::time::Instant::now();
+    let error = client
+        .events(Timestamp::UNIX_EPOCH, &Filters::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Timeout, "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 /// A refused negotiation (a socket proxy that does not forward `/version`) is logged and the
-/// calls go on with the client's own version.
+/// calls go on with the client's own version, which then carries no prefix (docker-client sends
+/// the prefix only for a pinned or negotiated version).
 #[tokio::test]
 async fn a_refused_negotiation_keeps_the_default_version() {
     let engine = FakeEngine::start(&[
