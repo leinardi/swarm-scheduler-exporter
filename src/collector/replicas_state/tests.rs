@@ -36,9 +36,10 @@ use crate::collector::nodes::{
 use crate::collector::types::display_name;
 use crate::docker::Error;
 use crate::docker::types::{GoTime, NodeSpec, NodeStatus, TaskStatus, Version};
-use crate::test_support::{FakeDocker, capture_logs, schedulable_node};
-use go_prom::testing::{gather_series, series_id};
-use go_slog::Level;
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
+use crate::test_support::{FakeDocker, Logs, capture_logs, schedulable_node};
+use tracing::level_filters::LevelFilter;
 
 const REPLICAS_STATE_NAME: &str = "swarm_task_replicas_state";
 const RUNNING_REPLICAS_NAME: &str = "swarm_service_running_replicas";
@@ -118,11 +119,11 @@ fn fake(tasks: Vec<Task>) -> FakeDocker {
 }
 
 fn replicas_state() -> ReplicasState {
-    ReplicasState::new(&CustomLabels::default(), capture_logs(Level::INFO).0)
+    ReplicasState::new(&CustomLabels::default())
 }
 
 fn gathered(state: &ReplicasState) -> BTreeMap<String, f64> {
-    gather_series(Arc::clone(state.collector()) as Arc<dyn Collector>)
+    gather_series(state.collector())
 }
 
 fn labelled(name: &str, labels: &BTreeMap<String, String>) -> String {
@@ -754,8 +755,8 @@ fn running_below_desired_is_not_at_desired() {
 /// snapshot carries no desired replicas, publishes 0 and warns.
 #[test]
 fn missing_desired_replicas_publish_zero_and_warn() {
-    let (logger, sink) = capture_logs(Level::INFO);
-    let state = ReplicasState::new(&CustomLabels::default(), logger);
+    let logs = capture_logs(LevelFilter::INFO);
+    let state = ReplicasState::new(&CustomLabels::default());
     let mut counter = TaskCounter::new(service_labels("s", "sv", SERVICE_MODE_REPLICATED));
     counter.inc("running");
     publish(
@@ -767,10 +768,21 @@ fn missing_desired_replicas_publish_zero_and_warn() {
         gathered(&state).get(&labelled(AT_DESIRED_NAME, &labels)),
         Some(&0.0)
     );
-    assert_eq!(
-        sink.contents(),
-        "level=WARN desired replicas missing from the polling snapshot service_id=svc_nodesired \
-         stack=s service=sv mode=replicated running=1\n"
+    assert_eq!(logs.lines().len(), 1, "{}", logs.dump());
+    assert!(
+        logs.contains(
+            "WARN",
+            "desired replicas missing from the polling snapshot",
+            &[
+                ("service_id", "svc_nodesired"),
+                ("stack", "s"),
+                ("service", "sv"),
+                ("mode", "replicated"),
+                ("running", "1"),
+            ]
+        ),
+        "{}",
+        logs.dump()
     );
 }
 
@@ -883,7 +895,7 @@ fn node_series_id(role: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_scrapes_see_whole_snapshots() {
     let state = Arc::new(replicas_state());
-    let nodes = Arc::new(NodesByState::new(capture_logs(Level::INFO).0));
+    let nodes = Arc::new(NodesByState::new());
     let counters_a = Arc::new(running_counters(1, 1.0, &["a1", "a2", "a3"]));
     let counters_b = Arc::new(running_counters(2, 3.0, &["b1", "b2"]));
     let (expected_a, expected_b) = (expected_series(&counters_a), expected_series(&counters_b));
@@ -940,7 +952,7 @@ async fn concurrent_scrapes_see_whole_snapshots() {
             series == expected_a || series == expected_b,
             "replicas scrape saw {series:?}, want exactly snapshot A or B"
         );
-        let node_series = gather_series(Arc::clone(nodes.family()) as Arc<dyn Collector>);
+        let node_series = gather_series(nodes.family());
         assert!(
             node_series == expected_nodes_a || node_series == expected_nodes_b,
             "nodes scrape saw {node_series:?}"
@@ -1278,11 +1290,8 @@ async fn a_global_jobs_completion_goes_by_node_identity() {
     assert_eq!(Some(at_desired), Some(1.0), "node B completed");
 }
 
-fn mismatch_lines(contents: &str) -> Vec<&str> {
-    contents
-        .lines()
-        .filter(|line| line.contains("at_desired mismatch"))
-        .collect()
+fn mismatch_lines(logs: &Logs) -> Vec<serde_json::Value> {
+    logs.with_message("at_desired mismatch")
 }
 
 /// The mismatch log is keyed as Go's: a repeat of the stored key is not logged, and since Go
@@ -1290,8 +1299,8 @@ fn mismatch_lines(contents: &str) -> Vec<&str> {
 /// time; forgetting the service starts over.
 #[test]
 fn mismatch_logs_follow_gos_first_stored_key() {
-    let (logger, sink) = capture_logs(Level::DEBUG);
-    let state = ReplicasState::new(&CustomLabels::default(), logger);
+    let logs = capture_logs(LevelFilter::DEBUG);
+    let state = ReplicasState::new(&CustomLabels::default());
     let publish_running = |running| {
         publish(
             &state,
@@ -1300,44 +1309,48 @@ fn mismatch_logs_follow_gos_first_stored_key() {
     };
     publish_running(1);
     publish_running(1);
-    assert_eq!(
-        mismatch_lines(&sink.contents()).len(),
-        1,
-        "a repeat is not logged"
-    );
+    assert_eq!(mismatch_lines(&logs).len(), 1, "a repeat is not logged");
     publish_running(2);
     publish_running(2);
     assert_eq!(
-        mismatch_lines(&sink.contents()).len(),
+        mismatch_lines(&logs).len(),
         3,
         "only the first key is stored"
     );
     publish_running(3);
     publish_running(1);
     assert_eq!(
-        mismatch_lines(&sink.contents()).len(),
+        mismatch_lines(&logs).len(),
         3,
         "at desired, then the stored key"
     );
     state.forget_service("svc1");
     publish_running(1);
     assert_eq!(
-        mismatch_lines(&sink.contents()).len(),
+        mismatch_lines(&logs).len(),
         4,
         "a forgotten service logs again"
     );
-    assert_eq!(
-        mismatch_lines(&sink.contents())[0],
-        "level=DEBUG at_desired mismatch service_id=svc1 stack=s service=sv mode=replicated \
-         running=1 desired=3"
-    );
+    let first = &mismatch_lines(&logs)[0];
+    assert_eq!(first["level"], "DEBUG");
+    for (name, want) in [
+        ("service_id", "svc1"),
+        ("stack", "s"),
+        ("service", "sv"),
+        ("mode", "replicated"),
+    ] {
+        assert_eq!(first[name], want, "{name}");
+    }
+    assert_eq!(first["running"], 1.0);
+    assert_eq!(first["desired"], 3.0);
+    assert!(first.get("wanted").is_none(), "only a job logs its counts");
 }
 
 /// A job's mismatch key and log carry the wanted counts and the coverage too.
 #[test]
 fn job_mismatch_logs_carry_the_job_counts() {
-    let (logger, sink) = capture_logs(Level::DEBUG);
-    let state = ReplicasState::new(&CustomLabels::default(), logger);
+    let logs = capture_logs(LevelFilter::DEBUG);
+    let state = ReplicasState::new(&CustomLabels::default());
     let mut counter = TaskCounter::new(service_labels("s", "job", SERVICE_MODE_GLOBAL_JOB));
     counter.desired = 2.0;
     counter.desired_known = true;
@@ -1356,13 +1369,26 @@ fn job_mismatch_logs_carry_the_job_counts() {
         &state,
         &ServiceCounter::from([("job1".to_owned(), counter)]),
     );
-    let contents = sink.contents();
-    let lines = mismatch_lines(&contents);
+    let lines = mismatch_lines(&logs);
     assert_eq!(lines.len(), 2, "the job counts are part of the key");
-    assert_eq!(
-        lines[0],
-        "level=DEBUG at_desired mismatch service_id=job1 stack=s service=job mode=global-job \
-         running=0 desired=2 wanted=2 wanted_complete=1 eligible_nodes_covered=false"
+    assert!(
+        logs.contains(
+            "DEBUG",
+            "at_desired mismatch",
+            &[
+                ("service_id", "job1"),
+                ("stack", "s"),
+                ("service", "job"),
+                ("mode", "global-job"),
+                ("running", "0"),
+                ("desired", "2"),
+                ("wanted", "2"),
+                ("wanted_complete", "1"),
+                ("eligible_nodes_covered", "false"),
+            ]
+        ),
+        "{}",
+        logs.dump()
     );
 }
 
@@ -1371,7 +1397,7 @@ fn job_mismatch_logs_carry_the_job_counts() {
 #[test]
 fn families_carry_go_names_help_and_label_order() {
     let custom = CustomLabels::new(&["team".to_owned()], &["team".to_owned()]);
-    let state = ReplicasState::new(&custom, capture_logs(Level::INFO).0);
+    let state = ReplicasState::new(&custom);
     let descs = state.collector().descs();
     let summary: Vec<(&str, &str, Vec<&str>)> = descs
         .iter()
@@ -1404,7 +1430,6 @@ fn families_carry_go_names_help_and_label_order() {
             ),
         ]
     );
-    let registry = Registry::new();
-    state.register(&registry).unwrap();
-    assert!(state.register(&registry).is_err());
+    let mut registry = Registry::default();
+    state.register(&mut registry);
 }

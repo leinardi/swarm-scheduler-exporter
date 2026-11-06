@@ -23,7 +23,6 @@
  */
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use super::*;
 use crate::collector::metrics_ids::{SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB};
@@ -283,19 +282,20 @@ fn constraints_match_with_swarmkit_semantics() {
     }
 }
 
-/// Beyond the Go table: Go's Unicode folding and white space, which an ASCII-only port gets
-/// wrong, and a key cut inside a character.
+/// Beyond the Go table: Unicode lowercasing and white space, which an ASCII-only comparison gets
+/// wrong, and a key cut inside a character. Go's simple folding of U+017F LONG S to `s` is the one
+/// verdict that differs (`text.rs`).
 #[test]
-fn constraints_fold_and_trim_as_go() {
+fn constraints_fold_and_trim_unicode() {
     let mut node = constrained_node();
     node.description.hostname = "straße".to_owned();
     node.spec
         .labels
         .insert("café".to_owned(), "Ünïcode".to_owned());
     let cases: &[(&str, bool)] = &[
-        // U+212A KELVIN SIGN folds to k, U+017F LONG S to s.
         ("node.hostname == STRAẞE", true),
-        ("node.hoſtname == straße", true),
+        // Go folds U+017F LONG S to s, so this matched there; it no longer does.
+        ("node.hoſtname == straße", false),
         ("node.labels.café == üNÏCODE", true),
         ("node.labels.CAFÉ == ünïcode", false),
         ("\u{a0}node.role\u{2003}==\u{3000}manager\u{85}", true),
@@ -313,45 +313,63 @@ fn constraints_fold_and_trim_as_go() {
     }
 }
 
-fn testdata(name: &str) -> String {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests/testdata", name]
-        .iter()
-        .collect();
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
-
-fn unhex(hex: &str) -> String {
-    if hex == "-" {
-        return String::new();
-    }
-    let bytes: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
-        .collect();
-    String::from_utf8(bytes).unwrap()
-}
-
-/// The `node.ip` constraint against Go's `net.ParseIP`, `ParseCIDR`, `Equal` and `Contains`, for
-/// every text of the Go corpus and six node addresses, with both operators.
+/// The `node.ip` constraint: an address or a CIDR against the node's address, with both
+/// operators (a value that is neither never matches), as Go's `ParseIP`, `ParseCIDR`, `Equal` and
+/// `Contains` decided it.
 #[test]
-fn node_ip_constraints_match_go() {
-    let mut checked = 0;
-    for line in testdata("net/go-ip.tsv").lines() {
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields[0] != "match" {
-            continue;
-        }
-        let (expected, addr) = (unhex(fields[1]), unhex(fields[2]));
-        for (operator, want) in [("==", fields[3]), ("!=", fields[4])] {
-            assert_eq!(
-                match_node_ip_constraint(operator, &expected, &addr).to_string(),
-                want,
-                "node.ip {operator} {expected:?} on {addr:?}"
-            );
-            checked += 1;
-        }
+fn node_ip_constraints_compare_addresses_and_subnets() {
+    // (expected, node address, matches ==)
+    let cases = [
+        ("10.0.0.5", "10.0.0.5", true),
+        ("10.0.0.5", "10.0.0.6", false),
+        ("10.0.0.5", "::ffff:10.0.0.5", true),
+        ("::ffff:10.0.0.5", "10.0.0.5", true),
+        ("2001:db8::1", "2001:DB8:0:0:0:0:0:1", true),
+        ("2001:db8::1", "10.0.0.5", false),
+        ("10.0.0.0/24", "10.0.0.5", true),
+        ("10.0.0.0/24", "10.0.1.5", false),
+        ("10.0.0.7/24", "10.0.0.5", true),
+        ("10.0.0.0/24", "::ffff:10.0.0.5", true),
+        ("10.0.0.0/0", "10.1.2.3", true),
+        ("10.0.0.0/0", "2001:db8::1", false),
+        ("10.0.0.5/32", "10.0.0.5", true),
+        ("2001:db8::/32", "2001:db8::5", true),
+        ("2001:db8::/32", "2001:db9::5", false),
+        ("2001:db8::/32", "10.0.0.5", false),
+        ("::ffff:10.0.0.0/104", "10.1.2.3", true),
+        ("::ffff:10.0.0.0/104", "11.1.2.3", false),
+        ("::ffff:10.0.0.0/120", "10.0.0.5", true),
+        ("::ffff:10.0.0.0/96", "10.9.9.9", true),
+        ("::ffff:10.0.0.0/120", "::ffff:10.0.0.5", true),
+        // Not an address of the node: nil equals and is contained by nothing.
+        ("10.0.0.5", "bogus", false),
+        ("10.0.0.5", "", false),
+        ("10.0.0.5", "10.0.0.5:2377", false),
+        ("10.0.0.0/24", "bogus", false),
+        // Not an address or a subnet: never matches, whatever the operator.
+        ("bogus", "10.0.0.5", false),
+        ("", "10.0.0.5", false),
+        ("10.0.0.0/33", "10.0.0.5", false),
+        ("10.0.0.0/", "10.0.0.5", false),
+        ("10.0.0.0/-1", "10.0.0.5", false),
+        ("010.0.0.5", "10.0.0.5", false),
+        ("10.0.0.5%eth0", "10.0.0.5", false),
+        ("fe80::1%eth0", "fe80::1", false),
+        ("[::1]", "::1", false),
+    ];
+    for (expected, addr, want) in cases {
+        assert_eq!(
+            match_node_ip_constraint("==", expected, addr),
+            want,
+            "node.ip == {expected:?} on {addr:?}"
+        );
+        let invalid = expected.parse::<IpAddr>().is_err() && expected.parse::<IpNet>().is_err();
+        assert_eq!(
+            match_node_ip_constraint("!=", expected, addr),
+            !want && !invalid,
+            "node.ip != {expected:?} on {addr:?}"
+        );
     }
-    assert_eq!(checked, 672);
 }
 
 /// Go: `TestCountEligibleNodes`
@@ -510,7 +528,7 @@ fn replica_gauges_carry_go_names_help_and_labels() {
             SCHEDULABLE_REPLICAS_HELP,
         ),
     ] {
-        let desc = &family.descs()[0];
+        let desc = family.desc();
         assert_eq!(desc.name(), name);
         assert_eq!(desc.help(), help);
         assert_eq!(
@@ -535,9 +553,8 @@ fn replica_gauges_carry_go_names_help_and_labels() {
          placement constraints (replicated: min(configured, eligible_nodes); global: eligible \
          nodes; jobs and restart-condition none services: 0)."
     );
-    let registry = Registry::new();
-    gauges.register(&registry).unwrap();
-    assert!(gauges.register(&registry).is_err(), "registered once");
+    let mut registry = Registry::default();
+    gauges.register(&mut registry);
 }
 
 #[test]

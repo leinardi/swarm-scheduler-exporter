@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-//! The exporter's wiring, Go's `run`: the flags, the logger, the metrics, the Docker client, the
+//! The exporter's wiring, Go's `run`: the flags, the log, the metrics, the Docker client, the
 //! workers (reconciler, event listener, poller) and the HTTP server, and the one shutdown
 //! deadline they share (Q8).
 
@@ -34,6 +34,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 use crate::cli::{self, Args};
 use crate::collector::containers::{ContainersConfig, ContainersState};
@@ -49,15 +50,12 @@ use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::docker::{self, Client, DockerApi};
 use crate::healthcheck::run_healthcheck;
-use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
+use crate::metrics;
+use crate::server::{self, Exposition, HealthFn, MetricsFn};
 use crate::version::{COMMIT, DATE, VERSION};
-use go_clock::{Clock, SystemClock};
-use go_prom::ExpfmtVersion;
-use go_prom::exposition::render;
-use go_prom::process::ProcessCollector;
-use go_prom::promhttp::HandlerMetrics;
-use go_prom::{Collector, RegisterError, Registry};
-use go_slog::{Attr, Logger};
+use clock::{Clock, SystemClock};
+use prometheus_client::registry::Registry;
+use service_kit::process::ProcessCollector;
 use service_kit::runtime::Exit;
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
@@ -89,14 +87,6 @@ pub struct Metrics {
     pub containers: Option<Arc<ContainersState>>,
 }
 
-/// The Prometheus Go client's `MustRegister`: the exporter registers each family once, so a refusal
-/// is a programming error.
-fn must_register(result: Result<(), RegisterError>) {
-    if let Err(error) = result {
-        panic!("{error}");
-    }
-}
-
 /// Go's `registerMetrics`: builds every family and registers it on `registry` in Go's order
 /// (desired and schedulable replicas, replicas state, health and build info, nodes, the
 /// exporter's own families, service update, then the containers when enabled). The health check
@@ -104,32 +94,28 @@ fn must_register(result: Result<(), RegisterError>) {
 /// initial resync, as Go's is before the reconciler runs.
 #[must_use]
 pub fn register_metrics(
-    registry: &Registry,
+    registry: &mut Registry,
     options: &MetricsOptions,
     clock: Arc<dyn Clock>,
-    logger: &Logger,
 ) -> Metrics {
     let custom = &options.custom_labels;
     let timestamps = Arc::new(Timestamps::default());
     let replica_gauges = Arc::new(ReplicaGauges::new(custom));
-    must_register(replica_gauges.register(registry));
-    let replicas_state = Arc::new(ReplicasState::new(custom, logger.clone()));
-    must_register(replicas_state.register(registry));
+    replica_gauges.register(registry);
+    let replicas_state = Arc::new(ReplicasState::new(custom));
+    replicas_state.register(registry);
     let health = Health::unbound(Arc::clone(&timestamps), options.poll_delay, clock);
     let [version, commit, date] = &options.build;
-    must_register(HealthGauges::new(health.clone(), version, commit, date).register(registry));
-    let nodes_by_state = Arc::new(NodesByState::new(logger.clone()));
-    must_register(nodes_by_state.register(registry));
+    HealthGauges::new(health.clone(), version, commit, date).register(registry);
+    let nodes_by_state = Arc::new(NodesByState::new());
+    nodes_by_state.register(registry);
     let exporter_metrics = Arc::new(ExporterMetrics::new(timestamps));
-    must_register(exporter_metrics.register(registry));
+    exporter_metrics.register(registry);
     let service_update = Arc::new(ServiceUpdateMetrics::new(custom));
-    must_register(service_update.register(registry));
+    service_update.register(registry);
     let containers = options.containers.enabled.then(|| {
-        let containers = Arc::new(ContainersState::new(
-            options.containers.clone(),
-            logger.clone(),
-        ));
-        must_register(containers.register(registry));
+        let containers = Arc::new(ContainersState::new(options.containers.clone()));
+        containers.register(registry);
         containers
     });
     Metrics {
@@ -146,14 +132,10 @@ pub fn register_metrics(
     }
 }
 
-/// What Go's default registry and `promhttp.Handler` add besides the exporter's families: the
-/// process collector, and the scrape handler's own counters (Q1: no `go_*`).
-#[must_use]
-pub fn register_runtime_metrics(registry: &Registry) -> HandlerMetrics {
-    must_register(registry.register(Arc::new(ProcessCollector::new()) as Arc<dyn Collector>));
-    let handler = HandlerMetrics::new();
-    must_register(handler.register(registry));
-    handler
+/// What Go's default registry added besides the exporter's families: the process collector (Q1:
+/// no `go_*`, and no `promhttp_metric_handler_*`).
+pub fn register_runtime_metrics(registry: &mut Registry) {
+    registry.register_collector(Box::new(ProcessCollector::new()));
 }
 
 /// The running workers.
@@ -185,13 +167,11 @@ pub fn start_workers<D: DockerApi + 'static>(
     metrics: &Metrics,
     poll_delay: Duration,
     clock: &Arc<dyn Clock>,
-    logger: &Logger,
 ) -> Workers {
     let reconciler = Reconciler::new(
         Arc::clone(&docker),
         metrics.collectors.clone(),
         Arc::clone(clock),
-        logger.clone(),
     );
     let handle = reconciler.handle();
     metrics.health.bind(handle.clone());
@@ -222,7 +202,6 @@ pub fn start_workers<D: DockerApi + 'static>(
         handle,
         exporter_metrics: Arc::clone(&metrics.collectors.metrics),
         containers: metrics.containers.clone(),
-        logger: logger.clone(),
         cancel: root.clone(),
     };
     let poller_task = tokio::spawn(poller.run(poll_delay));
@@ -239,7 +218,6 @@ struct Poller<D> {
     handle: ReconcilerHandle,
     exporter_metrics: Arc<ExporterMetrics>,
     containers: Option<Arc<ContainersState>>,
-    logger: Logger,
     cancel: CancellationToken,
 }
 
@@ -253,18 +231,12 @@ impl<D: DockerApi> Poller<D> {
     async fn run(self, delay: Duration) {
         tokio::select! {
             () = self.cancel.cancelled() => {
-                self.logger.debug(
-                    "polling loop: context canceled before the first resync completed",
-                    &[],
-                );
+                debug!("polling loop: context canceled before the first resync completed");
                 return;
             }
             () = self.handle.ready() => {}
         }
-        self.logger.debug(
-            "start polling replicas state",
-            &[Attr::duration("every", nanos(delay))],
-        );
+        debug!(every = ?delay, "start polling replicas state");
         let mut ticker = tokio::time::interval(delay);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         ticker.tick().await;
@@ -272,7 +244,7 @@ impl<D: DockerApi> Poller<D> {
         loop {
             tokio::select! {
                 () = self.cancel.cancelled() => {
-                    self.logger.debug("polling loop: context canceled", &[]);
+                    debug!("polling loop: context canceled");
                     return;
                 }
                 _ = ticker.tick() => self.poll_once().await,
@@ -291,8 +263,7 @@ impl<D: DockerApi> Poller<D> {
         self.exporter_metrics.inc_polls();
         if let Err(error) = result {
             self.exporter_metrics.inc_poll_errors();
-            self.logger
-                .error("poll replicas state failed", &[Attr::error("err", &error)]);
+            error!(error = %error, "poll replicas state failed");
         }
         let Some(containers) = &self.containers else {
             return;
@@ -303,55 +274,28 @@ impl<D: DockerApi> Poller<D> {
             .await
         {
             Some(Ok(rows)) => containers.update(&rows),
-            Some(Err(error)) => self.logger.warn(
-                "poll containers state failed",
-                &[Attr::error("err", &error)],
-            ),
+            Some(Err(error)) => warn!(error = %error, "poll containers state failed"),
             // Go's list fails at once on the cancelled context.
-            None => self.logger.warn(
-                "poll containers state failed",
-                &[Attr::string("err", "container list: context canceled")],
+            None => warn!(
+                error = "container list: context canceled",
+                "poll containers state failed"
             ),
         }
     }
 }
 
-fn nanos(duration: Duration) -> i64 {
-    i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX)
-}
-
 /// The endpoints Go's `server.NewMuxWithHealth` serves: `/healthz` from `health`, and
-/// `/metrics` from `registry`, counted by `handler` as promhttp's `InstrumentMetricHandler`
-/// counts it (in flight while the families are gathered and encoded, then one more request under
-/// its status code), with `Date` from `clock` and the server's errors through `logger`.
-#[must_use]
-pub fn app(
-    health: Health,
-    registry: Arc<Registry>,
-    handler: HandlerMetrics,
-    clock: Arc<dyn Clock>,
-    logger: Logger,
-) -> App {
+/// `/metrics` from `registry` as OpenMetrics text; anything else is a 404.
+pub fn app(health: Health, registry: Arc<Registry>) -> axum::Router {
     let health: HealthFn = Box::new(move || {
         let (healthy, reason) = health.snapshot_now();
         (healthy, reason.to_owned())
     });
-    let metrics: MetricsFn = Box::new(move |request: &MetricsRequest| {
-        let in_flight = handler.begin();
-        let families = registry.gather();
-        let accept_encoding: Vec<&str> =
-            request.accept_encoding.iter().map(String::as_str).collect();
-        let exposition = render(
-            ExpfmtVersion::V0_71_0,
-            &families,
-            request.accept.as_deref(),
-            &accept_encoding,
-            request.names.as_ref(),
-        );
-        in_flight.finish(200);
-        exposition
+    let metrics: MetricsFn = Box::new(move || Exposition {
+        content_type: metrics::CONTENT_TYPE.to_owned(),
+        body: metrics::render(&registry).into_bytes(),
     });
-    App::new(health, metrics, clock, logger)
+    server::router(health, metrics)
 }
 
 /// Writes `text` to stdout or stderr, as Go's `fmt.Fprint` does, ignoring a write error.
@@ -384,7 +328,7 @@ fn watch_shutdown(
 
 /// Go's `run`, on `args` (the program name first) and the environment `getenv`, shutting down
 /// when `shutdown` resolves. In Go's order: the flags (the help, a parse error), the
-/// `--healthcheck` probe, the poll-delay check, the logger and the start log, the custom labels,
+/// `--healthcheck` probe, the poll-delay check, the log and the start log, the custom labels,
 /// the metrics, the shutdown watch, the Docker client and its API version, the workers, and the
 /// HTTP server until the shutdown or its failure. `shutdown` is polled only from there, so a
 /// probe or a failed startup is not held up by signal handling.
@@ -404,7 +348,7 @@ where
             return Exit::early(exit.code);
         }
     };
-    // A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no logger, no
+    // A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no log, no
     // metric and no Docker client.
     if args.healthcheck {
         return Exit::early(run_healthcheck(&args.listen_addr, &mut io::stdout()).await);
@@ -414,23 +358,19 @@ where
         return Exit::early(1);
     }
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let logger = go_slog::configure(
-        go_slog::Config {
-            format: args.log_format,
-            level: args.log_level,
-            include_time: args.log_time,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Arc::clone(&clock),
-        &getenv,
-    );
-    logger.info(
-        "swarm-scheduler-exporter starting",
-        &[
-            Attr::string("version", VERSION),
-            Attr::string("commit", COMMIT),
-            Attr::string("date", DATE),
-        ],
+    // Installed once per process: a second run_with in the same process (the tests) logs through
+    // the first one's subscriber, or the scoped default of the test.
+    let _ = tracing_setup::install_global(tracing_setup::build(
+        io::stdout,
+        args.log_format.into(),
+        args.log_level.filter(),
+        tracing_setup::Options::new().time(args.log_time),
+    ));
+    info!(
+        version = VERSION,
+        commit = COMMIT,
+        date = DATE,
+        "swarm-scheduler-exporter starting"
     );
     let custom_labels = match cli::validate_custom_labels(&args.labels) {
         Ok(labels) => {
@@ -441,15 +381,15 @@ where
             CustomLabels::new(&raw, &sanitized)
         }
         Err(error) => {
-            logger.error("invalid custom labels", &[Attr::error("err", &error)]);
+            error!(error = %error, "invalid custom labels");
             return Exit::early(1);
         }
     };
     // Checked by check_poll_delay: at least one second.
-    let poll_delay = Duration::from_nanos(u64::try_from(args.poll_delay).unwrap_or_default());
-    let registry = Arc::new(Registry::new());
+    let poll_delay = args.poll_delay;
+    let mut registry = Registry::default();
     let metrics = register_metrics(
-        &registry,
+        &mut registry,
         &MetricsOptions {
             custom_labels,
             poll_delay,
@@ -457,39 +397,36 @@ where
             build: [VERSION.to_owned(), COMMIT.to_owned(), DATE.to_owned()],
         },
         Arc::clone(&clock),
-        &logger,
     );
 
     let (root, signalled) = watch_shutdown(shutdown);
 
     // Configured from DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY.
-    // The API version is negotiated lazily, on the first request.
-    let settings = match docker::settings_from_env(&getenv) {
-        Ok(settings) => settings,
+    // The API version is negotiated lazily, on the first request, unless DOCKER_API_VERSION pins
+    // it.
+    let config = match docker::settings_from_env(&getenv) {
+        Ok(config) => config,
+        Err(error @ docker::SettingsError::Version(_)) => {
+            error!(error = %error, "unsupported Docker API version");
+            return Exit::early(1);
+        }
         Err(error) => {
-            logger.error("docker client init failed", &[Attr::error("err", &error)]);
+            error!(error = %error, "docker client init failed");
             return Exit::early(1);
         }
     };
-    if let Err(error) = docker::version::validate_client_api_version(settings.client_version()) {
-        logger.error(
-            "unsupported Docker API version",
-            &[Attr::error("err", &error)],
-        );
-        return Exit::early(1);
-    }
-    let docker = Arc::new(Client::new(settings));
+    let docker = match Client::new(config) {
+        Ok(client) => Arc::new(client),
+        Err(error) => {
+            error!(error = %error, "docker client init failed");
+            return Exit::early(1);
+        }
+    };
 
-    let workers = start_workers(&root, docker, &metrics, poll_delay, &clock, &logger);
+    let workers = start_workers(&root, docker, &metrics, poll_delay, &clock);
 
-    let handler = register_runtime_metrics(&registry);
-    let app = Arc::new(app(
-        metrics.health.clone(),
-        registry,
-        handler,
-        clock,
-        logger,
-    ));
+    register_runtime_metrics(&mut registry);
+    let app = app(metrics.health.clone(), Arc::new(registry));
     let deadline: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
     let code = server::serve_until_done(&root, workers.join(), &args.listen_addr, app, {
         let deadline = Arc::clone(&deadline);

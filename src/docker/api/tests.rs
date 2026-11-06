@@ -24,9 +24,8 @@
 
 use std::time::Duration;
 
-use docker_engine::with_bare_deadline;
-
 use super::*;
+use crate::docker::with_bare_deadline;
 
 #[tokio::test(start_paused = true)]
 async fn the_timeouts_end_a_call_with_deadline_exceeded() {
@@ -39,7 +38,7 @@ async fn the_timeouts_end_a_call_with_deadline_exceeded() {
         .await
         .unwrap_err();
     assert_eq!(start.elapsed(), DOCKER_REQUEST_TIMEOUT);
-    assert_eq!(error.kind(), crate::docker::ErrorKind::DeadlineExceeded);
+    assert_eq!(error.kind(), crate::docker::ErrorKind::Timeout);
     assert_eq!(error.to_string(), "context deadline exceeded");
 
     assert_eq!(
@@ -67,6 +66,6 @@ async fn a_shared_deadline_bounds_calls_together() {
     })
     .await
     .unwrap_err();
-    assert_eq!(error.kind(), crate::docker::ErrorKind::DeadlineExceeded);
+    assert_eq!(error.kind(), crate::docker::ErrorKind::Timeout);
     assert_eq!(start.elapsed(), CONTAINERS_INSPECT_TIMEOUT);
 }

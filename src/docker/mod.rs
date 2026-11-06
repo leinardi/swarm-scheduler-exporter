@@ -23,35 +23,42 @@
  */
 
 //! The exporter's side of the Docker Engine API: [`DockerApi`], the read-only calls all collector
-//! code reaches Docker through, the [`types`] they decode, and the timeouts the callers put around
-//! them. The transport is rust-common's `docker-engine` (moby client v0.6.0's requests, its lazy
-//! API version negotiation, its error wording and the event stream), built from the environment
-//! by [`settings_from_env`] as the Go exporter's `newDockerClient` built its client.
+//! code reaches Docker through, the [`types`] they decode into and the timeouts the callers put
+//! around them. The transport is rust-common's `docker-client` over bollard, built from the
+//! environment by [`settings_from_env`].
 //!
 //! - `DOCKER_HOST`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and `DOCKER_API_VERSION` are read by
-//!   [`Settings::from_env`], with one change from Go: a certificate path without
-//!   `DOCKER_TLS_VERIFY` is refused instead of connecting without server verification (Q5).
-//! - [`Client`] is the crate's client behind [`DockerApi`] alone: HTTP/1.1 only, with no proxy,
-//!   the `User-Agent` `swarm-scheduler-exporter/<version>` and a [`RESPONSE_HEADER_TIMEOUT`] of
-//!   30s.
+//!   `docker_client::Config::from_env`: a unix socket, `tcp://` and `http://`, and `https://` or
+//!   `tcp://` with `DOCKER_TLS_VERIFY` (certificates from `DOCKER_CERT_PATH`, or `$HOME/.docker`).
+//!   `DOCKER_TLS` (TLS without verification) is refused rather than ignored, as are a
+//!   `DOCKER_CERT_PATH` without `DOCKER_TLS_VERIFY` on a `tcp://` host (Q5) and a pinned
+//!   version that is not `<major>.<minor>` or is outside [`query::MIN_API_VERSION`] to
+//!   [`query::MAX_API_VERSION`]; without a pin
+//!   the version is negotiated with the first call.
+//! - [`Client`] is the crate's client behind [`DockerApi`] alone, with the `User-Agent`
+//!   `swarm-scheduler-exporter/<version>` and a [`RESPONSE_HEADER_TIMEOUT`] of 30s.
 //! - Every call is bounded by the caller with the bare `context deadline exceeded`
-//!   ([`with_docker_timeout`], [`with_bare_timeout`], [`with_bare_deadline`]).
+//!   ([`with_docker_timeout`], [`with_bare_timeout`], [`with_bare_deadline`]); bollard's own
+//!   timeout stops at the response headers, so the bound is what cuts a body that stalls.
 //!
-//! Read-only by construction: the exporter enables none of the crate's write features, so the
-//! client sends `GET` only, plus one `HEAD /_ping`, and [`DockerApi`] has list, inspect and events
-//! calls only.
+//! Read-only by construction: [`DockerApi`] has list, inspect and events calls only, and the
+//! `attach` feature of `docker-client` is off (`meta/tests/docker_boundary.rs` checks both).
 
 mod api;
+mod convert;
+mod error;
+pub mod query;
 pub mod types;
 
 pub use api::{
     CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, Client, ClientEventStream,
-    DOCKER_REQUEST_TIMEOUT, DockerApi, EventStream, with_docker_timeout,
+    DOCKER_REQUEST_TIMEOUT, DockerApi, EVENTS_CONNECT_TIMEOUT, EventStream, with_docker_timeout,
 };
-pub use docker_engine::{
-    ConfigError, Error, ErrorKind, Filters, Settings, StreamError, StreamErrorKind,
-    since_parameter, version, with_bare_deadline, with_bare_timeout,
+pub use docker_client::{Config, ConnectError};
+pub use error::{
+    Error, ErrorKind, StreamError, StreamErrorKind, with_bare_deadline, with_bare_timeout,
 };
+pub use query::{Filters, since_parameter};
 
 use std::time::Duration;
 
@@ -64,30 +71,88 @@ pub const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 /// sent in a header.
 const PROGRAM: &str = "swarm-scheduler-exporter";
 
-/// The client settings the Go exporter's `newDockerClient` builds: [`Settings::from_env`] with
-/// `getenv` for `os.Getenv`, the exporter's `User-Agent` and the [`RESPONSE_HEADER_TIMEOUT`]. A
-/// pinned API version's range is checked by [`version::validate_client_api_version`], as the Go
-/// exporter checks it after this.
+/// Why the client settings could not be built.
+#[derive(Debug)]
+pub enum SettingsError {
+    /// `docker_client::Config::from_env` refused the environment.
+    Config(ConnectError),
+    /// A `DOCKER_API_VERSION` pin outside the supported range.
+    Version(query::UnsupportedApiVersion),
+    /// `DOCKER_CERT_PATH` with a `tcp://` host and no `DOCKER_TLS_VERIFY` (Q5): the certificates
+    /// would be ignored and the daemon spoken to in the clear.
+    CertsWithoutVerify,
+}
+
+impl std::fmt::Display for SettingsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Config(error) => write!(formatter, "docker client: {error}"),
+            Self::Version(error) => error.fmt(formatter),
+            Self::CertsWithoutVerify => formatter.write_str(
+                "docker client: DOCKER_CERT_PATH is set but DOCKER_TLS_VERIFY is not: set \
+                 DOCKER_TLS_VERIFY=1 to verify the daemon (TLS without verification is not \
+                 supported)",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SettingsError {}
+
+impl From<ConnectError> for SettingsError {
+    fn from(error: ConnectError) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl From<query::UnsupportedApiVersion> for SettingsError {
+    fn from(error: query::UnsupportedApiVersion) -> Self {
+        Self::Version(error)
+    }
+}
+
+/// The client settings: `docker_client::Config::from_env` with `getenv` for `os.Getenv`, the
+/// exporter's `User-Agent` and the [`RESPONSE_HEADER_TIMEOUT`], and a pinned API version checked
+/// against [`query::MIN_API_VERSION`].
 ///
 /// # Errors
 ///
-/// [`ConfigError`]: `configure TLS from DOCKER_CERT_PATH=<path>: …` for the TLS material, and
-/// `docker client: …` for a host or API version moby refuses.
-pub fn settings_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Settings, ConfigError> {
-    Ok(Settings::from_env(getenv)?
-        .user_agent(user_agent(crate::version::VERSION))?
-        .response_header_timeout(Some(RESPONSE_HEADER_TIMEOUT)))
+/// [`SettingsError`]: the environment `docker-client` refuses (an unknown scheme, TLS without
+/// certificates, a malformed `DOCKER_API_VERSION`), a pin outside the supported range, or certificates
+/// without `DOCKER_TLS_VERIFY` (Q5).
+pub fn settings_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Config, SettingsError> {
+    let set = |name: &str| getenv(name).is_some_and(|value| !value.is_empty());
+    if set("DOCKER_CERT_PATH")
+        && !set("DOCKER_TLS_VERIFY")
+        && getenv("DOCKER_HOST").is_some_and(|host| host.starts_with("tcp://"))
+    {
+        return Err(SettingsError::CertsWithoutVerify);
+    }
+    if let Some(pin) = getenv("DOCKER_API_VERSION").filter(|pin| !pin.is_empty()) {
+        query::validate_client_api_version(&pin)?;
+    }
+    Ok(Config::from_env(getenv)?
+        .user_agent(user_agent(crate::version::VERSION))
+        .response_header_timeout(RESPONSE_HEADER_TIMEOUT))
 }
 
 /// `swarm-scheduler-exporter/<version>`, or the bare program name when the version stamp holds
 /// something no header may carry.
 fn user_agent(version: &str) -> String {
     let user_agent = format!("{PROGRAM}/{version}");
-    if Settings::check_user_agent(&user_agent).is_ok() {
+    if http_header_safe(&user_agent) {
         user_agent
     } else {
         PROGRAM.to_owned()
     }
+}
+
+/// Whether `value` may be a header value: visible ASCII, space and tab, as Go's
+/// `httpguts.ValidHeaderFieldValue` allows (obs-text excluded here).
+fn http_header_safe(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || (b' '..=b'~').contains(&byte))
 }
 
 #[cfg(test)]

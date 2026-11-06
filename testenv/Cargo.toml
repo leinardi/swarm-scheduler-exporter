@@ -29,16 +29,11 @@ integration = [
 ]
 
 [dependencies]
-# The shared crates the exporter itself uses (rust-common), for the harness's own logs, clock
-# and Go formatting. testenv does not depend on the exporter crate; the exporter package names
-# testenv in no table (the boundary meta-test checks it), so nothing here reaches the shipped
+# The shared crates the exporter itself uses (rust-common), for the harness's clock. testenv does
+# not depend on the exporter crate; the exporter package names testenv in no table (the boundary meta-test checks it), so nothing here reaches the shipped
 # binary.
-# Go's quoting, float and duration formatting and the local zone, as the exporter writes them.
-go-compat.workspace = true
 # The wall clock the harness and its logs read.
-go-clock.workspace = true
-# The exporter's logger, for the harness's own records.
-go-slog.workspace = true
+clock.workspace = true
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The generic half of the harness (rust-common): Go's -run filter, the envid, the sweep rules and
 # the owner labels, the error type, and (with integration) Go's context and testing packages, the

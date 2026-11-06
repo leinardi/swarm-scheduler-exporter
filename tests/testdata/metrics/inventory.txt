@@ -1,0 +1,35 @@
+# The metric families of the Go 1.x exporter (the go-v1.3.2 capture of /metrics) that 2.0 keeps:
+# name, type, label names (a histogram without `le`). The Go runtime (go_*) and the scrape
+# handler (promhttp_*) families are dropped (README, Q1 and Q15). A counter is listed under its
+# sample name, with `_total`; OpenMetrics names the family without it.
+
+process_cpu_seconds_total counter
+process_max_fds gauge
+process_network_receive_bytes_total counter
+process_network_transmit_bytes_total counter
+process_open_fds gauge
+process_resident_memory_bytes gauge
+process_start_time_seconds gauge
+process_virtual_memory_bytes gauge
+process_virtual_memory_max_bytes gauge
+swarm_cluster_nodes_by_state gauge availability,role,status
+swarm_container_state gauge container,display_name,exit_code,orchestrator,project,service,stack,state
+swarm_exporter_build_info gauge commit,date,version
+swarm_exporter_events_dropped_total counter
+swarm_exporter_events_reconnects_total counter
+swarm_exporter_health gauge
+swarm_exporter_last_poll_success_timestamp_seconds gauge
+swarm_exporter_last_resync_success_timestamp_seconds gauge
+swarm_exporter_poll_duration_seconds histogram
+swarm_exporter_poll_errors_total counter
+swarm_exporter_poll_rejections_total counter
+swarm_exporter_polls_total counter
+swarm_exporter_resyncs_total counter result
+swarm_service_at_desired gauge display_name,service,service_mode,stack
+swarm_service_desired_replicas gauge display_name,service,service_mode,stack
+swarm_service_running_replicas gauge display_name,service,service_mode,stack
+swarm_service_schedulable_replicas gauge display_name,service,service_mode,stack
+swarm_service_update_completed_timestamp_seconds gauge display_name,service,service_mode,stack
+swarm_service_update_started_timestamp_seconds gauge display_name,service,service_mode,stack
+swarm_service_update_state_info gauge display_name,service,service_mode,stack,state
+swarm_task_replicas_state gauge display_name,service,service_mode,stack,state

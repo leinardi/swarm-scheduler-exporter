@@ -6,7 +6,8 @@ A Prometheus exporter for Docker Swarm's scheduler: desired and running replicas
 accurate eligibility for `global` services), live task state, service update/rollback state, node
 availability and, opt-in, container state. It only ever reads from the Docker API. A Rust
 workspace (edition 2024, toolchain pinned in `rust-toolchain.toml`) since 2.0; 1.x was written in
-Go, and the README's "Migrating from 1.x" section lists every behaviour that changed. Fork of
+Go, and the README's "Migrating" section lists every behaviour that changed since. The metrics,
+flags and health rules are the contract; Go 1.x is history, not an authority. Fork of
 [akerouanton/swarm-tasks-exporter](https://github.com/akerouanton/swarm-tasks-exporter). The README
 is the user-facing story; the metrics it lists are the public contract.
 
@@ -42,7 +43,7 @@ Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged cont
 
 ```bash
 make test-integration                            # the whole suite, against the release binary
-make test-integration RUN='^TestNode_'           # a subset (Go's -run semantics)
+make test-integration RUN='^TestNode_'           # a subset (a regular expression per /-separated level)
 make test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden file
 make sweep-test-leaks                            # remove every labelled test container and network
 ```
@@ -70,17 +71,25 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
     `--healthcheck` (the image is distroless: there is no shell or curl a `HEALTHCHECK` could run
     instead).
   - `src/docker/` — `DockerApi`, the read-only trait all collector code reaches Docker through, on
-    a `Client` newtype over docker-engine's client (features `tcp` and `tls`), the exporter's API
-    types and the timeouts its callers put around them.
+    a `Client` over `docker-client`'s bollard connection (features `tcp` and `tls`), the exporter's
+    API types (mapped from bollard's models in `convert.rs`) and the timeouts its callers put
+    around them.
   - `src/collector/` — the collectors and the reconciler (`reconciler/`), which is the one owner of
     the service and node caches and of every gauge derived from them.
-  - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` on go-http, with the exporter's
-    `TIMEOUTS`, listen-error prefix and log callback.
+  - `src/server.rs`, `src/server/` — `/metrics` and `/healthz` as an axum router on service-kit's
+    HTTP server, with the exporter's timeouts, the listen-error prefix, the bind and the shared
+    drain deadline.
   - `src/labels.rs` — sanitizing and validating custom label keys; `src/version.rs` — the build
     stamps (`service_kit::buildinfo!`).
   - `tests/` — the black-box tests: the Engine API wire captures (`engine_wire.rs`, against
-    `tests/support/fake_engine.rs`), the exposition, the registry, the run lifecycle and the logger
-    golden files.
+    `tests/support/fake_engine.rs`), the metrics (`tests/metrics.rs`: the inventory against
+    `tests/testdata/metrics/inventory.txt`, values, buckets, removal, scrape atomicity), the run
+    lifecycle. The unit tests capture logs with `test_support::capture_logs` (a scoped
+    `tracing_setup` subscriber).
+  - `src/metrics.rs` — the building blocks over prometheus-client: `GaugeVec`, the snapshot
+    collector and builder (families built whole per poll and swapped in at once), `ScrapeGauge`,
+    and `render` (OpenMetrics text). The fixed families use prometheus-client's counters and
+    histogram directly.
 - `testenv/` — the DinD Swarm harness: the cluster, its bring-up and teardown and the suite's
   names (`config.rs`) over testenv-core, with bollard behind its `integration` feature (the
   exporter package names none of testenv, testenv-core and bollard in any table;
@@ -97,30 +106,30 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v0.3.0"`) in `[workspace.dependencies]`, with
-`version = "0.3"`, the tag's `<major>.<minor>`: go-compat (the Go library ports), go-clock (the
-`Clock` trait), go-slog (the logger), go-prom (the registry, the text exposition, the `process_*`
-collector and promhttp), go-http (the server), docker-engine (the Engine API client), service-kit
-(the runtime, the signals, the stamps), testenv-core (the harness's generic half) and repo-meta
-(the meta-tests' checks). The exporter keeps only what is its own.
+dependency pinned by the release tag (`tag = "v0.4.0"`, with `version = "0.4"`) in
+`[workspace.dependencies]`: clock (the `Clock` trait),
+tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
+Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
+server, the `process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
+meta-tests' checks). The exporter keeps only what is its own.
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
-  the `tag` on every rust-common line (and `version` when the tag's `<major>.<minor>` moves),
-  run `cargo fetch` (not `cargo update -p`), and check that `git diff Cargo.lock` touches only
-  the rust-common lines.
-- The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
-  otherwise:
-  `ExpfmtVersion::V0_71_0` (prometheus/common v0.71.0's negotiation); go-http's `TIMEOUTS`
-  (read header 5s, read 10s, write 15s, idle 60s) and the `http listen:` prefix;
-  docker-engine's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
-  response-header timeout (`RESPONSE_HEADER_TIMEOUT`); go-slog's `PlainStyle::Quoted` (the plain
-  format as the exporter wrote it) and `parse_level_strict`/`parse_format_strict` (Q4: an unknown
-  value is refused); `lazy_shutdown_signal`, whose handlers are installed only once the shutdown
-  watch first polls it, so a signal during startup still terminates the process, as in Go before its
-  `signal.NotifyContext` call; the `buildinfo!` defaults `dev`, `none` and `unknown`, an empty stamp
-  kept.
+  the `rev` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
+  `git diff Cargo.lock` touches only the rust-common lines.
+- The parameters this exporter passes (the README's Migrating section lists what differs from 1.x
+  and 2.x):
+  the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
+  `process-metrics`; Q2); the server's header-read (5s) and write-stall (15s) timeouts and the
+  `http listen:` prefix (Q13);
+  docker-client's `User-Agent` `swarm-scheduler-exporter/<version>` (Q11) and 30s
+  response-header timeout (`RESPONSE_HEADER_TIMEOUT`); the log flags (Q4:
+  `--log-format` text|json, `--log-level` debug|info|warn|error, an unknown value refused by clap),
+  installed once through `tracing_setup::build` and `install_global`; `lazy_shutdown_signal`, whose
+  handlers are installed only once the shutdown watch first polls it, so a signal during startup
+  still terminates the process; the `buildinfo!`
+  defaults `dev`, `none` and `unknown`, an empty stamp kept.
 - Two workspace policies are the exporter's own: `panic = "unwind"` (the reconciler recovers a
   panicking step; see the invariants) and `unsafe_code = "forbid"`, with no exemption.
 
@@ -129,8 +138,10 @@ collector and promhttp), go-http (the server), docker-engine (the Engine API cli
 - `.mk/{docker,help,password,pre-commit,rust}.mk`, `.mk/.mk-common-version` and
   `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
   `make mk-common-update` and port a change upstream.
-- `tests/testdata/**` and `testenv/tests/integration/testdata/**`: byte-for-byte Engine API
-  captures and golden files. The integration golden file is rewritten with
+- `tests/testdata/**` and `testenv/tests/integration/testdata/**`: Engine API fixtures (captured
+  from a daemon) and golden files (the metrics golden was captured from the Go 1.3.2 exporter and
+  is kept as a regression pin on values, not as a parity target). The integration golden file is
+  rewritten with
   `make test-integration UPDATE=1 RUN=TestSnapshot_`; the whitespace hooks skip them.
 
 ## Invariants
@@ -139,12 +150,14 @@ The full list, with what counts as a finding, is in `.agents/skills/adversarial-
 The ones to keep in mind while writing code:
 
 - **Read-only against Docker, enforced in code.** A `:ro` socket bind does not make the API
-  read-only. `DockerApi` exposes list, inspect and events calls only, and docker-engine, built
-  without its `write` and `attach` features, sends `GET` only, plus one `HEAD /_ping`.
-  `meta/tests/docker_boundary.rs` holds it there: no manifest enables those features, only
-  `src/docker` names the crate and builds no request of its own, the paths are only those the
-  shipped socket-proxy allowlist grants, and bollard (which the harness creates and removes things
-  with) stays out of the exporter package.
+  read-only. `DockerApi` exposes list, inspect and events calls only, and `src/docker` makes
+  only the bollard read calls (the version negotiation's `GET /version` included), with
+  `docker-client`'s `attach` feature off.
+  `meta/tests/docker_boundary.rs` holds it there: no manifest enables that feature, only
+  `src/docker` names the crate (and bollard, as `docker_client::bollard`) and builds no request of
+  its own, the calls are only reads whose sections the shipped socket-proxy allowlist grants, and
+  bollard (which the harness creates and removes things with) is declared directly only by the
+  harness, outside the exporter package.
 - **Metrics are the public contract.** A renamed metric or a changed label set updates the README's
   Metrics section (and any alert example) in the same change. No label fed by an unbounded value.
 - **Series lifecycle.** A removed resource's series are deleted, never set to 0; known state sets
@@ -161,8 +174,8 @@ The ones to keep in mind while writing code:
   path.
 - **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `Zoned::now`,
   `SystemTime::now` and `std::time::Instant::now`; the time comes from the `Clock` trait, so tests
-  drive it with tokio's paused clock. The time comes only through `go_clock::Clock`; the one
-  wall-clock read is go-clock's `SystemClock`, in rust-common, so this repository has no
+  drive it with tokio's paused clock. The time comes only through `clock::Clock`; the one
+  wall-clock read is clock's `SystemClock`, in rust-common, so this repository has no
   `disallowed_methods` exemption.
 - **Health means published data.** The health snapshot is evaluated at scrape time; nothing marks
   health from the poller itself.
@@ -175,12 +188,12 @@ The ones to keep in mind while writing code:
   one stays empty.
 - Lints are silenced only with `#[expect(lint, reason = "...")]`: `allow_attributes` is denied,
   the reason is mandatory, and an `#[expect]` that stops firing fails the build.
-- Fixtures under `testdata/` are byte-for-byte captures (Engine API wire captures, golden files);
-  the whitespace pre-commit hooks skip them, so do not tidy them by hand.
+- Fixtures under `testdata/` are captures (Engine API objects, golden files); the whitespace
+  pre-commit hooks skip them, so do not tidy them by hand.
 - A new `#[expect]`, `# shellcheck disable=` or `# droast ignore=` explains why the fix does not
   apply here, not which lint fired.
-- Where a test or a module replaces Go code, its provenance (`/// Go: TestX`) is a doc comment;
-  sources name no Go source file, and the reasoning behind a port lives in the commit bodies.
+- An older test may carry its Go provenance (`/// Go: TestX`) as a doc comment; new tests do not
+  need one, and sources name no Go source file.
 
 ## Licence headers and suppressions
 

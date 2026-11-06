@@ -28,9 +28,13 @@ pub mod cli;
 pub mod collector;
 pub mod docker;
 pub mod healthcheck;
+pub mod host_port;
 pub mod labels;
+pub mod metrics;
+mod num;
 pub mod run;
 pub mod server;
+mod text;
 pub mod version;
 
 #[cfg(test)]

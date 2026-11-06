@@ -36,7 +36,7 @@ use swarm_scheduler_exporter::run::run_with;
 /// what is left of the shutdown budget: dropping a runtime waits for its blocking tasks, with no
 /// bound at all. The shutdown signal is the lazy one: its SIGINT and SIGTERM handlers are installed
 /// only once the shutdown watch `run_with` spawns first polls it, after the flags, the
-/// `--healthcheck` probe, the logger and the metrics, so a signal before then still terminates
+/// `--healthcheck` probe, the log setup and the metrics, so a signal before then still terminates
 /// the process, as before Go's `signal.NotifyContext`.
 fn main() -> ExitCode {
     let runtime = match build_runtime(None) {

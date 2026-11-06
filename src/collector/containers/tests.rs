@@ -30,9 +30,10 @@ use tokio::time::Instant;
 use super::*;
 use crate::docker::Error;
 use crate::docker::types::{ContainerConfig, ContainerState, ContainerSummary, Health, Present};
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
 use crate::test_support::{FakeDocker, capture_logs};
-use go_prom::testing::{gather_series, series_id};
-use go_slog::Level;
+use tracing::level_filters::LevelFilter;
 
 fn names(names: &[&str]) -> Vec<String> {
     names.iter().map(|&name| name.to_owned()).collect()
@@ -279,7 +280,7 @@ fn exit_code_only_for_exited_containers() {
 }
 
 fn containers_state(config: ContainersConfig) -> ContainersState {
-    ContainersState::new(config, capture_logs(Level::INFO).0)
+    ContainersState::new(config)
 }
 
 fn enabled() -> ContainersState {
@@ -419,15 +420,23 @@ async fn a_failed_inspect_keeps_the_listed_state() {
         inspect_err: Some(Error::deadline_exceeded()),
         ..fake(vec![summary("c1", "running", "/flaky", &[])])
     };
-    let (logger, sink) = capture_logs(Level::INFO);
-    let state = ContainersState::new(ContainersConfig::new(true, false), logger);
+    let logs = capture_logs(LevelFilter::INFO);
+    let state = ContainersState::new(ContainersConfig::new(true, false));
     let rows = poll(&state, &docker).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(label(&rows[0], LABEL_STATE), "running");
-    assert_eq!(
-        sink.contents(),
-        "level=WARN container inspect failed; using base state container_id=c1 \
-         err=\"context deadline exceeded\"\n"
+    assert_eq!(logs.lines().len(), 1, "{}", logs.dump());
+    assert!(
+        logs.contains(
+            "WARN",
+            "container inspect failed; using base state",
+            &[
+                ("container_id", "c1"),
+                ("error", "context deadline exceeded")
+            ]
+        ),
+        "{}",
+        logs.dump()
     );
 }
 
@@ -535,22 +544,25 @@ async fn one_deadline_bounds_all_inspects() {
 /// The skipped rows say why at debug, as Go's `canInspect` does for each.
 #[tokio::test]
 async fn skipped_inspects_are_logged_at_debug() {
-    let (logger, sink) = capture_logs(Level::DEBUG);
-    let state = ContainersState::new(
-        ContainersConfig {
-            inspect_cap: 0,
-            ..ContainersConfig::new(true, false)
-        },
-        logger,
-    );
+    let logs = capture_logs(LevelFilter::DEBUG);
+    let state = ContainersState::new(ContainersConfig {
+        inspect_cap: 0,
+        ..ContainersConfig::new(true, false)
+    });
     let docker = fake(vec![
         summary("c1", "exited", "/a", &[]),
         summary("c2", "paused", "/b", &[]),
     ]);
     poll(&state, &docker).await;
-    assert_eq!(
-        sink.contents(),
-        "level=DEBUG containers inspect cap reached, skipping remaining enrichments cap=0\n"
+    assert_eq!(logs.lines().len(), 1, "{}", logs.dump());
+    assert!(
+        logs.contains(
+            "DEBUG",
+            "containers inspect cap reached, skipping remaining enrichments",
+            &[("cap", "0")]
+        ),
+        "{}",
+        logs.dump()
     );
 }
 
@@ -593,7 +605,7 @@ fn expected_series(rows: &[ContainerRow]) -> BTreeMap<String, f64> {
 }
 
 fn gathered(state: &ContainersState) -> BTreeMap<String, f64> {
-    gather_series(Arc::clone(state.family()) as Arc<dyn Collector>)
+    gather_series(state.family())
 }
 
 /// Go: `TestUpdateContainersStateGauge_OneHotPerContainer`
@@ -640,8 +652,8 @@ fn a_build_publishes_nothing_until_published() {
 /// A row missing a label fails the build: logged, and the previous set stays.
 #[test]
 fn a_failed_build_keeps_the_previous_set() {
-    let (logger, sink) = capture_logs(Level::INFO);
-    let state = ContainersState::new(ContainersConfig::new(true, false), logger);
+    let logs = capture_logs(LevelFilter::INFO);
+    let state = ContainersState::new(ContainersConfig::new(true, false));
     let rows = [container_row("web", "running", "")];
     state.update(&rows);
     let mut broken = container_row("bad", "running", "");
@@ -649,10 +661,14 @@ fn a_failed_build_keeps_the_previous_set() {
     state.update(&[broken]);
     assert_eq!(gathered(&state), expected_series(&rows));
     assert!(
-        sink.contents()
-            .starts_with("level=ERROR build container state snapshot; keeping previous err="),
+        logs.find(
+            "ERROR",
+            "build container state snapshot; keeping previous",
+            &[]
+        )
+        .is_some_and(|line| line.get("error").is_some()),
         "{}",
-        sink.contents()
+        logs.dump()
     );
 }
 
@@ -676,7 +692,8 @@ fn family_carries_go_name_help_and_labels() {
             "exit_code"
         ]
     );
-    let registry = Registry::new();
-    state.register(&registry).unwrap();
-    assert!(state.register(&registry).is_err());
+    let mut registry = Registry::default();
+    state.register(&mut registry);
+    state.family().collector().publish(Vec::new());
+    assert!(crate::metrics::render(&registry).ends_with("# EOF\n"));
 }

@@ -88,23 +88,23 @@ The exporter must only ever *read* from the Docker API. A `:ro` bind of
 from modifying the socket file, and a client can still POST creates, updates and removes
 through it. So the read-only property rests entirely on the code:
 
-- `DockerApi` (`src/docker`), on a `Client` newtype over rust-common's docker-engine built
-  without its `write` and `attach` features, which exposes only list, inspect and events calls
+- `DockerApi` (`src/docker`), on a `Client` over rust-common's docker-client (bollard) built
+  without its `attach` feature, which exposes only list, inspect and events calls
   (nodes, services, a service inspect, tasks, containers, a container inspect, events), and
   through which all collector code reaches Docker;
-- `meta/tests/docker_boundary.rs`, which keeps docker-engine to `GET` (plus the ping's one
-  `HEAD`) by refusing any manifest that enables `write` or `attach`, lets only `src/docker` name
-  the crate and build no request of its own there, asks only for paths the shipped socket-proxy
-  allowlist grants, and keeps bollard (the harness's SDK, which creates and removes things)
-  declared only by `testenv` behind its `integration` feature, with none of bollard, testenv and
+- `meta/tests/docker_boundary.rs`, which keeps docker-client to reads by refusing any
+  manifest that enables `attach`, lets only `src/docker` name the crate (and bollard, as
+  `docker_client::bollard`) and build no request of its own there, allows only the known read
+  calls (and the version negotiation) whose sections the shipped socket-proxy allowlist grants,
+  and keeps bollard (the harness's SDK, which creates and removes things) declared directly only
+  by `testenv` behind its `integration` feature, with none of bollard, testenv and
   testenv-core named in the exporter package. A diff that loosens any of those rules, or reaches
   Docker around the client, is a finding.
 
 Critical:
 
 - a new client method that creates, updates, removes, kills, scales, restarts, prunes or
-  otherwise changes anything, or a request with a method other than `GET` (the ping's `HEAD`
-  aside);
+  otherwise changes anything, or a bollard call other than the reads the boundary test lists;
 - the exporter package depending on bollard, testenv or testenv-core in any dependency table;
 - docs claiming that `:ro` makes the socket read-only. The README's Security section says the
   exporter only *issues* read requests and that enforcing it needs a proxy; a diff that walks
@@ -177,7 +177,7 @@ code that is not a whole step.
 ### The clock is injected
 
 `clippy.toml` bans `Timestamp::now`, `Zoned::now`, `SystemTime::now` and
-`std::time::Instant::now`; the time comes only through `go_clock::Clock`, whose one wall-clock
+`std::time::Instant::now`; the time comes only through `clock::Clock`, whose one wall-clock
 read (`SystemClock`) lives in rust-common, so this repository has no exemption. Any
 `#[expect(clippy::disallowed_methods)]` here, a ban entry removed, or a
 time read that bypasses the `Clock` (a timestamp gauge, a staleness check) is a finding: the
@@ -229,10 +229,10 @@ string that no longer matches the code is a finding.
 
 ### Endpoint and image hardening
 
-- The HTTP server keeps its four deadlines (`server::TIMEOUTS` in `src/server.rs`: read header
-  5s, read 10s, write 15s, idle 60s), enforced per connection by go-http's I/O wrapper (`TimedIo`),
-  because hyper's own header timeout also closes idle keep-alive connections. Removing one, or
-  serving a connection outside the wrapper, is a finding.
+- The HTTP server keeps its two deadlines (`server::HEADER_READ_TIMEOUT` 5s and
+  `server::WRITE_STALL_TIMEOUT` 15s in `src/server.rs`), enforced per connection by service-kit's
+  server, and a drain bounded by the shared shutdown deadline. Removing one, or serving a
+  connection outside `service_kit::http::serve`, is a finding.
 - `/metrics` and `/healthz` take no input that becomes work: no query parameter, header or
   body may trigger a Docker call, widen a scrape, or allocate per request beyond the
   exposition itself.
@@ -322,9 +322,9 @@ in this repo (copied from another project) is a finding too.
 ### (d) Cross-file duplication
 
 Before accepting a new helper, search for the one that already exists — in `src/**`,
-`tests/support`, `testenv/**` and rust-common's crates (a local copy of a go-compat helper is a
-finding), by *behavior*, not by the name the author chose. Check label building and
-sanitization, metric constants, Go-compatible formatting, test fakes and wait helpers.
+`tests/support`, `testenv/**` and rust-common's crates (a local copy of a helper rust-common has
+is a finding), by *behavior*, not by the name the author chose. Check label building and
+sanitization, metric constants, formatting, test fakes and wait helpers.
 Two implementations of the same
 rule drift apart, and the one the reviewer did not read is the one that keeps the bug.
 

@@ -31,7 +31,7 @@ use super::*;
 use crate::collector::metrics_ids::SERVICE_MODE_REPLICATED;
 use crate::collector::types::display_name;
 use crate::docker::types::UpdateStatus;
-use go_prom::testing::gather_series;
+use crate::test_support::gather_series;
 
 /// Go's `makeTestMetadata`.
 fn test_metadata(stack: &str, service: &str, mode: &str) -> ServiceMetadata {
@@ -194,13 +194,10 @@ fn clear_deletes_every_series() {
     let state = Arc::clone(&metrics.state);
     let started = Arc::clone(&metrics.started);
     let completed = Arc::clone(&metrics.completed);
-    assert_eq!(
-        gather_series(Arc::clone(&state) as Arc<dyn Collector>).len(),
-        5
-    );
+    assert_eq!(gather_series(&state).len(), 5);
     metrics.clear(&metadata);
     for family in [state, started, completed] {
-        assert!(gather_series(family as Arc<dyn Collector>).is_empty());
+        assert!(gather_series(&family).is_empty());
     }
 }
 
@@ -208,7 +205,7 @@ fn clear_deletes_every_series() {
 fn families_carry_go_names_help_and_label_order() {
     let custom = CustomLabels::new(&["team".to_owned()], &["team".to_owned()]);
     let metrics = ServiceUpdateMetrics::new(&custom);
-    let desc = |family: &GaugeVec| Arc::clone(&family.descs()[0]);
+    let desc = |family: &GaugeVec| Arc::clone(family.desc());
     let state = desc(metrics.state());
     assert_eq!(state.name(), "swarm_service_update_state_info");
     assert_eq!(state.help(), UPDATE_STATE_HELP);
@@ -247,7 +244,6 @@ fn families_carry_go_names_help_and_label_order() {
         UPDATE_STARTED_HELP,
         "Unix timestamp (seconds) when the current/last service update started (0 if unknown)."
     );
-    let registry = Registry::new();
-    metrics.register(&registry).unwrap();
-    assert!(metrics.register(&registry).is_err());
+    let mut registry = Registry::default();
+    metrics.register(&mut registry);
 }

@@ -107,6 +107,9 @@ fn plain_tests_avoid_docker() {
     for tree in ["src", "tests", "meta"] {
         paths.extend(repo.files_under(tree, &[".rs"]));
     }
+    // The exporter's client module reaches bollard through `docker_client::bollard`, for the read
+    // calls only: `docker_boundary.rs` holds it to that.
+    paths.retain(|path| !path.starts_with("src/docker/"));
     assert!(
         paths.len() > 10,
         "only {} sources found; the check would pass on nothing",

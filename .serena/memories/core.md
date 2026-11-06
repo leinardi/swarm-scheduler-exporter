@@ -3,22 +3,25 @@
 Read-only Prometheus exporter for Docker Swarm's scheduler, in Rust: desired, schedulable and
 running replicas per service (accurate eligibility for `global` services), task state, service
 update/rollback state, node availability and, opt-in, container state. Fork of
-akerouanton/swarm-tasks-exporter; a port of its Go 1.x implementation, metric for metric.
+akerouanton/swarm-tasks-exporter; a Rust rewrite of its Go 1.x implementation (same metrics),
+since moved onto shared crates.
 
 AGENTS.md (repo root) is the authoritative contract: layout, commands, invariants, validation
 matrix, commit types. Read it before any change; memories below only add what it does not say.
-The README "Migrating from 1.x" section lists the only intended differences from Go (Q1-Q14).
+The README "Migrating" section lists the intended differences from 1.x (Go) and 2.x (Q1-Q17).
 
 ## Source map
 
-- Shared code is rust-common's (git dependency pinned by the release tag `v0.3.0`): go-compat,
-  go-clock, go-slog, go-prom, go-http, docker-engine, service-kit, testenv-core, repo-meta. A
-  per-project difference is a parameter there, never a fork here; fixes land in rust-common first.
+- Shared code is rust-common's (git dependency pinned by tag `v0.4.0`): clock,
+  tracing-setup, docker-client, service-kit, testenv-core,
+  repo-meta. A per-project difference is a parameter there, never a fork here; fixes land in
+  rust-common first.
 - `src/main.rs` (service-kit's runtime and lazy shutdown signal, one shutdown budget), `src/run.rs`
   (startup order, workers, HTTP server), `src/cli.rs` (clap, double-dash flags),
   `src/healthcheck.rs` (`--healthcheck`), `src/version.rs` (`service_kit::buildinfo!` stamps).
-- `src/docker/`: `DockerApi` (read-only trait) on a `Client` newtype over docker-engine (`tcp`,
-  `tls`), the API types and timeouts. GET only, plus `HEAD /_ping`.
+- `src/docker/`: `DockerApi` (read-only trait) on a `Client` over docker-client/bollard (`tcp`,
+  `tls`), the API types (`convert.rs` maps bollard's models) and timeouts. Read calls only, plus
+  the `GET /version` negotiation.
 - `src/collector/`:
   - `reconciler/`: the single owner of the service/node caches and derived gauges (`mod.rs`
     cycle, resync, retries; `poll.rs` the poll snapshot/verdict exchange; `listener.rs` the
@@ -26,11 +29,12 @@ The README "Migrating from 1.x" section lists the only intended differences from
   - `desired.rs` (placement eligibility, desired/schedulable), `replicas_state.rs` (task counting,
     `at_desired`), `service_update.rs`, `nodes.rs`, `containers.rs` (opt-in), `health.rs`,
     `exporter_metrics.rs`.
-- `src/labels.rs` (custom label keys), `src/server.rs` (`/metrics`, `/healthz` on go-http,
-  `TIMEOUTS`). Metrics are go-prom's (`ExpfmtVersion::V0_71_0`), the logger go-slog's
-  (`PlainStyle::Quoted`, strict parsers), the Go ports go-compat's.
+- `src/labels.rs` (custom label keys), `src/server.rs` (`/metrics`, `/healthz`: an axum
+  router on service-kit's http server). Metrics are prometheus-client's (OpenMetrics text,
+  `src/metrics.rs`), the logger tracing-setup's (`tracing` macros, clap-parsed flags); durations
+  are humantime's, CIDRs ipnet's, `host_port.rs` and `text.rs` are the exporter's own.
 - `tests/`: `engine_wire.rs` (fake Engine replaying `tests/testdata/engine_wire/`),
-  `exposition.rs` (byte diff against the Go `/metrics` capture), `run.rs` (lifecycle, flags).
+  `metrics.rs` (inventory, values, buckets, removal, atomicity), `run.rs` (lifecycle, flags).
 - `testenv/`: the DinD Swarm harness over testenv-core; bollard and every Docker-driving module
   behind its `integration` feature; `tests/integration/` is the `harness = false` suite that runs
   the release binary (`SSE_IT_BINARY`).

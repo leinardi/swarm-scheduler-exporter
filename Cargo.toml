@@ -11,7 +11,7 @@ authors = ["Roberto Leinardi"]
 repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 
 # The crates shared with the other Rust services, from leinardi/rust-common: a git dependency
-# pinned by the release tag (`tag = "v0.3.0"`) with `version = "0.3"`, the tag's
+# pinned by the release tag (`tag = "v0.4.0"`) with `version = "0.4"`, the tag's
 # `<major>.<minor>`, which keeps cargo-deny's `wildcards = "deny"` satisfied. To move the pin,
 # change the `tag` on every rust-common line (and `version` when the tag's `<major>.<minor>`
 # moves) and run `cargo fetch` (not `cargo update -p`): `git diff Cargo.lock` must touch only the
@@ -20,15 +20,12 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 # `[patch."https://github.com/leinardi/rust-common"]` table naming each crate with
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
-docker-engine = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-go-clock = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-go-compat = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-go-http = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-go-prom = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-go-slog = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-repo-meta = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-service-kit = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
-testenv-core = { git = "https://github.com/leinardi/rust-common", tag = "v0.3.0", version = "0.3" }
+clock = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
+docker-client = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
+repo-meta = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
+service-kit = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
+testenv-core = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
+tracing-setup = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
@@ -59,8 +56,8 @@ disallowed_methods = "deny"
 # - rustls and tokio-rustls with `default-features = false` plus the `ring` feature, which keeps
 #   aws-lc-sys (C, hard to cross-build for musl) out of the graph;
 # - hyper and hyper-util with only `http1`, `client` or `server`, and the tokio features;
-# - no tracing or log bridge: the logger is in-tree, and hyper, hyper-util, tokio and rustls print
-#   nothing without a subscriber.
+# - tracing, no log bridge: the subscriber is tracing-setup's (rust-common); hyper, hyper-util,
+#   tokio and rustls print nothing without a subscriber.
 
 [package]
 name = "swarm-scheduler-exporter"
@@ -77,30 +74,38 @@ publish = false
 workspace = true
 
 [dependencies]
-# Go's formatting and parsing, byte for byte (rust-common): durations, floats, quoting, time
-# layouts, the local zone, errno texts, net addresses, sort.
-go-compat.workspace = true
+# The `--poll-delay` parser and its display (`10s`, `1m 30s`, `500ms`).
+humantime = "2.4.0"
+# The CIDR of a `node.ip` placement constraint.
+ipnet = "2.12.2"
 # The injected wall clock (rust-common): Clock, SystemClock, TokioClock, FakeClock.
-go-clock.workspace = true
-# Go's log/slog handlers and the plain format, byte for byte (rust-common), in the Quoted
-# plain style with the strict level and format parsers.
-go-slog.workspace = true
-# The Prometheus Go client's registry and text exposition, byte for byte (rust-common), with
-# prometheus/common v0.71.0's content negotiation (ExpfmtVersion::V0_71_0).
-go-prom.workspace = true
-# The Docker Engine client (rust-common): moby client v0.6.0's requests over HTTP/1, its API
-# version negotiation, error wording and event stream, on unix sockets, TCP (`tcp`: DOCKER_HOST,
-# Go's keep-alive, the transparent gunzip) and TLS (`tls`: rustls on ring, Q5). No `write` or
+clock.workspace = true
+# The subscriber (rust-common): tracing-subscriber's text or flat JSON, no ANSI, UTC RFC 3339
+# timestamps, to stdout; the flags and the writer are here.
+tracing-setup.workspace = true
+# The logging macros.
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# The exposition: the registry, the OpenMetrics text encoder, the histogram and the counters.
+# No features: the exporter encodes text only (no protobuf, no derive macros).
+prometheus-client = { version = "0.25.2", default-features = false }
+# The Docker connection (rust-common): bollard behind a unix socket, TCP (`tcp`: DOCKER_HOST) and
+# TLS (`tls`: rustls on ring, DOCKER_TLS_VERIFY and DOCKER_CERT_PATH), a fixed or negotiated API
+# version, the `User-Agent`, the error kinds and bollard itself (`docker_client::bollard`). No
 # `attach`: the exporter only reads (meta/tests/docker_boundary.rs checks it).
-docker-engine = { workspace = true, features = ["tcp", "tls"] }
+docker-client = { workspace = true, features = ["tcp", "tls"] }
+# The engine's event stream (`Stream`, `next`) behind the Docker client.
+futures-util = { version = "0.3.34", default-features = false }
 # The build stamps (buildinfo!), the runtime main builds, its shutdown bounded by the shutdown
-# budget (run_until_exit), and the lazy SIGINT and SIGTERM watch (rust-common).
-service-kit = { workspace = true, features = ["runtime"] }
-# Go's net/http server on hyper (rust-common): the mux's answers, header order and framing, the
-# four server deadlines, net.Listen's bind and the drain.
-go-http.workspace = true
-# Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
-# the way Go does (go-compat), so none of jiff's tzdb or system features is on.
+# budget (run_until_exit), the lazy SIGINT and SIGTERM watch, and the `process_*` collector
+# (`process-metrics`, rust-common).
+service-kit = { workspace = true, features = ["runtime", "process-metrics", "http"] }
+# The HTTP/1 server on hyper (`http`, rust-common): the header-read and write-stall timeouts and
+# the tracked drain; the routes are axum's.
+axum = { version = "0.8.9", default-features = false }
+# The listener's IPV6_V6ONLY (the wildcard bind is dual-stack whatever the sysctl says), and its
+# socket options in the server tests.
+socket2 = "0.6.5"
+# Civil time and timestamps only: no tzdb or system feature is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The flags (Q3, Q4). No color: help and errors are plain text, as Go's were.
 clap = { version = "4.6.7", default-features = false, features = [
@@ -124,7 +129,7 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # CancellationToken, Go's context cancellation for the long-lived tasks.
 tokio-util = { version = "0.7.20", default-features = false }
-# The metrics and health endpoints' status and header types (their server is go-http's). The
+# The metrics and health endpoints' status and header types (their server is service-kit's). The
 # healthcheck (S3): hyper-util's legacy client, which reads no proxy variable and follows no
 # redirect.
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
@@ -135,16 +140,10 @@ hyper-util = { version = "0.1.21", default-features = false, features = [
 ] }
 http-body-util = "0.1.5"
 bytes = "1.12.1"
-# The Engine API types' decoding (docker-engine's decoders).
-serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
-# The fake engine core, its request recorder and OrPanic, for the Docker tests.
-docker-engine = { workspace = true, features = ["tcp", "tls", "test-util"] }
-# The Go tests' gatherSeries and seriesID, for the collectors' tests.
-go-prom = { workspace = true, features = ["testing"] }
-# The Go wire captures' replay (read_captures, replay, exchange).
-go-http = { workspace = true, features = ["testing"] }
+# The fake engine on a unix socket, for the Docker tests.
+docker-client = { workspace = true, features = ["tcp", "tls", "test-util"] }
 # The paused clock (start_paused) needs the test runtime.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",
@@ -158,10 +157,12 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # The gzip exposition's decoding (tests/exposition.rs); the pure-Rust backend, so no C zlib.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
-# The listener's socket options in the server tests.
-socket2 = { version = "0.6.5", features = ["all"] }
-# The Engine API fixtures of tests/run.rs.
+# The Engine API fixtures of the conversion tests, decoded into bollard's models.
 serde_json = "1.0.154"
+# The bound of the conversion tests' decoding helper.
+serde = { version = "1.0.229", default-features = false }
+# The captured logs of the tests: a scoped subscriber and a writer that keeps what was logged.
+tracing-setup = { workspace = true, features = ["testing"] }
 
 [profile.release]
 lto = true

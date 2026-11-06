@@ -24,7 +24,21 @@
 
 //! Helpers the integration tests share.
 
-pub mod fake_engine;
+use std::fmt::{Debug, Display};
 
-/// `unwrap` and `unwrap_err` for the helpers of a test (docker-engine's `test-util`).
-pub use docker_engine::test_util::OrPanic;
+/// `unwrap` and `unwrap_err` for the helpers of a test, which clippy's test allowance does not
+/// cover: the panic names the caller's line and the error.
+pub trait OrPanic<T, E> {
+    /// The value, or a panic with the error.
+    fn or_panic(self) -> T;
+}
+
+impl<T: Debug, E: Display> OrPanic<T, E> for Result<T, E> {
+    #[track_caller]
+    fn or_panic(self) -> T {
+        match self {
+            Ok(value) => value,
+            Err(error) => panic!("unexpected error: {error}"),
+        }
+    }
+}

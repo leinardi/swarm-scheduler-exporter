@@ -32,12 +32,12 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use go_clock::Clock;
-use go_prom::{Collector, GaugeFunc, GaugeVec, Kind};
-use go_prom::{RegisterError, Registry, constant_desc};
+use clock::Clock;
+use prometheus_client::registry::Registry;
+
+use crate::metrics::{self, Desc, GaugeVec, ScrapeGauge, must};
 
 use super::metrics_ids::{EXPORTER_SUBSYSTEM, NAMESPACE};
-use super::must;
 use super::reconciler::ReconcilerHandle;
 
 /// The reason before the first resync completed.
@@ -210,7 +210,7 @@ fn exporter_name(name: &str) -> String {
 /// `swarm_exporter_health` and `swarm_exporter_build_info`.
 #[derive(Debug)]
 pub struct HealthGauges {
-    health: Arc<GaugeFunc>,
+    health: Arc<ScrapeGauge>,
     build_info: Arc<GaugeVec>,
 }
 
@@ -219,40 +219,31 @@ impl HealthGauges {
     /// `version`, `commit` and `date`.
     #[must_use]
     pub fn new(health: Health, version: &str, commit: &str, date: &str) -> Self {
-        let build_info = Arc::new(GaugeVec::new(constant_desc(
+        let build_info = Arc::new(GaugeVec::new(Desc::new(
             &exporter_name("build_info"),
             "Build information for this exporter.",
-            Kind::Gauge,
             &["version", "commit", "date"],
         )));
         must(build_info.set(&[version, commit, date], 1.0));
         Self {
-            health: Arc::new(GaugeFunc::new(
-                constant_desc(
-                    &exporter_name("health"),
-                    "Exporter health status: 1=healthy, 0=unhealthy.",
-                    Kind::Gauge,
-                    &[],
-                ),
+            health: ScrapeGauge::new(
+                &exporter_name("health"),
+                "Exporter health status: 1=healthy, 0=unhealthy.",
                 move || if health.snapshot_now().0 { 1.0 } else { 0.0 },
-            )),
+            ),
             build_info,
         }
     }
 
     /// Registers both gauges.
-    ///
-    /// # Errors
-    ///
-    /// The registry's first refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        registry.register(Arc::clone(&self.health) as Arc<dyn Collector>)?;
-        registry.register(Arc::clone(&self.build_info) as Arc<dyn Collector>)
+    pub fn register(&self, registry: &mut Registry) {
+        metrics::register(registry, &self.health);
+        metrics::register(registry, &self.build_info);
     }
 
     /// The health gauge.
     #[must_use]
-    pub fn health(&self) -> &Arc<GaugeFunc> {
+    pub fn health(&self) -> &Arc<ScrapeGauge> {
         &self.health
     }
 

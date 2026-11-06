@@ -41,14 +41,14 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::docker::DockerApi;
-use go_slog::Attr;
+use tracing::warn;
 
 use super::super::desired::labels_for_metadata;
 use super::super::error::CallError;
 use super::super::metrics_ids::{SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB};
 use super::super::poll_snapshot::{PollService, PollSnapshot};
 use super::super::replicas_state::{ServiceCounter, poll_replicas_state};
-use super::{Reconciler, ReconcilerHandle, saturating_i64};
+use super::{Reconciler, ReconcilerHandle};
 
 /// How many polls in a row a rejected service keeps its previously published series. A service
 /// rejected more often than that has its series omitted and fails the poll, so health turns red
@@ -450,12 +450,10 @@ impl<D: DockerApi> Reconciler<D> {
             return Ok(());
         }
         omitted.sort_unstable();
-        self.logger().warn(
-            PARTIALLY_REJECTED,
-            &[
-                Attr::strings("service_ids", omitted.iter().cloned()),
-                Attr::int("limit", saturating_i64(MAX_CARRIED_POLLS)),
-            ],
+        warn!(
+            service_ids = ?omitted,
+            limit = MAX_CARRIED_POLLS,
+            "{PARTIALLY_REJECTED}"
         );
         Err(PollError::PartiallyRejected(omitted))
     }

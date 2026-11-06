@@ -33,24 +33,23 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use jiff::tz::TimeZone;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use go_clock::{Clock, SystemClock};
-use go_prom::promhttp::HandlerMetrics;
-use go_prom::{Registry, Value};
-use go_slog::{Config, Format, Level, Logger};
+use clock::{Clock, SystemClock};
+use prometheus_client::registry::Registry;
+use service_kit::http::Lifecycle;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
-    ContainerInspect, ContainerSummary, Event, Node, Service, Task,
+    ContainerInspect, ContainerSummary, Event, Node, ReplicatedService, Service, ServiceMode,
+    ServiceSpec, Task,
 };
 use swarm_scheduler_exporter::docker::{DockerApi, Error, EventStream, Filters, StreamError};
 use swarm_scheduler_exporter::run::{
     Metrics, MetricsOptions, SHUTDOWN_BUDGET, Workers, app, register_metrics, start_workers,
 };
-use swarm_scheduler_exporter::server::{self, TIMEOUTS};
+use swarm_scheduler_exporter::server;
 
 /// How long a lifecycle test waits for what it expects, as Go's `waitUntil` and `waitWorkers`.
 const WAIT: Duration = Duration::from_secs(5);
@@ -96,10 +95,18 @@ impl EventStream for Quiet {
 }
 
 fn one_service() -> Vec<Service> {
-    serde_json::from_str(
-        r#"[{"ID":"svc1","Spec":{"Name":"web","Mode":{"Replicated":{"Replicas":1}}}}]"#,
-    )
-    .unwrap_or_else(|error| panic!("service fixture: {error}"))
+    vec![Service {
+        id: "svc1".to_owned(),
+        spec: ServiceSpec {
+            name: "web".to_owned(),
+            mode: ServiceMode {
+                replicated: Some(ReplicatedService { replicas: Some(1) }),
+                ..ServiceMode::default()
+            },
+            ..ServiceSpec::default()
+        },
+        ..Service::default()
+    }]
 }
 
 impl DockerApi for LifecycleDocker {
@@ -152,24 +159,11 @@ impl DockerApi for LifecycleDocker {
         &self,
         _since: Timestamp,
         _filters: &Filters,
+        _cancel: &CancellationToken,
     ) -> impl Future<Output = Result<Quiet, Error>> + Send {
         self.calls().events += 1;
         std::future::ready(Ok(Quiet))
     }
-}
-
-fn quiet_logger() -> Logger {
-    Logger::new(
-        Config {
-            format: Format::Text,
-            level: Level::INFO,
-            include_time: false,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Box::new(std::io::sink()),
-        TimeZone::UTC,
-        Arc::new(SystemClock),
-    )
 }
 
 fn clock() -> Arc<dyn Clock> {
@@ -178,9 +172,9 @@ fn clock() -> Arc<dyn Clock> {
 
 /// Go's `configureMetrics`: every family registered the way `run` does, on a private registry.
 fn configure_metrics(poll_delay: Duration) -> (Arc<Registry>, Metrics) {
-    let registry = Arc::new(Registry::new());
+    let mut registry = Registry::default();
     let metrics = register_metrics(
-        &registry,
+        &mut registry,
         &MetricsOptions {
             custom_labels: CustomLabels::default(),
             poll_delay,
@@ -188,9 +182,8 @@ fn configure_metrics(poll_delay: Duration) -> (Arc<Registry>, Metrics) {
             build: ["test".to_owned(), "none".to_owned(), "unknown".to_owned()],
         },
         clock(),
-        &quiet_logger(),
     );
-    (registry, metrics)
+    (Arc::new(registry), metrics)
 }
 
 /// Go's `runWorkers`: the workers as `run` starts them, polling every hour.
@@ -205,7 +198,6 @@ fn run_workers(
         metrics,
         Duration::from_secs(3600),
         &clock(),
-        &quiet_logger(),
     )
 }
 
@@ -238,21 +230,20 @@ async fn serve_endpoints(
     let addr = listener
         .local_addr()
         .unwrap_or_else(|error| panic!("local address: {error}"));
-    let app = Arc::new(app(
-        metrics.health.clone(),
-        Arc::clone(registry),
-        HandlerMetrics::new(),
-        clock(),
-        quiet_logger(),
-    ));
-    let shutdown = cancel.clone().cancelled_owned();
-    tokio::spawn(server::serve(
-        listener,
-        app,
-        TIMEOUTS,
-        shutdown,
-        Instant::now,
-    ));
+    let router = app(metrics.health.clone(), Arc::clone(registry));
+    let lifecycle = Lifecycle::new();
+    let cancel = cancel.clone();
+    tokio::spawn(async move {
+        let serving = server::serve(listener, router, &lifecycle, Duration::from_secs(1));
+        tokio::pin!(serving);
+        tokio::select! {
+            _ = &mut serving => {}
+            () = cancel.cancelled() => {
+                lifecycle.stop();
+                serving.await;
+            }
+        }
+    });
     addr
 }
 
@@ -284,15 +275,20 @@ async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
 
 /// Go's `gatheredValue`: the value of the single series of the gauge `name`.
 fn gathered_value(registry: &Registry, name: &str) -> f64 {
-    let families = registry.gather();
-    let family = families
-        .iter()
-        .find(|family| family.name == name && family.series.len() == 1)
-        .unwrap_or_else(|| panic!("no single-series gauge {name} gathered"));
-    match family.series[0].value {
-        Value::Scalar(value) => value,
-        Value::Histogram { .. } => panic!("{name} is a histogram"),
-    }
+    let mut body = String::new();
+    prometheus_client::encoding::text::encode(&mut body, registry)
+        .unwrap_or_else(|error| panic!("encode: {error}"));
+    let values: Vec<f64> = body
+        .lines()
+        .filter_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
+        .map(|value| {
+            value
+                .parse()
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+        })
+        .collect();
+    assert_eq!(values.len(), 1, "no single-series gauge {name} gathered");
+    values[0]
 }
 
 /// Go: `TestWorkers_FirstResyncRetryThenPollAndListenOnce`
@@ -423,7 +419,7 @@ struct ExitCase {
 }
 
 /// The startup cases of [`flags_and_startup_exit_codes`].
-const EXIT_CASES: [ExitCase; 11] = [
+const EXIT_CASES: [ExitCase; 13] = [
     ExitCase {
         args: &["-containers"],
         env: &[],
@@ -451,6 +447,20 @@ const EXIT_CASES: [ExitCase; 11] = [
         code: 2,
         stdout: "",
         stderr: "invalid value 'xml' for '--log-format",
+    },
+    ExitCase {
+        args: &["--log-format=plain"],
+        env: &[],
+        code: 2,
+        stdout: "",
+        stderr: "[possible values: text, json]",
+    },
+    ExitCase {
+        args: &["--log-level=fatal"],
+        env: &[],
+        code: 2,
+        stdout: "",
+        stderr: "[possible values: debug, info, warn, error]",
     },
     ExitCase {
         args: &["--label="],
@@ -486,25 +496,25 @@ const EXIT_CASES: [ExitCase; 11] = [
         stderr: "",
     },
     ExitCase {
-        args: &["--label=service"],
+        args: &["--log-format=json", "--label=service"],
         env: &[],
         code: 1,
-        stdout: "level=ERROR msg=\"invalid custom labels\" err=\"custom label collides with a \
-                 reserved label name: \\\"service\\\"\"\n",
+        stdout: "\"level\":\"ERROR\",\"message\":\"invalid custom labels\",\"error\":\"custom label \
+                 collides with a reserved label name: \\\"service\\\"\"",
         stderr: "",
     },
     ExitCase {
-        args: &[],
+        args: &["--log-format=json"],
         env: &[("DOCKER_CERT_PATH", "/nonexistent")],
         code: 1,
-        stdout: "level=ERROR msg=\"docker client init failed\"",
+        stdout: "\"level\":\"ERROR\",\"message\":\"docker client init failed\"",
         stderr: "",
     },
     ExitCase {
-        args: &[],
+        args: &["--log-format=json"],
         env: &[("DOCKER_API_VERSION", "1.20")],
         code: 1,
-        stdout: "level=ERROR msg=\"unsupported Docker API version\"",
+        stdout: "\"level\":\"ERROR\",\"message\":\"unsupported Docker API version\"",
         stderr: "",
     },
 ];

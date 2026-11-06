@@ -317,15 +317,13 @@ async fn a_malformed_listen_address_is_reported() {
     );
 }
 
-/// Go's `resp.Status` is the wire text: a custom reason survives, and a status line without one
-/// leaves the bare code. hyper keeps the wire reason only when it is not the canonical one.
+/// The status is plain text: the code and its canonical reason, whatever reason the wire carried.
 #[tokio::test]
-async fn the_status_is_the_wire_text() {
+async fn the_status_is_the_code_and_its_canonical_reason() {
     for (status_line, status) in [
-        ("503 Custom Reason", "503 Custom Reason"),
-        ("599 Weird", "599 Weird"),
-        ("503", "503"),
+        ("503 Custom Reason", "503 Service Unavailable"),
         ("418 I'm a teapot", "418 I'm a teapot"),
+        ("503", "503 Service Unavailable"),
     ] {
         let address = answering(status_line, b"").await;
         assert_eq!(
@@ -386,30 +384,25 @@ async fn stalled_headers_time_out_at_3s() {
     );
 }
 
-/// The exporter's own server, unhealthy, answers the probe as Go's did.
+/// The exporter's own server, unhealthy, answers the probe.
 #[tokio::test]
 async fn the_probe_reads_the_exporter_s_answer() {
     let listener = crate::server::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap().to_string();
-    let app = crate::server::App::new(
+    let app = crate::server::router(
         Box::new(|| (false, "last poll too old".to_owned())),
-        Box::new(|_| go_prom::exposition::Exposition {
+        Box::new(|| crate::server::Exposition {
             content_type: String::new(),
-            content_encoding: None,
             body: Vec::new(),
         }),
-        Arc::new(go_clock::SystemClock),
-        crate::test_support::capture_logs(go_slog::Level::INFO).0,
     );
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let shutdown = cancel.clone();
-    let served = tokio::spawn(crate::server::serve(
-        listener,
-        Arc::new(app),
-        crate::server::TIMEOUTS,
-        shutdown.cancelled_owned(),
-        || Instant::now() + Duration::from_secs(1),
-    ));
+    let lifecycle = service_kit::http::Lifecycle::new();
+    let served = {
+        let lifecycle = lifecycle.clone();
+        tokio::spawn(async move {
+            crate::server::serve(listener, app, &lifecycle, Duration::from_secs(1)).await
+        })
+    };
     assert_eq!(
         probe(&address).await,
         (
@@ -419,6 +412,6 @@ async fn the_probe_reads_the_exporter_s_answer() {
             )
         )
     );
-    cancel.cancel();
+    lifecycle.stop();
     served.await.unwrap();
 }

@@ -33,12 +33,13 @@ use jiff::Timestamp;
 use tokio_util::sync::CancellationToken;
 
 use crate::docker::types::Event;
-use crate::docker::{DockerApi, Error, EventStream, Filters, StreamError, StreamErrorKind};
-use go_compat::{duration, time_layout};
-use go_slog::Attr;
+use crate::docker::{
+    DockerApi, Error, ErrorKind, EventStream, Filters, StreamError, StreamErrorKind,
+};
+use tracing::{info, warn};
 
 use super::{BACKOFF_INITIAL_DELAY, BACKOFF_MAX_DELAY, BACKOFF_MULTIPLIER, ReconcilerHandle};
-use super::{EVENT_TYPE_NODE, EVENT_TYPE_SERVICE, duration_nanos};
+use super::{EVENT_TYPE_NODE, EVENT_TYPE_SERVICE};
 
 /// How far before the anchor, or the last event seen, a stream starts: the daemon's `since` is
 /// inclusive, and the margin covers events stamped just before the moment captured.
@@ -49,19 +50,19 @@ pub const EVENTS_SINCE_MARGIN: Duration = Duration::from_millis(500);
 pub enum ListenerStopped {
     /// Cancelled while a stream was open or being opened, or between two of them.
     Stopping,
-    /// Cancelled during the backoff of this many nanoseconds before a reconnect.
-    DuringBackoff(i64),
+    /// Cancelled during this backoff before a reconnect.
+    DuringBackoff(Duration),
 }
 
 impl fmt::Display for ListenerStopped {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Stopping => formatter.write_str("event listener stopping: context canceled"),
-            Self::DuringBackoff(nanos) => write!(
+            Self::DuringBackoff(backoff) => write!(
                 formatter,
                 "event listener canceled during backoff: backoff of {} interrupted: context \
                  canceled",
-                duration::format(*nanos)
+                humantime::format_duration(*backoff)
             ),
         }
     }
@@ -177,36 +178,36 @@ pub async fn listen_swarm_events(
         // else is worth a warning. The reconnect resyncs either way: a clean close looks the same
         // whether a proxy timed out or the daemon restarted, only the restart loses event
         // history, and the resync is just two list calls.
-        let backoff_nanos = duration_nanos(backoff);
-        let attrs = [
-            Attr::error("err", &outcome.end),
-            Attr::duration("backoff", backoff_nanos),
-            Attr::string("next_since", local_rfc3339_nano(handle, since)),
-        ];
+        let next_since = rfc3339_nano(since);
         if outcome.end.is_eof() {
-            shared
-                .logger
-                .info("event stream closed by the server; reconnecting", &attrs);
+            info!(
+                error = %outcome.end,
+                backoff = ?backoff,
+                next_since,
+                "event stream closed by the server; reconnecting"
+            );
         } else {
-            shared
-                .logger
-                .warn("event stream ended; will reconnect", &attrs);
+            warn!(
+                error = %outcome.end,
+                backoff = ?backoff,
+                next_since,
+                "event stream ended; will reconnect"
+            );
         }
         if cancel
             .run_until_cancelled(tokio::time::sleep(backoff))
             .await
             .is_none()
         {
-            return ListenerStopped::DuringBackoff(backoff_nanos);
+            return ListenerStopped::DuringBackoff(backoff);
         }
         backoff = next_backoff(backoff);
     }
 }
 
-/// `timestamp` in the logger's zone, Go's `time.Local`, as `time.RFC3339Nano`.
-fn local_rfc3339_nano(handle: &ReconcilerHandle, timestamp: Timestamp) -> String {
-    let offset = handle.shared.logger.zone().to_offset(timestamp);
-    time_layout::format_rfc3339_nano(timestamp, offset)
+/// `timestamp` in UTC, as `time.RFC3339Nano`.
+fn rfc3339_nano(timestamp: Timestamp) -> String {
+    timestamp.to_string()
 }
 
 /// Opens one event stream connection and dispatches its events until it ends. The connection
@@ -228,23 +229,21 @@ pub async fn follow_event_stream<D: DockerApi>(
         last_seen: None,
         end,
     };
-    let mut stream = match cancel
-        .run_until_cancelled(docker.events(since, filters))
-        .await
-    {
-        None => return failed(StreamEnd::Canceled),
-        Some(Err(error)) => return failed(StreamEnd::Connect(error)),
-        Some(Ok(stream)) => stream,
+    // `cancel` also interrupts the request itself; a shutdown is a cancellation, never a failed
+    // connect.
+    let mut stream = match docker.events(since, filters, cancel).await {
+        Err(error) if error.kind() == ErrorKind::Cancelled || cancel.is_cancelled() => {
+            return failed(StreamEnd::Canceled);
+        }
+        Err(error) => return failed(StreamEnd::Connect(error)),
+        Ok(stream) => stream,
     };
     let shared = &handle.shared;
     shared
         .metrics
         .timestamps()
         .mark_events_connected(shared.clock.now());
-    shared.logger.info(
-        "event stream connected",
-        &[Attr::string("since", local_rfc3339_nano(handle, since))],
-    );
+    info!(since = rfc3339_nano(since), "event stream connected");
     if reconnect {
         handle.request_resync("event stream reconnected");
     }

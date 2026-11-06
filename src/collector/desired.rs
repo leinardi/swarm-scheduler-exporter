@@ -30,11 +30,13 @@ use std::sync::Arc;
 
 use crate::docker::types::{Node, Placement, Platform};
 use crate::labels::{maybe_warn_high_cardinality, sanitize_label_names, sanitize_metric_labels};
-use go_compat::float::from_int;
-use go_compat::net_ip::{ip_equal, parse_cidr, parse_ip};
-use go_compat::strings::{equal_fold, to_lower, trim_space};
-use go_prom::{Collector, Kind, RegisterError, Registry, constant_desc};
-use go_prom::{GaugeVec, LabelsMismatch};
+use crate::num::from_int;
+use crate::text::{equal_fold, to_lower, trim_space};
+use ipnet::{IpNet, Ipv4Net};
+use prometheus_client::registry::Registry;
+use std::net::IpAddr;
+
+use crate::metrics::{self, Desc, GaugeVec, LabelsMismatch};
 
 use super::metrics_ids::{
     LABEL_DISPLAY_NAME, LABEL_SERVICE, LABEL_SERVICE_MODE, LABEL_STACK, NAMESPACE,
@@ -93,10 +95,9 @@ impl ReplicaGauges {
         let names = sanitize_label_names(&names);
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
         let family = |name: &str, help: &str| {
-            Arc::new(GaugeVec::new(constant_desc(
+            Arc::new(GaugeVec::new(Desc::new(
                 &format!("{NAMESPACE}_{SERVICE_SUBSYSTEM}_{name}"),
                 help,
-                Kind::Gauge,
                 &names,
             )))
         };
@@ -107,13 +108,9 @@ impl ReplicaGauges {
     }
 
     /// Registers both families.
-    ///
-    /// # Errors
-    ///
-    /// The registry's refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
-        registry.register(Arc::clone(&self.desired) as Arc<dyn Collector>)?;
-        registry.register(Arc::clone(&self.schedulable) as Arc<dyn Collector>)
+    pub fn register(&self, registry: &mut Registry) {
+        metrics::register(registry, &self.desired);
+        metrics::register(registry, &self.schedulable);
     }
 
     /// The desired replicas family.
@@ -367,14 +364,28 @@ fn match_constraint_value(operator: &str, expected: &str, candidate: &str) -> bo
     }
 }
 
+/// A subnet written as IPv4-mapped IPv6 (`::ffff:10.0.0.0/104`) as the IPv4 subnet it is
+/// (`10.0.0.0/8`), which is how Go matches it against an IPv4 node address.
+fn canonical_subnet(subnet: IpNet) -> IpNet {
+    if let IpNet::V6(net) = subnet
+        && let IpAddr::V4(network) = net.network().to_canonical()
+        && let Ok(mapped) = Ipv4Net::new(network, net.prefix_len().saturating_sub(96))
+    {
+        return IpNet::V4(mapped);
+    }
+    subnet
+}
+
 /// The node address against one IP or a CIDR subnet, as swarmkit; a value that is neither never
-/// matches, whatever the operator.
+/// matches, whatever the operator. An address that does not parse is nil, which equals and is
+/// contained by nothing; an IPv4-mapped IPv6 address is its IPv4 form, as Go's `IP` compares it.
 fn match_node_ip_constraint(operator: &str, expected: &str, node_addr: &str) -> bool {
-    let node_ip = parse_ip(node_addr);
-    let matched = if let Some(expected_ip) = parse_ip(expected) {
-        ip_equal(&expected_ip, node_ip.as_ref())
-    } else if let Some(subnet) = parse_cidr(expected) {
-        subnet.contains(node_ip.as_ref())
+    let node_ip = node_addr.parse::<IpAddr>().ok().map(|ip| ip.to_canonical());
+    let matched = if let Ok(expected_ip) = expected.parse::<IpAddr>() {
+        node_ip == Some(expected_ip.to_canonical())
+    } else if let Ok(subnet) = expected.parse::<IpNet>() {
+        let subnet = canonical_subnet(subnet);
+        node_ip.is_some_and(|ip| subnet.contains(&ip))
     } else {
         return false;
     };

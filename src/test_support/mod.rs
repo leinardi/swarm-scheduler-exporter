@@ -22,41 +22,143 @@
  * SOFTWARE.
  */
 
-//! Test doubles and helpers the unit tests share: the [`FakeDocker`], log capture through the
-//! logger's injectable sink, and a bounded [`eventually`].
+//! Test doubles and helpers the unit tests share: the [`FakeDocker`], log capture through a scoped
+//! `tracing` subscriber, and a bounded [`eventually`].
 
 mod fake_docker;
+pub(crate) mod openmetrics;
 
-use std::sync::Arc;
 use std::time::Duration;
-
-use jiff::Timestamp;
-use jiff::tz::TimeZone;
 
 pub(crate) use fake_docker::{FakeDocker, FakeEvent};
 
 use crate::docker::types::{Node, NodeDescription, NodeSpec, NodeStatus, Platform};
-use go_slog::{Config, Format, Level, Logger, MemorySink};
+use std::sync::Arc;
+
+use serde_json::Value;
+use tracing::dispatcher::DefaultGuard;
+use tracing::level_filters::LevelFilter;
+use tracing_setup::testing::Capture;
+
+/// The series of `collector` by [`openmetrics::series_id`]: registered on a fresh registry,
+/// encoded and read back.
+///
+/// # Panics
+///
+/// A family that is not scalar.
+pub(crate) fn gather_series(
+    collector: &Arc<impl prometheus_client::collector::Collector>,
+) -> std::collections::BTreeMap<String, f64> {
+    let mut registry = prometheus_client::registry::Registry::default();
+    crate::metrics::register(&mut registry, collector);
+    openmetrics::parse(&crate::metrics::render(&registry)).series()
+}
+
+/// A counter's value as the float the tests compare.
+///
+/// # Panics
+///
+/// A count above `u32::MAX`, which no test reaches.
+pub(crate) fn count(value: u64) -> f64 {
+    f64::from(u32::try_from(value).expect("a small count"))
+}
+
+/// The series of what `register` registers, by [`openmetrics::series_id`].
+pub(crate) fn gather_registered(
+    register: impl FnOnce(&mut prometheus_client::registry::Registry),
+) -> std::collections::BTreeMap<String, f64> {
+    let mut registry = prometheus_client::registry::Registry::default();
+    register(&mut registry);
+    openmetrics::parse(&crate::metrics::render(&registry)).series()
+}
 
 /// How often [`eventually`] checks its condition.
 const EVENTUALLY_INTERVAL: Duration = Duration::from_millis(10);
 
-/// A plain-format logger at `level` that writes to the returned sink, without record times: the
-/// Go tests' handler swap, without a process-wide logger to race on.
-pub(crate) fn capture_logs(level: Level) -> (Logger, MemorySink) {
-    let sink = MemorySink::default();
-    let logger = Logger::new(
-        Config {
-            format: Format::Plain,
-            level,
-            include_time: false,
-            plain_style: go_slog::PlainStyle::Quoted,
-        },
-        Box::new(sink.clone()),
-        TimeZone::UTC,
-        Arc::new(|| Timestamp::UNIX_EPOCH),
+/// What a test logged, kept by the scoped subscriber [`capture_logs`] installs. Dropping it
+/// restores the previous default.
+pub(crate) struct Logs {
+    capture: Capture,
+    _guard: DefaultGuard,
+}
+
+impl Logs {
+    /// Every record logged so far, as a JSON object: `level`, `message`, `target` and the
+    /// record's fields at the top level.
+    pub(crate) fn lines(&self) -> Vec<Value> {
+        self.capture.json_lines()
+    }
+
+    /// The records whose message is `message`.
+    pub(crate) fn with_message(&self, message: &str) -> Vec<Value> {
+        self.lines()
+            .into_iter()
+            .filter(|line| line["message"] == message)
+            .collect()
+    }
+
+    /// The first record at `level` (`"WARN"`) with this message and these fields, a field's value
+    /// compared as text (a number numerically).
+    pub(crate) fn find(
+        &self,
+        level: &str,
+        message: &str,
+        fields: &[(&str, &str)],
+    ) -> Option<Value> {
+        self.lines().into_iter().find(|line| {
+            line["level"] == level
+                && line["message"] == message
+                && fields.iter().all(|&(name, want)| {
+                    line.get(name).is_some_and(|value| {
+                        value.as_str().map_or_else(
+                            || {
+                                value.as_f64().map_or_else(
+                                    || value.to_string().eq(want),
+                                    |number| {
+                                        want.parse::<f64>().is_ok_and(|parsed| {
+                                            (parsed - number).abs() < f64::EPSILON
+                                        })
+                                    },
+                                )
+                            },
+                            |text| text == want,
+                        )
+                    })
+                })
+        })
+    }
+
+    /// Whether [`Logs::find`] finds a record.
+    pub(crate) fn contains(&self, level: &str, message: &str, fields: &[(&str, &str)]) -> bool {
+        self.find(level, message, fields).is_some()
+    }
+
+    /// Everything logged, for an assertion message.
+    pub(crate) fn dump(&self) -> String {
+        self.capture.text()
+    }
+
+    /// Whether a record with exactly this message was logged.
+    pub(crate) fn has(&self, message: &str) -> bool {
+        !self.with_message(message).is_empty()
+    }
+}
+
+/// A scoped subscriber at `level` and above, on this thread, writing flat JSON without record
+/// times to the returned [`Logs`]: no process-wide subscriber to race on. A current-thread test
+/// sees the records of the tasks it spawns too.
+pub(crate) fn capture_logs(level: LevelFilter) -> Logs {
+    let capture = Capture::default();
+    let dispatch = tracing_setup::build(
+        capture.clone(),
+        tracing_setup::Format::Json,
+        level,
+        tracing_setup::Options::new().time(false),
     );
-    (logger, sink)
+    Logs {
+        _guard: tracing_setup::testing::set_default(&dispatch),
+        capture,
+    }
 }
 
 /// Waits until `condition` holds, checking every 10ms of tokio time, and fails the test once

@@ -29,8 +29,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::docker::types::{GoTime, Service};
-use go_compat::float::from_int;
-use go_prom::{Collector, GaugeVec, Kind, LabelsMismatch, RegisterError, Registry, constant_desc};
+use crate::num::from_int;
+use prometheus_client::registry::Registry;
+
+use crate::metrics::{self, Desc, GaugeVec, LabelsMismatch};
 
 use super::desired::labels_for_metadata;
 use super::metrics_ids::{
@@ -124,10 +126,9 @@ impl ServiceUpdateMetrics {
         with_state.push(LABEL_STATE.to_owned());
         let family = |name: &str, help: &str, labels: &[String]| {
             let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-            Arc::new(GaugeVec::new(constant_desc(
+            Arc::new(GaugeVec::new(Desc::new(
                 &format!("{NAMESPACE}_{SERVICE_SUBSYSTEM}_{name}"),
                 help,
-                Kind::Gauge,
                 &labels,
             )))
         };
@@ -147,15 +148,10 @@ impl ServiceUpdateMetrics {
     }
 
     /// Registers the three families.
-    ///
-    /// # Errors
-    ///
-    /// The registry's refusal.
-    pub fn register(&self, registry: &Registry) -> Result<(), RegisterError> {
+    pub fn register(&self, registry: &mut Registry) {
         for family in [&self.state, &self.started, &self.completed] {
-            registry.register(Arc::clone(family) as Arc<dyn Collector>)?;
+            metrics::register(registry, family);
         }
-        Ok(())
     }
 
     /// The state family.

@@ -30,7 +30,6 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use go_compat::duration;
 use testenv::metrics_text::{Labels, Scrape, format_series, format_value, labels};
 use testenv_core::context::Context;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -60,9 +59,9 @@ pub const METRIC_EVENTS_RECONNECTS: &str = "swarm_exporter_events_reconnects_tot
 pub const LABEL_STACK: &str = "stack";
 pub const LABEL_SERVICE: &str = "service";
 
-/// Go's `time.Duration.String` of a std duration.
+/// A std duration as text (`30s`, `1.5s`).
 pub fn go_duration(value: Duration) -> String {
-    duration::format(i64::try_from(value.as_nanos()).unwrap_or(i64::MAX))
+    format!("{value:?}")
 }
 
 /// Calls `check` every [`POLL_INTERVAL`] until it succeeds, `timeout` elapses or `ctx` ends, and

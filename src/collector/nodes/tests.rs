@@ -26,9 +26,8 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::docker::types::{NodeSpec, NodeStatus};
-use crate::test_support::capture_logs;
-use go_prom::testing::{gather_series, series_id};
-use go_slog::Level;
+use crate::test_support::gather_series;
+use crate::test_support::openmetrics::series_id;
 
 fn node(role: &str, availability: &str, status: &str) -> Node {
     Node {
@@ -58,11 +57,11 @@ fn node_series_id(role: &str, availability: &str, status: &str) -> String {
 }
 
 fn gathered(nodes: &NodesByState) -> BTreeMap<String, f64> {
-    gather_series(Arc::clone(nodes.family()) as Arc<dyn Collector>)
+    gather_series(nodes.family())
 }
 
 fn nodes_by_state() -> NodesByState {
-    NodesByState::new(capture_logs(Level::INFO).0)
+    NodesByState::new()
 }
 
 /// Go: `TestUpdateNodesByStateFromSlice_Aggregation`
@@ -145,6 +144,6 @@ fn family_carries_go_name_help_and_labels() {
         "Number of Swarm nodes grouped by role, availability, and status."
     );
     assert_eq!(desc.label_names(), ["role", "availability", "status"]);
-    let registry = Registry::new();
-    nodes.register(&registry).unwrap();
+    let mut registry = Registry::default();
+    nodes.register(&mut registry);
 }

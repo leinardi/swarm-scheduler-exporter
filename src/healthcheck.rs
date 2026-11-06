@@ -38,17 +38,14 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Empty};
-use hyper::ext::ReasonPhrase;
 use hyper::{Request, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tokio::time::Instant;
 
+use crate::host_port::{AddrError, join_host_port, split_host_port};
 use crate::server::HEALTHZ_PATH;
-use go_compat::host_port::{AddrError, join_host_port, split_host_port};
-use go_compat::strings::trim_space_bytes;
-use go_http::gopath::escape_host;
 
 /// The deadline of a whole probe.
 pub const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -72,7 +69,7 @@ pub fn healthcheck_url(listen_addr: &str) -> Result<String, ListenAddrError> {
     };
     Ok(format!(
         "http://{}{HEALTHZ_PATH}",
-        escape_host(&join_host_port(host, port))
+        join_host_port(host, port).replace('%', "%25")
     ))
 }
 
@@ -87,23 +84,6 @@ impl std::fmt::Display for ListenAddrError {
 }
 
 impl std::error::Error for ListenAddrError {}
-
-/// Go's `resp.Status`: the code and the reason as they were on the wire. hyper keeps the wire
-/// reason only when it differs from the canonical one, so the canonical one stands in otherwise,
-/// and an empty reason leaves the bare code.
-#[must_use]
-pub fn go_status(status: StatusCode, reason: Option<&ReasonPhrase>) -> Vec<u8> {
-    let reason = reason.map_or_else(
-        || status.canonical_reason().unwrap_or("").as_bytes(),
-        ReasonPhrase::as_bytes,
-    );
-    let mut out = status.as_str().as_bytes().to_vec();
-    if !reason.is_empty() {
-        out.push(b' ');
-        out.extend_from_slice(reason);
-    }
-    out
-}
 
 /// The error and every cause under it: hyper-util's `Display` shows one level only.
 fn error_chain(error: &hyper_util::client::legacy::Error) -> String {
@@ -156,10 +136,7 @@ pub async fn run_healthcheck(listen_addr: &str, out: &mut impl Write) -> i32 {
     if response.status() == StatusCode::OK {
         return 0;
     }
-    let status = go_status(
-        response.status(),
-        response.extensions().get::<ReasonPhrase>(),
-    );
+    let status = response.status().to_string().into_bytes();
     // io.ReadAll(io.LimitReader(body, 4096)) under the same deadline: what could be read before
     // an error is still used.
     let mut body = response.into_body();
@@ -174,7 +151,7 @@ pub async fn run_healthcheck(listen_addr: &str, out: &mut impl Write) -> i32 {
         }
     }
     let first_line = read.split(|byte| *byte == b'\n').next().unwrap_or_default();
-    let reason = trim_space_bytes(first_line);
+    let reason = first_line.trim_ascii();
     let mut line = format!("healthcheck: {url}: ").into_bytes();
     line.extend_from_slice(&status);
     if !reason.is_empty() {
