@@ -28,8 +28,8 @@
 use std::fs;
 use std::time::Duration;
 
+use go_compat::{duration, quote};
 use jiff::Timestamp;
-use swarm_scheduler_exporter::go_compat::{duration, quote};
 
 use crate::Error;
 

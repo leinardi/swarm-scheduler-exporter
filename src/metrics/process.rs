@@ -48,7 +48,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use crate::go_compat::float;
+use go_compat::float;
 
 use super::{Collector, Desc, Family, Kind, Series, Value, constant_desc};
 

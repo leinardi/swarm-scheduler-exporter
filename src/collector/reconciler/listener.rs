@@ -34,8 +34,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::docker::types::Event;
 use crate::docker::{DockerApi, Error, EventStream, Filters, StreamError, StreamErrorKind};
-use crate::go_compat::{duration, time_layout};
 use crate::logger::Attr;
+use go_compat::{duration, time_layout};
 
 use super::{BACKOFF_INITIAL_DELAY, BACKOFF_MAX_DELAY, BACKOFF_MULTIPLIER, ReconcilerHandle};
 use super::{EVENT_TYPE_NODE, EVENT_TYPE_SERVICE, duration_nanos};

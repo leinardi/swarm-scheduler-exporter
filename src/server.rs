@@ -70,11 +70,11 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::clock::Clock;
-use crate::go_compat::duration;
-use crate::go_compat::errno::io_error_text;
-use crate::go_compat::host_port::split_host_port;
 use crate::logger::{Attr, Logger};
 use crate::metrics::exposition::Exposition;
+use go_compat::duration;
+use go_compat::errno::io_error_text;
+use go_compat::host_port::split_host_port;
 
 use self::gopath::Route;
 pub use self::timeouts::{ConnState, TimedIo, Timeouts};

@@ -37,7 +37,7 @@ use std::fmt;
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 
-use crate::go_compat::time_layout::{go_zero_time, is_go_zero_time};
+use go_compat::time_layout::{go_zero_time, is_go_zero_time};
 
 use super::error::Error;
 

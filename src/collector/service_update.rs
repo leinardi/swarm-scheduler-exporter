@@ -29,10 +29,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::docker::types::{GoTime, Service};
-use crate::go_compat::float::from_int;
 use crate::metrics::{
     Collector, GaugeVec, Kind, LabelsMismatch, RegisterError, Registry, constant_desc,
 };
+use go_compat::float::from_int;
 
 use super::desired::labels_for_metadata;
 use super::metrics_ids::{

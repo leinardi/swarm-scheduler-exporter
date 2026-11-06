@@ -43,9 +43,9 @@ use bollard::query_parameters::{
     ListNetworksOptions, ListNodesOptions, RemoveContainerOptions, StartContainerOptions,
 };
 use futures_util::StreamExt as _;
+use go_compat::duration;
 use jiff::Timestamp;
 use swarm_scheduler_exporter::clock::{Clock as _, SystemClock};
-use swarm_scheduler_exporter::go_compat::duration;
 use swarm_scheduler_exporter::logger::Attr;
 use tokio::time::{Instant, MissedTickBehavior};
 

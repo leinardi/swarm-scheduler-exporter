@@ -30,6 +30,8 @@ integration = [
 # dependency only goes this way: the exporter package names testenv in no table (the boundary
 # meta-test checks it), so nothing here reaches the shipped binary.
 swarm-scheduler-exporter = { path = ".." }
+# Go's quoting, float and duration formatting and the local zone, as the exporter writes them.
+go-compat.workspace = true
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The run filter: Go's -run patterns are regular expressions.
 regex = "1.13.1"

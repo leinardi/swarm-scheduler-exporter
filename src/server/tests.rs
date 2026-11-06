@@ -280,3 +280,24 @@ fn slow_app(duration: Duration) -> App {
     app.slow = Some(sleeping(duration));
     app
 }
+
+/// An I/O error message (listen, accept, the Docker client) quotes Go's `syscall.Errno` text for every errno Go names, not only
+/// the ones the exporter's own table listed, and Go's `errno <n>` for one it does not (Linux's
+/// internal 524): a full disk reads `no space left on device`, as Go printed it, not Rust's
+/// `No space left on device (os error 28)`.
+#[test]
+fn io_error_text_quotes_go_s_whole_errno_table() {
+    for (errno, want) in [
+        (28, "no space left on device"),
+        (3, "no such process"),
+        (71, "protocol error"),
+        (524, "errno 524"),
+        (98, "address already in use"),
+    ] {
+        assert_eq!(
+            io_error_text(&io::Error::from_raw_os_error(errno)),
+            want,
+            "errno {errno}"
+        );
+    }
+}

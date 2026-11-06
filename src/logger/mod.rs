@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use jiff::tz::TimeZone;
 
 use crate::clock::{Clock, SystemClock};
-use crate::go_compat::{local_zone, time_layout};
+use go_compat::{local_zone, time_layout};
 
 use plain_handler::PlainHandler;
 use slog_handler::SlogHandler;

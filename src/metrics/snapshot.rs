@@ -187,7 +187,7 @@ impl SnapshotBuilder {
             let Some(&label_value) = labels.get(name.as_str()) else {
                 self.fail(BuildError(format!(
                     "missing {}, want {}",
-                    crate::go_compat::quote::quote(name),
+                    go_compat::quote::quote(name),
                     go_list(label_names)
                 )));
                 return;

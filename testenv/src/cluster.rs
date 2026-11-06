@@ -30,8 +30,8 @@ use std::io;
 use std::num::IntErrorKind;
 
 use bollard::Docker;
+use go_compat::quote::quote;
 use jiff::Timestamp;
-use swarm_scheduler_exporter::go_compat::quote::quote;
 
 use crate::Error;
 use crate::envid::{LABEL_ENV_ID, generate_env_id};

@@ -25,7 +25,7 @@
 //! The text exposition format 0.0.4, a port of expfmt's `MetricFamilyToText` (common v0.71.0)
 //! for counters, gauges and histograms.
 
-use crate::go_compat::float;
+use go_compat::float;
 
 use super::{Gathered, Kind, Value};
 

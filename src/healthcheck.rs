@@ -45,10 +45,10 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tokio::time::Instant;
 
-use crate::go_compat::host_port::{AddrError, join_host_port, split_host_port};
-use crate::go_compat::strings::trim_space_bytes;
 use crate::server::HEALTHZ_PATH;
 use crate::server::gopath::escape_host;
+use go_compat::host_port::{AddrError, join_host_port, split_host_port};
+use go_compat::strings::trim_space_bytes;
 
 /// The deadline of a whole probe.
 pub const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(3);

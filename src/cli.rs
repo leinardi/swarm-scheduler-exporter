@@ -38,9 +38,9 @@ use std::fmt;
 
 use clap::{ArgAction, Parser};
 
-use crate::go_compat::{duration, quote};
 use crate::labels::{self, CountError, LabelError};
 use crate::logger::{self, Format, Level};
+use go_compat::{duration, quote};
 
 /// Go's `DefaultPollDelay`: 10s.
 pub const DEFAULT_POLL_DELAY: i64 = 10_000_000_000;

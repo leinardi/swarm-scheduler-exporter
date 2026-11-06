@@ -60,7 +60,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use futures_util::future::LocalBoxFuture;
-use swarm_scheduler_exporter::go_compat::duration;
+use go_compat::duration;
 use testenv::context::Context;
 use testenv::run_filter::RunFilter;
 use testenv::{ENV_BINARY, cleanup_command, spec_from_env, up};

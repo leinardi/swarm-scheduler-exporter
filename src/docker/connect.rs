@@ -47,7 +47,7 @@ use tokio_rustls::client::TlsStream;
 
 use super::host::{Endpoint, dial_address};
 use super::{DIAL_TIMEOUT, TLS_HANDSHAKE_TIMEOUT};
-use crate::go_compat::errno::io_error_text;
+use go_compat::errno::io_error_text;
 
 /// Go's TCP keep-alive defaults since go1.23: probes after 15s idle, every 15s, 9 of them.
 const KEEPALIVE: Duration = Duration::from_secs(15);

@@ -26,7 +26,7 @@
 //! reconciler's, the listener and dispatcher tests that sat with the desired replicas', and the
 //! tests of the two Go quirks the listener fixes (Q6, Q7).
 
-use crate::go_compat::time_layout::format_rfc3339_nano;
+use go_compat::time_layout::format_rfc3339_nano;
 
 use super::*;
 

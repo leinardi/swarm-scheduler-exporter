@@ -43,9 +43,9 @@ use std::io::Write as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use crate::go_compat::float;
-use crate::go_compat::parse_float::{ParseFloatError, parse_float32};
-use crate::go_compat::sort;
+use go_compat::float;
+use go_compat::parse_float::{ParseFloatError, parse_float32};
+use go_compat::sort;
 
 use super::Gathered;
 use super::text::{self, TEXT_CONTENT_TYPE};
