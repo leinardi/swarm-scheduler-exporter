@@ -11,7 +11,7 @@ The README "Migrating from 1.x" section lists the only intended differences from
 
 ## Source map
 
-- Shared code is rust-common's (git dependency pinned by `rev`): go-compat, clock,
+- Shared code is rust-common's (git dependency pinned by `rev`): clock,
   tracing-setup, go-slog (testenv only), docker-client, service-kit, testenv-core,
   repo-meta. A per-project difference is a parameter there, never a fork here; fixes land in
   rust-common first.
@@ -30,8 +30,8 @@ The README "Migrating from 1.x" section lists the only intended differences from
     `exporter_metrics.rs`.
 - `src/labels.rs` (custom label keys), `src/server.rs` (`/metrics`, `/healthz`: an axum
   router on service-kit's http server). Metrics are prometheus-client's (OpenMetrics text,
-  `src/metrics.rs`), the logger tracing-setup's (`tracing` macros, clap-parsed flags), the Go ports
-  go-compat's.
+  `src/metrics.rs`), the logger tracing-setup's (`tracing` macros, clap-parsed flags); durations
+  are humantime's, CIDRs ipnet's, `host_port.rs` and `text.rs` are the exporter's own.
 - `tests/`: `engine_wire.rs` (fake Engine replaying `tests/testdata/engine_wire/`),
   `metrics.rs` (inventory, values, buckets, removal, atomicity), `run.rs` (lifecycle, flags).
 - `testenv/`: the DinD Swarm harness over testenv-core; bollard and every Docker-driving module

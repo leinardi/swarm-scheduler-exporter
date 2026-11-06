@@ -34,11 +34,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::docker::types::Event;
 use crate::docker::{DockerApi, Error, EventStream, Filters, StreamError, StreamErrorKind};
-use go_compat::{duration, time_layout};
 use tracing::{info, warn};
 
 use super::{BACKOFF_INITIAL_DELAY, BACKOFF_MAX_DELAY, BACKOFF_MULTIPLIER, ReconcilerHandle};
-use super::{EVENT_TYPE_NODE, EVENT_TYPE_SERVICE, duration_nanos};
+use super::{EVENT_TYPE_NODE, EVENT_TYPE_SERVICE};
 
 /// How far before the anchor, or the last event seen, a stream starts: the daemon's `since` is
 /// inclusive, and the margin covers events stamped just before the moment captured.
@@ -49,19 +48,19 @@ pub const EVENTS_SINCE_MARGIN: Duration = Duration::from_millis(500);
 pub enum ListenerStopped {
     /// Cancelled while a stream was open or being opened, or between two of them.
     Stopping,
-    /// Cancelled during the backoff of this many nanoseconds before a reconnect.
-    DuringBackoff(i64),
+    /// Cancelled during this backoff before a reconnect.
+    DuringBackoff(Duration),
 }
 
 impl fmt::Display for ListenerStopped {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Stopping => formatter.write_str("event listener stopping: context canceled"),
-            Self::DuringBackoff(nanos) => write!(
+            Self::DuringBackoff(backoff) => write!(
                 formatter,
                 "event listener canceled during backoff: backoff of {} interrupted: context \
                  canceled",
-                duration::format(*nanos)
+                humantime::format_duration(*backoff)
             ),
         }
     }
@@ -177,7 +176,6 @@ pub async fn listen_swarm_events(
         // else is worth a warning. The reconnect resyncs either way: a clean close looks the same
         // whether a proxy timed out or the daemon restarted, only the restart loses event
         // history, and the resync is just two list calls.
-        let backoff_nanos = duration_nanos(backoff);
         let next_since = rfc3339_nano(since);
         if outcome.end.is_eof() {
             info!(
@@ -199,7 +197,7 @@ pub async fn listen_swarm_events(
             .await
             .is_none()
         {
-            return ListenerStopped::DuringBackoff(backoff_nanos);
+            return ListenerStopped::DuringBackoff(backoff);
         }
         backoff = next_backoff(backoff);
     }
@@ -207,7 +205,7 @@ pub async fn listen_swarm_events(
 
 /// `timestamp` in UTC, as `time.RFC3339Nano`.
 fn rfc3339_nano(timestamp: Timestamp) -> String {
-    time_layout::format_rfc3339_nano(timestamp, jiff::tz::Offset::UTC)
+    timestamp.to_string()
 }
 
 /// Opens one event stream connection and dispatches its events until it ends. The connection

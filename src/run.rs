@@ -386,7 +386,7 @@ where
         }
     };
     // Checked by check_poll_delay: at least one second.
-    let poll_delay = Duration::from_nanos(u64::try_from(args.poll_delay).unwrap_or_default());
+    let poll_delay = args.poll_delay;
     let mut registry = Registry::default();
     let metrics = register_metrics(
         &mut registry,

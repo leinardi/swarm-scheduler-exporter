@@ -420,7 +420,7 @@ Options:
       --listen-addr <string>
           IP address and port to bind [default: 0.0.0.0:8888]
       --poll-delay <duration>
-          How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s. [default: 10s]
+          How often to poll tasks (e.g. 10s, 1m, 1m30s). Minimum 1s. [default: 10s]
       --containers[=<BOOL>]
           Expose container state metrics (opt-in).
       --containers-include-swarm[=<BOOL>]
@@ -450,8 +450,8 @@ Options:
   `json` or `text`, in any case; anything else is refused at startup (exit code `2`). Logs go to
   standard output, the timestamps (`--log-time`) are UTC RFC 3339, and a line carries its fields as
   `key=value` (text) or as JSON members (json).
-- `--poll-delay` takes a Go-style duration (`500ms`, `10s`, `1m30s`) of at least `1s` (exit code
-  `1` otherwise).
+- `--poll-delay` takes a duration (`500ms`, `10s`, `1m30s`, `1m 30s`) of at least `1s` (exit code
+  `1` otherwise). A bool flag takes `true` or `false` (`--containers`, `--containers=true`).
 - `-h` and `--help` print the help to standard output and exit `0`.
 
 ### Environment (Docker client)
@@ -668,7 +668,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | --- | --- | --- | --- |
 | Q1 | Runtime metrics | `go_*`, `process_*` and `promhttp_metric_handler_*` | No `go_*` and no `promhttp_metric_handler_*`; `process_*` keeps the same Linux families, names, types and help texts |
 | Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always OpenMetrics text (`application/openmetrics-text; version=1.0.0; charset=utf-8`), never compressed; a counter's family has no `_total` (its sample has); `?name[]=` filtering is gone |
-| Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false` and every `strconv.ParseBool` spelling, Go durations for `--poll-delay`, repeatable `--label`, exit 2 on parse errors |
+| Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false`, repeatable `--label`, exit 2 on parse errors. See Q17 for the value spellings |
 | Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2), the message naming the accepted values; `plain` (format) and `fatal`, `panic` (level) are no longer accepted, `warning` stays an alias of `warn` |
 | Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | Startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |
 | Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the stream is accepted: a refused request (non-2xx, no connection) is seen within 2s of opening it and goes straight to the warn path; a quiet stream is probed with `GET /version` (3s) after 2s, and a daemon that does not answer the probe is a failed connect |
@@ -682,6 +682,7 @@ Every intended difference, 1.x (Go) against 2.0 (Rust):
 | Q14 | Docker proxy variables | A TCP `DOCKER_HOST` went through `HTTP_PROXY` / `HTTPS_PROXY` (honouring `NO_PROXY` and skipping loopback), as Go's `http.ProxyFromEnvironment` decides | The client dials `DOCKER_HOST` directly and reads no proxy variable; unix sockets are unaffected |
 | Q15 | Log output | slog text/JSON/plain lines, timestamps in the local zone (`TZ`) | `tracing` text or JSON lines (`level`, `message`, then the fields; JSON adds `target`), timestamps in UTC; the fields keep their names except `err`, now `error`, and durations print as Rust writes them (`500ms`, `1s`) |
 | Q16 | Docker client | moby client v0.6.0 over its own HTTP/1 transport; every state a string; `DOCKER_API_VERSION` within 1.40–1.56 | bollard through `docker-client`: a state or type the daemon documents is decoded, one a newer daemon invents fails the call that carries it (a decode error, logged by the collector); requests carry the `/v<major>.<minor>` prefix of the pinned or negotiated version (none before negotiation, or after a refused one); the container list asks `all=true&size=false`; a pin must be `<major>.<minor>` within 1.40–1.56 |
+| Q17 | Value spellings | Bool flags took every `strconv.ParseBool` spelling (`1`, `t`, `T`, `TRUE`, `True`, `0`, `f`, `F`, `FALSE`, `False`); `--poll-delay` took Go durations, a leading sign included; a `node.ip` CIDR took a prefix length with leading zeros (`10.0.0.0/024`); constraints and container labels folded case by Go's simple folding; custom-label errors quoted values with `%q` | Bool flags take `true` or `false` only (exit 2 otherwise); `--poll-delay` takes humantime durations (`10s`, `500ms`, `1m30s`, `1m 30s`, `1.5s`, `5µs`, and now `2d`), but no sign: `-5s` is a parse error (exit 2, where Go's reached the exit-1 minimum check), and a bare number needs a unit as before; a CIDR prefix has no leading zeros (the constraint never matches); constraint keys and values compare by Unicode lowercase, so U+017F (long s) no longer equals `s`; custom-label errors quote with `{:?}`; a poll delay prints as `10s`, `1h 2m`, `1s 500ms` |
 
 ## 🤝 Contributing
 

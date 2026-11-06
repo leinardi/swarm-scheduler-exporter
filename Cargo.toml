@@ -74,9 +74,10 @@ publish = false
 workspace = true
 
 [dependencies]
-# Go's formatting and parsing, byte for byte (rust-common): durations, floats, quoting, time
-# layouts, the local zone, errno texts, net addresses, sort.
-go-compat.workspace = true
+# The `--poll-delay` parser and its display (`10s`, `1m 30s`, `500ms`).
+humantime = "2.4.0"
+# The CIDR of a `node.ip` placement constraint.
+ipnet = "2.12.2"
 # The injected wall clock (rust-common): Clock, SystemClock, TokioClock, FakeClock.
 clock.workspace = true
 # The subscriber (rust-common): tracing-subscriber's text or flat JSON, no ANSI, UTC RFC 3339
@@ -104,8 +105,7 @@ axum = { version = "0.8.9", default-features = false }
 # The listener's IPV6_V6ONLY (the wildcard bind is dual-stack whatever the sysctl says), and its
 # socket options in the server tests.
 socket2 = "0.6.5"
-# Zone data (TZif parsing) and civil time only: the zone is resolved and the times are formatted
-# the way Go does (go-compat), so none of jiff's tzdb or system features is on.
+# Civil time and timestamps only: no tzdb or system feature is on.
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 # The flags (Q3, Q4). No color: help and errors are plain text, as Go's were.
 clap = { version = "4.6.7", default-features = false, features = [

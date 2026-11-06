@@ -5,10 +5,11 @@
   arm64 via cargo-zigbuild and zig (pins shared by the Dockerfile and
   `.github/actions/setup-zigbuild`); version strings from `SWARM_SCHEDULER_EXPORTER_{VERSION,
   COMMIT,DATE}` at compile time.
-- Libraries: tokio, hyper + hyper-util (healthcheck client), axum (routes), clap, jiff, serde,
-  prometheus-client (registry and OpenMetrics encoder). From leinardi/rust-common (git, pinned by
-  `rev`): docker-client (Docker connection over bollard, rustls with ring), tracing-setup (logger subscriber),
-  go-slog (testenv only, until step 7), go-compat (Go library ports), clock, service-kit (with
+- Libraries: humantime (durations), ipnet (CIDR), tokio, hyper + hyper-util (healthcheck client),
+  axum (routes), clap, jiff, serde, prometheus-client (registry and OpenMetrics encoder). From
+  leinardi/rust-common (git, pinned by `rev`): docker-client (Docker connection over bollard,
+  rustls with ring), tracing-setup (logger subscriber),
+  go-slog (testenv only, until step 7), clock, service-kit (with
   `runtime`, `process-metrics` and `http`), testenv-core, repo-meta.
 - Lint and audit: clippy (workspace lints), rustfmt, cargo-machete, cargo-deny (`deny.toml`).
 - Build/infra: Makefile + `.mk/*.mk`; make-common snippets (`.mk/{docker,help,password,

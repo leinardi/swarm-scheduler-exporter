@@ -28,7 +28,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use go_compat::float::from_int;
+use crate::num::from_int;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::histogram::Histogram;

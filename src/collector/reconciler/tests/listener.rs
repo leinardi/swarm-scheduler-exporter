@@ -26,8 +26,6 @@
 //! reconciler's, the listener and dispatcher tests that sat with the desired replicas', and the
 //! tests of the two Go quirks the listener fixes (Q6, Q7).
 
-use go_compat::time_layout::format_rfc3339_nano;
-
 use super::*;
 
 /// Go's `errClosedBody`: the error a cut stream ends with.
@@ -96,7 +94,7 @@ fn node_update(time_nano: i64) -> Event {
 impl Fixture {
     /// `timestamp` as the listener logs it, in UTC.
     fn logged_time(timestamp: Timestamp) -> String {
-        format_rfc3339_nano(timestamp, jiff::tz::Offset::UTC)
+        timestamp.to_string()
     }
 
     /// The records that announce a reconnect, in order, each as its level, message and fields.

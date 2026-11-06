@@ -39,7 +39,7 @@ use crate::docker::{
 };
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
 use crate::metrics::{self, Desc, SnapshotBuilder, SnapshotFamily};
-use go_compat::strings::{equal_fold, to_lower, trim_space};
+use crate::text::{equal_fold, to_lower, trim_space};
 use prometheus_client::registry::Registry;
 use tracing::{debug, error, warn};
 

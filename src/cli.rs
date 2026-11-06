@@ -35,18 +35,18 @@
 
 use std::ffi::OsString;
 use std::fmt;
+use std::time::Duration;
 
 use clap::{ArgAction, Parser, ValueEnum};
 use tracing::level_filters::LevelFilter;
 
 use crate::labels::{self, CountError, LabelError};
-use go_compat::{duration, quote};
 
 /// Go's `DefaultPollDelay`: 10s.
-pub const DEFAULT_POLL_DELAY: i64 = 10_000_000_000;
+pub const DEFAULT_POLL_DELAY: Duration = Duration::from_secs(10);
 
 /// Go's `minPollDelay`: 1s.
-pub const MIN_POLL_DELAY: i64 = 1_000_000_000;
+pub const MIN_POLL_DELAY: Duration = Duration::from_secs(1);
 
 /// The label names the exporter already sets on its per-service metrics, which no custom label
 /// may take (Go's `collector.ReservedLabelNames`).
@@ -126,16 +126,16 @@ pub struct Args {
     )]
     pub listen_addr: String,
 
-    /// The poll interval, in nanoseconds, as Go's `time.Duration` holds it.
+    /// The poll interval.
     #[arg(
         long,
         default_value = "10s",
-        value_parser = duration::parse,
+        value_parser = humantime::parse_duration,
         allow_hyphen_values = true,
         value_name = "duration",
-        help = "How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s."
+        help = "How often to poll tasks (e.g. 10s, 1m, 1m30s). Minimum 1s."
     )]
-    pub poll_delay: i64,
+    pub poll_delay: Duration,
 
     #[arg(
         long,
@@ -144,7 +144,8 @@ pub struct Args {
         require_equals = true,
         default_value = "false",
         default_missing_value = "true",
-        value_parser = parse_bool,
+        value_parser = clap::value_parser!(bool),
+        hide_possible_values = true,
         value_name = "BOOL",
         hide_default_value = true,
         help = "Expose container state metrics (opt-in)."
@@ -158,7 +159,8 @@ pub struct Args {
         require_equals = true,
         default_value = "false",
         default_missing_value = "true",
-        value_parser = parse_bool,
+        value_parser = clap::value_parser!(bool),
+        hide_possible_values = true,
         value_name = "BOOL",
         hide_default_value = true,
         help = "Include containers belonging to Swarm tasks."
@@ -194,7 +196,8 @@ pub struct Args {
         require_equals = true,
         default_value = "false",
         default_missing_value = "true",
-        value_parser = parse_bool,
+        value_parser = clap::value_parser!(bool),
+        hide_possible_values = true,
         value_name = "BOOL",
         hide_default_value = true,
         help = "Include timestamp in logs"
@@ -208,7 +211,8 @@ pub struct Args {
         require_equals = true,
         default_value = "false",
         default_missing_value = "true",
-        value_parser = parse_bool,
+        value_parser = clap::value_parser!(bool),
+        hide_possible_values = true,
         value_name = "BOOL",
         hide_default_value = true,
         help = "Probe this exporter's /healthz on --listen-addr and exit 0 if healthy, 1 otherwise"
@@ -322,15 +326,6 @@ fn refuse_single_dash(arguments: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
-/// The value of a bool flag: exactly `strconv.ParseBool`'s spellings.
-fn parse_bool(value: &str) -> Result<bool, &'static str> {
-    match value {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
-        _ => Err("parse error"),
-    }
-}
-
 /// The error of an empty `--label`, worded as Go's `ErrEmptyFlagValue`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmptyFlagValue;
@@ -358,7 +353,7 @@ pub struct PollDelayTooShort;
 impl fmt::Display for PollDelayTooShort {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("poll-delay must be >= ")?;
-        formatter.write_str(&duration::format(MIN_POLL_DELAY))
+        formatter.write_str(&humantime::format_duration(MIN_POLL_DELAY).to_string())
     }
 }
 
@@ -369,7 +364,7 @@ impl std::error::Error for PollDelayTooShort {}
 /// # Errors
 ///
 /// [`PollDelayTooShort`] below 1s.
-pub fn check_poll_delay(poll_delay: i64) -> Result<(), PollDelayTooShort> {
+pub fn check_poll_delay(poll_delay: Duration) -> Result<(), PollDelayTooShort> {
     if poll_delay < MIN_POLL_DELAY {
         return Err(PollDelayTooShort);
     }
@@ -404,8 +399,7 @@ impl fmt::Display for CustomLabelsError {
             Self::Sanitize(error) => write!(formatter, "sanitize custom label names: {error}"),
             Self::Reserved(name) => write!(
                 formatter,
-                "custom label collides with a reserved label name: {}",
-                quote::quote(name)
+                "custom label collides with a reserved label name: {name:?}"
             ),
         }
     }

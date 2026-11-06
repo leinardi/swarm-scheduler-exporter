@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::docker::types::{GoTime, Service};
-use go_compat::float::from_int;
+use crate::num::from_int;
 use prometheus_client::registry::Registry;
 
 use crate::metrics::{self, Desc, GaugeVec, LabelsMismatch};

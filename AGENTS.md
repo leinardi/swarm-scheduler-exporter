@@ -106,7 +106,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
 dependency pinned by commit (`rev = "..."`, while the upstream-stack work is in flight) in
-`[workspace.dependencies]`: go-compat (the Go library ports), clock (the `Clock` trait),
+`[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
 server, the `process_*` collector), testenv-core (the harness's generic half) and repo-meta (the

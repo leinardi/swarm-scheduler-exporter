@@ -33,7 +33,12 @@ use std::fmt;
 
 use jiff::Timestamp;
 
-use go_compat::time_layout::{go_zero_time, is_go_zero_time};
+/// Go's zero `time.Time`, `0001-01-01T00:00:00Z`, in seconds since the epoch.
+const GO_ZERO_SECONDS: i64 = -62_135_596_800;
+
+fn go_zero_time() -> Timestamp {
+    Timestamp::from_second(GO_ZERO_SECONDS).unwrap_or(Timestamp::MIN)
+}
 
 /// Labels, as the daemon sends them.
 pub type Labels = std::collections::BTreeMap<String, String>;
@@ -58,7 +63,7 @@ impl GoTime {
     /// Go's `Time.IsZero`.
     #[must_use]
     pub fn is_zero(self) -> bool {
-        is_go_zero_time(self.0)
+        self.0 == go_zero_time()
     }
 
     /// Go's `Time.Unix`: whole seconds since the epoch, rounded down.

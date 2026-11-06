@@ -42,7 +42,7 @@ fn summary(args: &Args) -> String {
     format!(
         "listen={} poll={} containers={} swarm={} format={:?} level={:?} time={} labels={:?} then {next}",
         args.listen_addr,
-        duration::format(args.poll_delay),
+        humantime::format_duration(args.poll_delay),
         args.containers,
         args.containers_include_swarm,
         args.log_format,
@@ -143,7 +143,7 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
         &["--containers="],
         Err((
             2,
-            "error: invalid value '' for '--containers[=<BOOL>]': parse error",
+            "error: a value is required for '--containers[=<BOOL>]' but none was supplied",
         )),
     ),
     (
@@ -236,13 +236,13 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     (
         &["--poll-delay", "1h2m"],
         Ok(
-            "listen=0.0.0.0:8888 poll=1h2m0s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=1h 2m containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
         &["--poll-delay", "1.5s"],
         Ok(
-            "listen=0.0.0.0:8888 poll=1.5s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
+            "listen=0.0.0.0:8888 poll=1s 500ms containers=false swarm=false format=Text level=Info time=false labels=[] then run",
         ),
     ),
     (
@@ -253,21 +253,23 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     ),
     (
         &["--poll-delay", "-5s"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=-5s containers=false swarm=false format=Text level=Info time=false labels=[] then exit 1",
-        ),
+        Err((
+            2,
+            "error: invalid value '-5s' for '--poll-delay <duration>': expected number at 0",
+        )),
     ),
     (
         &["--poll-delay=-5s"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=-5s containers=false swarm=false format=Text level=Info time=false labels=[] then exit 1",
-        ),
+        Err((
+            2,
+            "error: invalid value '-5s' for '--poll-delay <duration>': expected number at 0",
+        )),
     ),
     (
         &["--poll-delay", "10"],
         Err((
             2,
-            "error: invalid value '10' for '--poll-delay <duration>': time: missing unit in duration \"10\"",
+            "error: invalid value '10' for '--poll-delay <duration>': time unit needed, for example 10sec or 10ms",
         )),
     ),
     (
@@ -278,27 +280,19 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     ),
     (
         &["--containers=1"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value '1' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=t"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value 't' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=T"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value 'T' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=TRUE"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value 'TRUE' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=true"],
@@ -308,33 +302,26 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     ),
     (
         &["--containers=True"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=true swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value 'True' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=0"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value '0' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=f"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value 'f' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=F"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((2, "error: invalid value 'F' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=FALSE"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((
+            2,
+            "error: invalid value 'FALSE' for '--containers[=<BOOL>]'",
+        )),
     ),
     (
         &["--containers=false"],
@@ -344,23 +331,18 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
     ),
     (
         &["--containers=False"],
-        Ok(
-            "listen=0.0.0.0:8888 poll=10s containers=false swarm=false format=Text level=Info time=false labels=[] then run",
-        ),
+        Err((
+            2,
+            "error: invalid value 'False' for '--containers[=<BOOL>]'",
+        )),
     ),
     (
         &["--containers=yes"],
-        Err((
-            2,
-            "error: invalid value 'yes' for '--containers[=<BOOL>]': parse error",
-        )),
+        Err((2, "error: invalid value 'yes' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=tRuE"],
-        Err((
-            2,
-            "error: invalid value 'tRuE' for '--containers[=<BOOL>]': parse error",
-        )),
+        Err((2, "error: invalid value 'tRuE' for '--containers[=<BOOL>]'")),
     ),
     (
         &["--containers=true", "--containers=false"],
@@ -421,7 +403,7 @@ const S5_CASES: &[(&[&str], Outcome)] = &[
         &["--poll-delay", "-h"],
         Err((
             2,
-            "error: invalid value '-h' for '--poll-delay <duration>': time: invalid duration \"-h\"",
+            "error: invalid value '-h' for '--poll-delay <duration>': expected number at 0",
         )),
     ),
     (
@@ -463,7 +445,7 @@ Options:
       --listen-addr <string>
           IP address and port to bind [default: 0.0.0.0:8888]
       --poll-delay <duration>
-          How often to poll tasks (Go duration, e.g. 10s, 1m). Minimum 1s. [default: 10s]
+          How often to poll tasks (e.g. 10s, 1m, 1m30s). Minimum 1s. [default: 10s]
       --containers[=<BOOL>]
           Expose container state metrics (opt-in).
       --containers-include-swarm[=<BOOL>]
@@ -585,7 +567,7 @@ fn defaults_are_go_defaults() {
 fn poll_delay_check_wording() {
     assert_eq!(check_poll_delay(MIN_POLL_DELAY), Ok(()));
     assert_eq!(
-        check_poll_delay(MIN_POLL_DELAY - 1)
+        check_poll_delay(Duration::from_nanos(999_999_999))
             .unwrap_err()
             .to_string(),
         "poll-delay must be >= 1s"
@@ -710,5 +692,39 @@ fn a_refused_log_value_names_the_accepted_ones() {
         let exit = parse_args(&[flag]).unwrap_err();
         assert_eq!(exit.code, 2, "{flag}");
         assert!(exit.message.contains(accepted), "{flag}: {}", exit.message);
+    }
+}
+
+/// The spellings `--poll-delay` takes: humantime's, which differ from Go's `time.ParseDuration`.
+#[test]
+fn poll_delay_spellings() {
+    let delay = |text: &str| parse_args(&["--poll-delay", text]).map(|args| args.poll_delay);
+    let secs = Duration::from_secs;
+    assert_eq!(delay("10s").unwrap(), secs(10));
+    assert_eq!(delay("1m30s").unwrap(), secs(90));
+    assert_eq!(delay("1m 30s").unwrap(), secs(90));
+    assert_eq!(delay("500ms").unwrap(), Duration::from_millis(500));
+    assert_eq!(delay("1h").unwrap(), secs(3600));
+    assert_eq!(delay("1.5s").unwrap(), Duration::from_millis(1500));
+    assert_eq!(delay("0").unwrap(), Duration::ZERO);
+    assert_eq!(delay("5µs").unwrap(), Duration::from_micros(5));
+    assert_eq!(delay("2d").unwrap(), secs(172_800));
+    for refused in ["-5s", "+5s", "10", "1d 2", "s", "", "5 seconds ago"] {
+        let exit = delay(refused).unwrap_err();
+        assert_eq!(exit.code, 2, "{refused:?}");
+    }
+}
+
+/// A bool flag is `true` or `false`; the other `strconv.ParseBool` spellings are refused.
+#[test]
+fn bool_flags_take_true_and_false_only() {
+    let flag =
+        |text: &str| parse_args(&[&format!("--containers={text}")]).map(|args| args.containers);
+    assert!(flag("true").unwrap());
+    assert!(!flag("false").unwrap());
+    for refused in [
+        "1", "0", "t", "f", "T", "F", "TRUE", "FALSE", "True", "False", "yes",
+    ] {
+        assert_eq!(flag(refused).unwrap_err().code, 2, "{refused:?}");
     }
 }

@@ -274,10 +274,6 @@ impl Shared {
     }
 }
 
-fn duration_nanos(duration: Duration) -> i64 {
-    i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX)
-}
-
 /// The event side's view of the reconciler: it marks what changed dirty and asks for resyncs.
 #[derive(Clone)]
 pub struct ReconcilerHandle {

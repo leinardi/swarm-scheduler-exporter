@@ -37,11 +37,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::host_port::split_host_port;
 use axum::Router;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
-use go_compat::host_port::split_host_port;
 use service_kit::http::{Lifecycle, Outcome, ServerConfig};
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::time::Instant;
