@@ -172,6 +172,14 @@ strip = true
 # Under panic = "abort" there would be nothing to catch.
 panic = "unwind"
 
+# Line tables only for the workspace and no debug info for the dependencies: backtraces keep
+# their files and lines, and the debug and test binaries shrink to a fraction of their size.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # The meta-tests scan the tree with regexes; unoptimised, regex compilation and matching dominate
 # their run time. Only the regex crates are optimised in dev and test builds.
 [profile.dev.package.regex]
