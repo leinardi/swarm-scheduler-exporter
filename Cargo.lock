@@ -225,7 +225,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 [[package]]
 name = "clock"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=2653891901ba88ac95b07b5ecb93e6adb70aa13c#2653891901ba88ac95b07b5ecb93e6adb70aa13c"
+source = "git+https://github.com/leinardi/rust-common?rev=e5bccff91065b712e084d4f6e03a336b05d64c54#e5bccff91065b712e084d4f6e03a336b05d64c54"
 dependencies = [
  "jiff",
  "tokio",
@@ -307,7 +307,7 @@ dependencies = [
 [[package]]
 name = "docker-client"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=2653891901ba88ac95b07b5ecb93e6adb70aa13c#2653891901ba88ac95b07b5ecb93e6adb70aa13c"
+source = "git+https://github.com/leinardi/rust-common?rev=e5bccff91065b712e084d4f6e03a336b05d64c54#e5bccff91065b712e084d4f6e03a336b05d64c54"
 dependencies = [
  "bollard",
  "bytes",
@@ -317,6 +317,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "serde_json",
  "serde_urlencoded",
@@ -1074,7 +1075,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "repo-meta"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=2653891901ba88ac95b07b5ecb93e6adb70aa13c#2653891901ba88ac95b07b5ecb93e6adb70aa13c"
+source = "git+https://github.com/leinardi/rust-common?rev=e5bccff91065b712e084d4f6e03a336b05d64c54#e5bccff91065b712e084d4f6e03a336b05d64c54"
 dependencies = [
  "regex",
  "serde-saphyr",
@@ -1299,7 +1300,7 @@ dependencies = [
 [[package]]
 name = "service-kit"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=2653891901ba88ac95b07b5ecb93e6adb70aa13c#2653891901ba88ac95b07b5ecb93e6adb70aa13c"
+source = "git+https://github.com/leinardi/rust-common?rev=e5bccff91065b712e084d4f6e03a336b05d64c54#e5bccff91065b712e084d4f6e03a336b05d64c54"
 dependencies = [
  "bytes",
  "hyper",
@@ -1492,7 +1493,7 @@ dependencies = [
 [[package]]
 name = "testenv-core"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=2653891901ba88ac95b07b5ecb93e6adb70aa13c#2653891901ba88ac95b07b5ecb93e6adb70aa13c"
+source = "git+https://github.com/leinardi/rust-common?rev=e5bccff91065b712e084d4f6e03a336b05d64c54#e5bccff91065b712e084d4f6e03a336b05d64c54"
 dependencies = [
  "bollard",
  "jiff",
@@ -1691,7 +1692,7 @@ dependencies = [
 [[package]]
 name = "tracing-setup"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=2653891901ba88ac95b07b5ecb93e6adb70aa13c#2653891901ba88ac95b07b5ecb93e6adb70aa13c"
+source = "git+https://github.com/leinardi/rust-common?rev=e5bccff91065b712e084d4f6e03a336b05d64c54#e5bccff91065b712e084d4f6e03a336b05d64c54"
 dependencies = [
  "serde_json",
  "tracing",
