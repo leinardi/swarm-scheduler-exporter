@@ -18,12 +18,12 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 # `[patch."https://github.com/leinardi/rust-common"]` table naming each crate with
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
-clock = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-docker-client = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-service-kit = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
-tracing-setup = { git = "https://github.com/leinardi/rust-common", rev = "2a7e90b9d973340c075dd32cff77d8344adda798" }
+clock = { git = "https://github.com/leinardi/rust-common", rev = "bfe8c584f65c4b28c73de91162740105fdc5f29c" }
+docker-client = { git = "https://github.com/leinardi/rust-common", rev = "bfe8c584f65c4b28c73de91162740105fdc5f29c" }
+repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "bfe8c584f65c4b28c73de91162740105fdc5f29c" }
+service-kit = { git = "https://github.com/leinardi/rust-common", rev = "bfe8c584f65c4b28c73de91162740105fdc5f29c" }
+testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "bfe8c584f65c4b28c73de91162740105fdc5f29c" }
+tracing-setup = { git = "https://github.com/leinardi/rust-common", rev = "bfe8c584f65c4b28c73de91162740105fdc5f29c" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
