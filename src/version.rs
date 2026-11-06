@@ -24,9 +24,9 @@
 
 //! The build's version stamps, logged at startup and exported as `swarm_exporter_build_info`.
 //! They are read at compile time from `SWARM_SCHEDULER_EXPORTER_VERSION`, `_COMMIT` and `_DATE`
-//! (the make targets set them from git and the clock, as Go's `-ldflags -X` did), and fall back to
-//! Go's defaults when unset; a variable set to the empty string stamps the empty string, as
-//! `-X main.version=` did.
+//! (`make rust-dist` and `make rust-run` set them from git, the date from HEAD's commit, as Go's
+//! `-ldflags -X` did), and fall back to Go's defaults when unset; a variable set to the empty
+//! string stamps the empty string, as `-X main.version=` did.
 
 use service_kit::{BuildInfo, Defaults, EmptyStamp, buildinfo};
 
