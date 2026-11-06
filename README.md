@@ -443,8 +443,8 @@ Options:
   with a pointer to the `--` one, and so is any positional argument (exit code `2`).
 - A value goes after a space or `=` (`--poll-delay 30s`, `--poll-delay=30s`); a repeated flag keeps
   its last value, and `--label` may be repeated (an empty name is refused).
-- A boolean flag alone means `true`; turning one off takes `=` (`--containers=false`, also `0`,
-  `f`, `F`, `FALSE`, `False`). `--containers false` is refused: `false` would be a positional
+- A boolean flag alone means `true`; turning one off takes `=` (`--containers=false`; only `true` and
+  `false` are accepted). `--containers false` is refused: `false` would be a positional
   argument.
 - `--log-level` takes `debug`, `info`, `warn` (also `warning`) or `error`, and `--log-format` takes
   `json` or `text`, in any case; anything else is refused at startup (exit code `2`). Logs go to

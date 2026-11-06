@@ -29,9 +29,9 @@
 //! `-containers false` as true plus an ignored `false`. Here only `--name` is accepted, and
 //! [`parse`] refuses every single-dash argument longer than one character before clap sees it:
 //! clap alone would read `-unknown` as the short cluster `-u` and print the help for `-hx`.
-//! Kept from Go: the names, defaults and help texts, last value wins, `--containers=false` and
-//! every `strconv.ParseBool` spelling, Go's duration syntax, a repeatable `--label` refusing an
-//! empty value, and exit 2 on a parse error.
+//! Kept from Go: the names, defaults and help texts, last value wins, `--containers=false`, a
+//! repeatable `--label` refusing an empty value, and exit 2 on a parse error. Bool flags take
+//! `true` or `false` only and `--poll-delay` takes humantime durations (see the README, Q17).
 
 use std::ffi::OsString;
 use std::fmt;
