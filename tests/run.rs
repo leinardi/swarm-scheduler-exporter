@@ -159,6 +159,7 @@ impl DockerApi for LifecycleDocker {
         &self,
         _since: Timestamp,
         _filters: &Filters,
+        _cancel: &CancellationToken,
     ) -> impl Future<Output = Result<Quiet, Error>> + Send {
         self.calls().events += 1;
         std::future::ready(Ok(Quiet))

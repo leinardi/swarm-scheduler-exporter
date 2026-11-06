@@ -33,7 +33,9 @@ use jiff::Timestamp;
 use tokio_util::sync::CancellationToken;
 
 use crate::docker::types::Event;
-use crate::docker::{DockerApi, Error, EventStream, Filters, StreamError, StreamErrorKind};
+use crate::docker::{
+    DockerApi, Error, ErrorKind, EventStream, Filters, StreamError, StreamErrorKind,
+};
 use tracing::{info, warn};
 
 use super::{BACKOFF_INITIAL_DELAY, BACKOFF_MAX_DELAY, BACKOFF_MULTIPLIER, ReconcilerHandle};
@@ -227,13 +229,14 @@ pub async fn follow_event_stream<D: DockerApi>(
         last_seen: None,
         end,
     };
-    let mut stream = match cancel
-        .run_until_cancelled(docker.events(since, filters))
-        .await
-    {
-        None => return failed(StreamEnd::Canceled),
-        Some(Err(error)) => return failed(StreamEnd::Connect(error)),
-        Some(Ok(stream)) => stream,
+    // `cancel` also interrupts the request itself; a shutdown is a cancellation, never a failed
+    // connect.
+    let mut stream = match docker.events(since, filters, cancel).await {
+        Err(error) if error.kind() == ErrorKind::Cancelled || cancel.is_cancelled() => {
+            return failed(StreamEnd::Canceled);
+        }
+        Err(error) => return failed(StreamEnd::Connect(error)),
+        Ok(stream) => stream,
     };
     let shared = &handle.shared;
     shared

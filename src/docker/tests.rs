@@ -24,6 +24,7 @@
 
 use std::time::Duration;
 
+use docker_client::CancellationToken;
 use docker_client::test_util::{FakeEngine, Reply};
 use jiff::Timestamp;
 
@@ -144,8 +145,7 @@ fn client(engine: &FakeEngine) -> Client {
         .user_agent("swarm-scheduler-exporter/test");
     Client::new(config)
         .unwrap()
-        .with_events_grace(Duration::from_millis(150))
-        .with_probe_timeout(Duration::from_millis(300))
+        .with_events_timeout(Duration::from_millis(300))
 }
 
 fn wire(engine: &FakeEngine) -> Vec<String> {
@@ -284,7 +284,10 @@ async fn events_send_since_and_filters() {
     let client = client(&engine);
     let since = Timestamp::from_nanosecond(1_789_902_299_700_000_000).unwrap();
     let filters = Filters::new().add("type", &["service", "node"]);
-    let mut stream = client.events(since, &filters).await.unwrap();
+    let mut stream = client
+        .events(since, &filters, &CancellationToken::new())
+        .await
+        .unwrap();
     let event = stream.next().await.unwrap();
     assert_eq!(
         (
@@ -313,7 +316,11 @@ async fn a_closed_stream_ends_with_eof_after_its_events() {
     let engine = FakeEngine::start(&[("/events", Reply::events(&[EVENT, EVENT]))]).unwrap();
     let client = client(&engine);
     let mut stream = client
-        .events(Timestamp::UNIX_EPOCH, &Filters::new())
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
         .await
         .unwrap();
     stream.next().await.unwrap();
@@ -325,7 +332,11 @@ async fn a_closed_stream_ends_with_eof_after_its_events() {
     let engine = FakeEngine::start(&[("/events", Reply::events(&[]))]).unwrap();
     let client = self::client(&engine);
     let mut stream = client
-        .events(Timestamp::UNIX_EPOCH, &Filters::new())
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(stream.next().await.unwrap_err().is_eof());
@@ -338,47 +349,99 @@ async fn a_refused_events_request_yields_no_stream() {
     let engine = FakeEngine::start(&[("/events", Reply::error(500, "no events today"))]).unwrap();
     let client = client(&engine);
     let error = client
-        .events(Timestamp::UNIX_EPOCH, &Filters::new())
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no events today"), "{error}");
 }
 
-/// A quiet stream, headers sent and nothing after, is connected once the grace has passed and
-/// the daemon has answered the probe.
+/// A quiet stream, headers sent and nothing after, is connected at once and stays so past the
+/// connect timeout, which bounds the headers alone.
 #[tokio::test]
-async fn a_quiet_stream_is_connected_once_the_daemon_answers_the_probe() {
-    let engine = FakeEngine::start(&[
-        ("/events", Reply::Stalled),
-        ("/version", Reply::ok(r#"{"ApiVersion":"1.51"}"#)),
-    ])
-    .unwrap();
+async fn a_quiet_stream_is_connected_once_the_headers_are_in() {
+    let engine = FakeEngine::start(&[("/events", Reply::Stalled)]).unwrap();
     let client = client(&engine);
-    let started = tokio::time::Instant::now();
-    let stream = client.events(Timestamp::UNIX_EPOCH, &Filters::new()).await;
-    assert!(stream.is_ok());
-    assert!(started.elapsed() >= Duration::from_millis(150));
-    assert!(
-        wire(&engine)
-            .iter()
-            .any(|line| line == "GET /v1.51/version")
-    );
+    let mut stream = client
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let quiet = tokio::time::timeout(Duration::from_millis(600), stream.next()).await;
+    assert!(quiet.is_err(), "the stream is quiet, not failed");
+    assert_eq!(wire(&engine).len(), 1, "no probe, one request");
 }
 
-/// A daemon that accepts the connection and never answers, to the stream and to the probe alike,
-/// is a failed connect: no stream, so no "connected", no backoff reset and no resync.
+/// A daemon that accepts the connection and never answers the headers is a failed connect.
 #[tokio::test]
 async fn a_daemon_that_never_answers_is_a_failed_connect() {
-    let engine =
-        FakeEngine::start(&[("/events", Reply::Stalled), ("/version", Reply::Stalled)]).unwrap();
+    let engine = FakeEngine::start(&[("/events", Reply::Silent)]).unwrap();
     let client = client(&engine);
     let started = tokio::time::Instant::now();
     let error = client
-        .events(Timestamp::UNIX_EPOCH, &Filters::new())
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Timeout, "{error}");
     assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+/// A shutdown during the request is `Cancelled`, which is not a failure of the engine.
+#[tokio::test]
+async fn a_cancelled_events_request_is_cancelled_not_a_timeout() {
+    let engine = FakeEngine::start(&[("/events", Reply::Silent)]).unwrap();
+    let client = Client::new(
+        Config::unix(engine.socket().to_string_lossy())
+            .api_version("1.51")
+            .unwrap(),
+    )
+    .unwrap();
+    let cancel = CancellationToken::new();
+    let canceller = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        canceller.cancel();
+    });
+    let error = client
+        .events(Timestamp::UNIX_EPOCH, &Filters::new(), &cancel)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
+}
+
+/// The events request carries the negotiated version, as the client's other calls do.
+#[tokio::test]
+async fn events_carry_the_negotiated_version() {
+    let engine = FakeEngine::start(&[
+        ("/version", Reply::ok(r#"{"ApiVersion":"1.43"}"#)),
+        ("/events", Reply::events(&[EVENT])),
+    ])
+    .unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
+    let mut stream = client
+        .events(
+            Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    stream.next().await.unwrap();
+    assert!(
+        wire(&engine)[1].starts_with("GET /v1.43/events?"),
+        "{:?}",
+        wire(&engine)
+    );
 }
 
 /// A refused negotiation (a socket proxy that does not forward `/version`) is logged and the

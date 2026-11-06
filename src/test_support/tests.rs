@@ -89,9 +89,13 @@ async fn fake_docker_returns_the_errors_it_is_given() {
     assert!(fake.container_inspect("c").await.is_err());
     assert!(fake.service_inspect("s").await.is_err());
     assert!(
-        fake.events(jiff::Timestamp::UNIX_EPOCH, &Filters::new())
-            .await
-            .is_err()
+        fake.events(
+            jiff::Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -99,7 +103,11 @@ async fn fake_docker_returns_the_errors_it_is_given() {
 async fn fake_events_stream_from_the_channel_and_end_when_it_closes() {
     let mut fake = FakeDocker::default();
     let mut stream = fake
-        .events(jiff::Timestamp::UNIX_EPOCH, &Filters::new())
+        .events(
+            jiff::Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -109,7 +117,11 @@ async fn fake_events_stream_from_the_channel_and_end_when_it_closes() {
 
     let sender = fake.event_sender();
     let mut stream = fake
-        .events(jiff::Timestamp::UNIX_EPOCH, &Filters::new())
+        .events(
+            jiff::Timestamp::UNIX_EPOCH,
+            &Filters::new(),
+            &tokio_util::sync::CancellationToken::new(),
+        )
         .await
         .unwrap();
     let event = Event {

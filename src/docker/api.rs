@@ -32,18 +32,18 @@
 //! by [`convert`](super::convert).
 
 use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use docker_client::bollard::Docker;
 use docker_client::bollard::errors::Error as BollardError;
-use docker_client::bollard::models::EventMessage;
 use docker_client::bollard::query_parameters::{
     EventsOptionsBuilder, ListContainersOptionsBuilder, ListNodesOptions, ListServicesOptions,
     ListTasksOptions,
 };
-use docker_client::{Config, ConnectError, connect, negotiate};
-use futures_util::{Stream, StreamExt as _};
+use docker_client::{
+    CancellationToken, Config, ConnectError, connect, events_established, negotiate,
+};
+use futures_util::StreamExt as _;
 use jiff::Timestamp;
 use tokio::sync::OnceCell;
 use tracing::warn;
@@ -63,17 +63,9 @@ pub const CONTAINERS_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 /// of a poll, so a slow daemon cannot hold a poll for the inspect cap times a per-call timeout.
 pub const CONTAINERS_INSPECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long [`DockerApi::events`] waits for the stream's first sign of life before it probes the
-/// daemon. bollard opens the request when the stream is first polled and says nothing when the
-/// response headers arrive, so a refused connection or a non-2xx answer shows up as the first
-/// item; a quiet stream has none, and is connected once this has passed and the probe
-/// ([`EVENTS_PROBE_TIMEOUT`]) was answered.
-pub const EVENTS_CONNECT_GRACE: Duration = Duration::from_secs(2);
-
-/// The bound of the liveness probe [`DockerApi::events`] makes once the grace has passed without a
-/// sign of life: a `GET /version` on a connection of its own, so a host that swallows packets or a
-/// daemon that accepts and never answers is a failed connect, not a connected stream.
-pub const EVENTS_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// The bound of an events request's connection and response headers: past it the listener has
+/// no stream, so it is not connected. The stream itself, once the engine accepted it, has none.
+pub const EVENTS_CONNECT_TIMEOUT: Duration = DOCKER_REQUEST_TIMEOUT;
 
 /// The Docker calls the collectors make. Every one but [`DockerApi::events`] is a single request
 /// and response, which the caller bounds with [`with_docker_timeout`] (or the container
@@ -103,12 +95,14 @@ pub trait DockerApi: Send + Sync {
         id: &str,
     ) -> impl Future<Output = Result<ContainerInspect, Error>> + Send;
 
-    /// `GET /events` from `since` with `filters`: resolves once the stream counts as connected
-    /// (Q6, see [`EVENTS_CONNECT_GRACE`]), and fails without a stream otherwise.
+    /// `GET /events` from `since` with `filters`: resolves once the engine has answered the
+    /// request's headers with a 2xx (Q6), however quiet the stream is after, and fails without a
+    /// stream otherwise (`ErrorKind::Cancelled` when `cancel` fires first).
     fn events(
         &self,
         since: Timestamp,
         filters: &Filters,
+        cancel: &CancellationToken,
     ) -> impl Future<Output = Result<Self::Events, Error>> + Send;
 }
 
@@ -118,13 +112,9 @@ pub trait EventStream: Send {
     fn next(&mut self) -> impl Future<Output = Result<Event, StreamError>> + Send;
 }
 
-type Wire = Pin<Box<dyn Stream<Item = Result<EventMessage, BollardError>> + Send>>;
-
 /// The event stream of the Docker client. Dropping it closes the connection.
 pub struct ClientEventStream {
-    stream: Wire,
-    /// What the connect wait already took off the stream.
-    first: Option<Result<Event, StreamError>>,
+    stream: docker_client::EventStream,
 }
 
 impl std::fmt::Debug for ClientEventStream {
@@ -137,9 +127,6 @@ impl std::fmt::Debug for ClientEventStream {
 
 impl EventStream for ClientEventStream {
     async fn next(&mut self) -> Result<Event, StreamError> {
-        if let Some(first) = self.first.take() {
-            return first;
-        }
         match self.stream.next().await {
             None => Err(StreamError::eof()),
             Some(Ok(message)) => Ok(convert::event(message)),
@@ -150,10 +137,10 @@ impl EventStream for ClientEventStream {
 
 /// How a bollard error ended the stream: a body that is not an event is a decode failure, a
 /// connection that broke or timed out is Go's unexpected EOF.
-fn stream_error(error: &BollardError) -> StreamError {
+fn stream_error(error: &docker_client::Error) -> StreamError {
     let kind = if matches!(
-        error,
-        BollardError::JsonDataError { .. } | BollardError::JsonSerdeError { .. }
+        error.engine(),
+        Some(BollardError::JsonDataError { .. } | BollardError::JsonSerdeError { .. })
     ) {
         StreamErrorKind::Decode
     } else {
@@ -180,9 +167,10 @@ pub struct Client {
     config: Config,
     /// The connection, made on the first call (the socket may not exist yet at startup) with the
     /// API version negotiated then, unless the configuration pins one.
-    docker: OnceCell<Docker>,
-    events_grace: Duration,
-    probe_timeout: Duration,
+    /// The negotiated [`Config`] goes with it: streaming calls and reconnects use it, so they
+    /// send the version the client does.
+    docker: OnceCell<(Docker, Config)>,
+    events_timeout: Duration,
 }
 
 impl Client {
@@ -200,28 +188,25 @@ impl Client {
         Ok(Self {
             config,
             docker: OnceCell::new(),
-            events_grace: EVENTS_CONNECT_GRACE,
-            probe_timeout: EVENTS_PROBE_TIMEOUT,
+            events_timeout: EVENTS_CONNECT_TIMEOUT,
         })
     }
 
-    /// The same client with another [`EVENTS_CONNECT_GRACE`], for tests.
+    /// The same client with another [`EVENTS_CONNECT_TIMEOUT`], for tests.
     #[must_use]
-    pub fn with_events_grace(mut self, grace: Duration) -> Self {
-        self.events_grace = grace;
-        self
-    }
-
-    /// The same client with another [`EVENTS_PROBE_TIMEOUT`], for tests.
-    #[must_use]
-    pub fn with_probe_timeout(mut self, timeout: Duration) -> Self {
-        self.probe_timeout = timeout;
+    pub fn with_events_timeout(mut self, timeout: Duration) -> Self {
+        self.events_timeout = timeout;
         self
     }
 
     /// The connection, made and negotiated by the first caller; a failed attempt is retried by
     /// the next.
     async fn docker(&self) -> Result<&Docker, Error> {
+        Ok(&self.connection().await?.0)
+    }
+
+    /// The connection and the config it was negotiated with.
+    async fn connection(&self) -> Result<&(Docker, Config), Error> {
         self.docker
             .get_or_try_init(|| async {
                 let docker = connect(self.config.clone()).map_err(|error| match error {
@@ -240,7 +225,7 @@ impl Client {
                             error = %error,
                             "API version negotiation was refused; using the client's default"
                         );
-                        Ok(docker)
+                        Ok((docker, self.config.clone()))
                     }
                     Err(error) => Err(Error::from(error)),
                 }
@@ -355,29 +340,17 @@ impl DockerApi for Client {
         &self,
         since: Timestamp,
         filters: &Filters,
+        cancel: &CancellationToken,
     ) -> Result<ClientEventStream, Error> {
-        let docker = self.docker().await?.clone();
+        let (_, config) = self.connection().await?;
         let since = since_parameter(since);
         let mut options = EventsOptionsBuilder::new().since(&since);
         if !filters.is_empty() {
             options = options.filters(&filters.to_map());
         }
-        let mut stream: Wire = Box::pin(docker.events(Some(options.build())));
-        let first = match tokio::time::timeout(self.events_grace, stream.next()).await {
-            Err(_quiet) => {
-                // Nothing yet: the daemon may be quiet or unreachable. Only an answer to a
-                // request of its own says which.
-                with_bare_timeout(self.probe_timeout, async {
-                    docker.version().await.map_err(engine_error)
-                })
-                .await?;
-                None
-            }
-            Ok(None) => Some(Err(StreamError::eof())),
-            Ok(Some(Err(error))) => return Err(engine_error(error)),
-            Ok(Some(Ok(message))) => Some(Ok(convert::event(message))),
-        };
-        Ok(ClientEventStream { stream, first })
+        let stream =
+            events_established(config, Some(options.build()), self.events_timeout, cancel).await?;
+        Ok(ClientEventStream { stream })
     }
 }
 

@@ -225,7 +225,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 [[package]]
 name = "clock"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=bfe8c584f65c4b28c73de91162740105fdc5f29c#bfe8c584f65c4b28c73de91162740105fdc5f29c"
+source = "git+https://github.com/leinardi/rust-common?rev=f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb#f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb"
 dependencies = [
  "jiff",
  "tokio",
@@ -307,13 +307,23 @@ dependencies = [
 [[package]]
 name = "docker-client"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=bfe8c584f65c4b28c73de91162740105fdc5f29c#bfe8c584f65c4b28c73de91162740105fdc5f29c"
+source = "git+https://github.com/leinardi/rust-common?rev=f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb#f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb"
 dependencies = [
  "bollard",
+ "bytes",
  "futures-util",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "serde_urlencoded",
+ "socket2",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
 ]
 
@@ -1064,7 +1074,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "repo-meta"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=bfe8c584f65c4b28c73de91162740105fdc5f29c#bfe8c584f65c4b28c73de91162740105fdc5f29c"
+source = "git+https://github.com/leinardi/rust-common?rev=f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb#f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb"
 dependencies = [
  "regex",
  "serde-saphyr",
@@ -1289,7 +1299,7 @@ dependencies = [
 [[package]]
 name = "service-kit"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=bfe8c584f65c4b28c73de91162740105fdc5f29c#bfe8c584f65c4b28c73de91162740105fdc5f29c"
+source = "git+https://github.com/leinardi/rust-common?rev=f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb#f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb"
 dependencies = [
  "bytes",
  "hyper",
@@ -1482,7 +1492,7 @@ dependencies = [
 [[package]]
 name = "testenv-core"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=bfe8c584f65c4b28c73de91162740105fdc5f29c#bfe8c584f65c4b28c73de91162740105fdc5f29c"
+source = "git+https://github.com/leinardi/rust-common?rev=f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb#f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb"
 dependencies = [
  "bollard",
  "jiff",
@@ -1681,7 +1691,7 @@ dependencies = [
 [[package]]
 name = "tracing-setup"
 version = "0.3.0"
-source = "git+https://github.com/leinardi/rust-common?rev=bfe8c584f65c4b28c73de91162740105fdc5f29c#bfe8c584f65c4b28c73de91162740105fdc5f29c"
+source = "git+https://github.com/leinardi/rust-common?rev=f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb#f3cfca9293f3e8fe2f9b5d3db6a6b47a872859cb"
 dependencies = [
  "serde_json",
  "tracing",

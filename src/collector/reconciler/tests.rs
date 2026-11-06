@@ -464,6 +464,7 @@ impl DockerApi for TestDocker {
         &self,
         since: Timestamp,
         _filters: &Filters,
+        _cancel: &CancellationToken,
     ) -> impl Future<Output = Result<TestStream, Error>> + Send {
         self.events_calls.fetch_add(1, Ordering::SeqCst);
         let mut state = self.lock();

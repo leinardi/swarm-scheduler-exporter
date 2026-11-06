@@ -97,6 +97,13 @@ fn fixture(set: &str, name: &str) -> String {
 /// The engine serving `set`: every list and inspect the collectors make, and `/events` streaming
 /// the lines of `events` then closing.
 fn engine(set: &str, events: &str) -> FakeEngine {
+    let events = fixture(set, events);
+    let lines: Vec<&str> = events.lines().filter(|line| !line.is_empty()).collect();
+    engine_answering_events(set, Reply::events(&lines))
+}
+
+/// The engine of [`engine`] with `/events` answering `events`.
+fn engine_answering_events(set: &str, events: Reply) -> FakeEngine {
     let mut routes: Vec<(String, Reply)> = vec![
         (
             "/services".into(),
@@ -126,9 +133,7 @@ fn engine(set: &str, events: &str) -> FakeEngine {
             Reply::ok(&fixture(set, &format!("container-{container}.json"))),
         ));
     }
-    let events = fixture(set, events);
-    let lines: Vec<&str> = events.lines().filter(|line| !line.is_empty()).collect();
-    routes.push(("/events".into(), Reply::events(&lines)));
+    routes.push(("/events".into(), events));
     let routes: Vec<(&str, Reply)> = routes
         .iter()
         .map(|(path, reply)| (path.as_str(), reply.clone()))
@@ -575,4 +580,138 @@ async fn a_closed_event_stream_reconnects_from_the_last_event() {
     )
     .await
     .or_panic();
+}
+
+/// What a listener against an engine with a scripted `/events` leaves behind, once `settle` held.
+struct EventsRun {
+    engine: FakeEngine,
+    metrics: Metrics,
+}
+
+/// A reconciler and a listener (events request bounded by `events_timeout`) against an engine
+/// whose `/events` answers `events`, until `settle` holds on what they did; then both are stopped.
+async fn run_listener_against(
+    events: Reply,
+    events_timeout: Duration,
+    settle: impl FnMut(&EventsRun) -> bool,
+) -> EventsRun {
+    let engine = engine_answering_events(FIXTURE_SETS[1], events);
+    let config = Config::unix(engine.socket().to_string_lossy())
+        .api_version("1.51")
+        .or_panic();
+    let client = Arc::new(
+        Client::new(config)
+            .or_panic()
+            .with_events_timeout(events_timeout),
+    );
+    let mut registry = Registry::default();
+    let metrics = configure_collectors_like_main(&mut registry);
+    let cancel = CancellationToken::new();
+    let reconciler = Reconciler::new(
+        Arc::clone(&client),
+        metrics.collectors.clone(),
+        Arc::new(SystemClock),
+    );
+    let handle = reconciler.handle();
+    let reconciler_task = tokio::spawn(reconciler.run(cancel.clone()));
+    handle.ready().await;
+    let listener = Listener::start(&client, &handle, SystemClock.now());
+    let run = EventsRun { engine, metrics };
+    let mut settle = settle;
+    wait_for("the listener to settle", || settle(&run)).await;
+    listener.stop().await;
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(5), reconciler_task)
+        .await
+        .or_panic()
+        .or_panic();
+    run
+}
+
+impl EventsRun {
+    fn connected_at(&self) -> i64 {
+        self.metrics
+            .collectors
+            .metrics
+            .timestamps()
+            .last_events_connect()
+    }
+
+    fn reconnects(&self) -> u64 {
+        self.metrics.collectors.metrics.events_reconnects()
+    }
+}
+
+/// An engine that never answers the events request's headers (a proxy that holds it) is not a
+/// connection: the listener never reports connected, requests no resync, and retries once the
+/// request timed out.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_events_request_whose_headers_never_arrive_is_not_connected() {
+    let run = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_listener_against(Reply::Silent, Duration::from_millis(200), |run| {
+            count(&run.engine, "/events") >= 2
+        }),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("timed out"));
+    assert_eq!(run.connected_at(), 0, "never connected");
+    assert!(run.reconnects() >= 1, "the failed connect is retried");
+    assert_eq!(
+        count(&run.engine, "/services"),
+        1,
+        "no resync was requested"
+    );
+}
+
+/// An engine that answers the headers and then says nothing for a long while is connected and
+/// stays so: the listener does not reconnect (no second request, no reconnect counted), and an
+/// event that finally arrives is dispatched, not dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quiet_events_stream_stays_connected_and_delivers_a_late_event() {
+    let event = format!(
+        "{}\n",
+        fixture(FIXTURE_SETS[1], "events-reconnect.jsonl").trim()
+    );
+    let run = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_listener_against(
+            Reply::HeadersThenBody {
+                body_delay: Duration::from_millis(1500),
+                body: event,
+            },
+            // Far shorter than the silence: the timeout bounds the headers, not the stream.
+            Duration::from_millis(300),
+            |run| count(&run.engine, "/services/svc-db") >= 1,
+        ),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("timed out"));
+    assert_ne!(run.connected_at(), 0, "connected once the headers came");
+    assert_eq!(
+        count(&run.engine, "/events"),
+        1,
+        "no reconnect during the silence"
+    );
+}
+
+/// A refused events request (a proxy answering 403, an engine answering 404) is a failed
+/// connect: not connected, no resync, retried.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_events_request_is_not_connected() {
+    for status in [403, 404] {
+        let run = tokio::time::timeout(
+            TEST_TIMEOUT,
+            run_listener_against(
+                Reply::error(status, "events are not allowed"),
+                Duration::from_secs(5),
+                |run| count(&run.engine, "/events") >= 2,
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("timed out"));
+        assert_eq!(run.connected_at(), 0, "{status}: never connected");
+        assert!(run.reconnects() >= 1, "{status}");
+        assert_eq!(count(&run.engine, "/services"), 1, "{status}: no resync");
+    }
 }

@@ -52,8 +52,7 @@ pub mod types;
 
 pub use api::{
     CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, Client, ClientEventStream,
-    DOCKER_REQUEST_TIMEOUT, DockerApi, EVENTS_CONNECT_GRACE, EVENTS_PROBE_TIMEOUT, EventStream,
-    with_docker_timeout,
+    DOCKER_REQUEST_TIMEOUT, DockerApi, EVENTS_CONNECT_TIMEOUT, EventStream, with_docker_timeout,
 };
 pub use docker_client::{Config, ConnectError};
 pub use error::{
