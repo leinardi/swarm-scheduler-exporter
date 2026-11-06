@@ -11,7 +11,7 @@ The README "Migrating from 1.x" section lists the only intended differences from
 
 ## Source map
 
-- Shared code is rust-common's (git dependency pinned by the release tag `v0.2.1`): go-compat,
+- Shared code is rust-common's (git dependency pinned by the release tag `v0.3.0`): go-compat,
   go-clock, go-slog, go-prom, go-http, docker-engine, service-kit, testenv-core, repo-meta. A
   per-project difference is a parameter there, never a fork here; fixes land in rust-common first.
 - `src/main.rs` (service-kit's runtime and lazy shutdown signal, one shutdown budget), `src/run.rs`
