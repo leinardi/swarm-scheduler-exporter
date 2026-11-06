@@ -165,7 +165,8 @@ fn image_builds_with_the_toolchain_release() {
 }
 
 /// Go: `TestActionPinRules`, the negative control of the step rules: each unpinned form is a
-/// problem, and another action's `toolchain` input is not a Rust toolchain.
+/// problem, and so is another action's `toolchain` input naming another release (repo-meta holds
+/// every CI toolchain input to the release, not only dtolnay/rust-toolchain's).
 #[test]
 fn rust_toolchain_pin_rules() {
     let sample = parse(
@@ -193,7 +194,7 @@ fn rust_toolchain_pin_rules() {
         "1.98.0",
         ToolchainRef::Input,
     );
-    assert_eq!(problems.len(), 3, "{problems:#?}");
+    assert_eq!(problems.len(), 4, "{problems:#?}");
 }
 
 /// The negative control of the image rule: a tag and a `RUST_VERSION` that differ, an image on
