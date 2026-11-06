@@ -6,9 +6,10 @@
   `.github/actions/setup-zigbuild`); version strings from `SWARM_SCHEDULER_EXPORTER_{VERSION,
   COMMIT,DATE}` at compile time.
 - Libraries: tokio, hyper + hyper-util (healthcheck client), clap, jiff, serde. From
-  leinardi/rust-common (git, pinned by `rev`): docker-engine (Docker client, rustls with ring),
-  go-http (HTTP server), go-prom (registry, text encoder), go-slog (logger), go-compat (Go
-  library ports), go-clock, service-kit, testenv-core, repo-meta.
+  leinardi/rust-common (git, pinned by the release tag `v0.2.0`, `version = "0.1"`):
+  docker-engine (Docker client, rustls with ring), go-http (HTTP server), go-prom (registry, text
+  encoder), go-slog (logger), go-compat (Go library ports), go-clock, service-kit, testenv-core,
+  repo-meta.
 - Lint and audit: clippy (workspace lints), rustfmt, cargo-machete, cargo-deny (`deny.toml`).
 - Build/infra: Makefile + `.mk/*.mk`; make-common snippets (`.mk/{docker,help,password,
   pre-commit,rust}.mk`) are vendored from `leinardi/make-common`: never hand-edit, refresh with
