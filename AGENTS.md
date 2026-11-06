@@ -97,19 +97,19 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v0.2.0"`) in `[workspace.dependencies]`, with
-`version = "0.1"` tracking the crates' package version, not the tag: go-compat (the Go library
-ports), go-clock (the `Clock` trait), go-slog (the logger), go-prom (the registry, the text
-exposition, the `process_*` collector and promhttp), go-http (the server), docker-engine (the
-Engine API client), service-kit (the runtime, the signals, the stamps), testenv-core (the
-harness's generic half) and repo-meta (the meta-tests' checks). The exporter keeps only what is
-its own.
+dependency pinned by the release tag (`tag = "v0.2.1"`) in `[workspace.dependencies]`, with
+`version = "0.2"`, the tag's `<major>.<minor>`: go-compat (the Go library ports), go-clock (the
+`Clock` trait), go-slog (the logger), go-prom (the registry, the text exposition, the `process_*`
+collector and promhttp), go-http (the server), docker-engine (the Engine API client), service-kit
+(the runtime, the signals, the stamps), testenv-core (the harness's generic half) and repo-meta
+(the meta-tests' checks). The exporter keeps only what is its own.
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
-  the `tag` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
-  `git diff Cargo.lock` touches only the rust-common lines.
+  the `tag` on every rust-common line (and `version` when the tag's `<major>.<minor>` moves),
+  run `cargo fetch` (not `cargo update -p`), and check that `git diff Cargo.lock` touches only
+  the rust-common lines.
 - The parameters this exporter passes, each its Go 1.x behaviour unless a README Q entry says
   otherwise:
   `ExpfmtVersion::V0_71_0` (prometheus/common v0.71.0's negotiation); go-http's `TIMEOUTS`
