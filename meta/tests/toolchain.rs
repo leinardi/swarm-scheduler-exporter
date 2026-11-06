@@ -196,8 +196,8 @@ fn rust_toolchain_pin_rules() {
     assert_eq!(problems.len(), 3, "{problems:#?}");
 }
 
-/// The negative control of the image rule: a tag and a `RUST_VERSION` that differ, and an image
-/// on another release, are refused.
+/// The negative control of the image rule: a tag and a `RUST_VERSION` that differ, an image on
+/// another release, and a `COPY --from=` of another release's image, are refused.
 #[test]
 fn image_rust_rules() {
     let dockerfile = meta::repo().read(DOCKERFILE);
@@ -214,6 +214,10 @@ fn image_rust_rules() {
         dockerfile
             .replacen(&argument, "ARG RUST_VERSION=1.0.0\n", 1)
             .replacen(&tag, "dhi.io/rust:1.0.0-", 1),
+        format!(
+            "{dockerfile}COPY --from=dhi.io/rust:1.97.0-debian13-dev /usr/local/rustup \
+             /usr/local/rustup\n"
+        ),
     ] {
         assert_ne!(broken, dockerfile, "a negative control changed nothing");
         assert!(!check(&broken), "{broken}");
@@ -418,6 +422,11 @@ fn no_meta_test_skips_on_a_missing_tool() {
         concat!("let found = env::split", "_paths(&paths);"),
         concat!("std::env::var", "_os(\x22PATH\x22)"),
         concat!("Command::new(\x22wh", "ich\x22)"),
+        concat!(
+            "use testenv_core::tool",
+            "gate::Gate;\n\nfn droast(gate: &Gate) {\n    let _ = gate.look",
+            "up(\x22droast\x22);\n}\n"
+        ),
     ] {
         let files = [("meta/tests/x.rs".to_owned(), sample.to_owned())];
         assert_eq!(

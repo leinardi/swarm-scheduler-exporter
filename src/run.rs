@@ -58,29 +58,11 @@ use go_prom::process::ProcessCollector;
 use go_prom::promhttp::HandlerMetrics;
 use go_prom::{Collector, RegisterError, Registry};
 use go_slog::{Attr, Logger};
+use service_kit::runtime::Exit;
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the
 /// runtime's shutdown all come out of it. 10s is Docker's default stop grace period.
 pub const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
-
-/// How [`run_with`] ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Exit {
-    /// The process exit code.
-    pub code: i32,
-    /// The shutdown deadline, once the server stopped: what is left of it bounds the runtime's
-    /// shutdown in `main`.
-    pub deadline: Option<Instant>,
-}
-
-impl Exit {
-    fn code(code: i32) -> Self {
-        Self {
-            code,
-            deadline: None,
-        }
-    }
-}
 
 /// What the families are built with.
 #[derive(Debug, Clone)]
@@ -410,7 +392,7 @@ pub async fn run_with<I, T>(
     args: I,
     getenv: impl Fn(&str) -> Option<String>,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) -> Exit
+) -> Exit<i32>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString>,
@@ -419,17 +401,17 @@ where
         Ok(args) => args,
         Err(exit) => {
             print(exit.stdout, &exit.message);
-            return Exit::code(exit.code);
+            return Exit::early(exit.code);
         }
     };
     // A probe of the running exporter, e.g. the image HEALTHCHECK: it touches no logger, no
     // metric and no Docker client.
     if args.healthcheck {
-        return Exit::code(run_healthcheck(&args.listen_addr, &mut io::stdout()).await);
+        return Exit::early(run_healthcheck(&args.listen_addr, &mut io::stdout()).await);
     }
     if let Err(error) = cli::check_poll_delay(args.poll_delay) {
         print(false, &format!("{error}\n"));
-        return Exit::code(1);
+        return Exit::early(1);
     }
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let logger = go_slog::configure(
@@ -460,7 +442,7 @@ where
         }
         Err(error) => {
             logger.error("invalid custom labels", &[Attr::error("err", &error)]);
-            return Exit::code(1);
+            return Exit::early(1);
         }
     };
     // Checked by check_poll_delay: at least one second.
@@ -486,7 +468,7 @@ where
         Ok(settings) => settings,
         Err(error) => {
             logger.error("docker client init failed", &[Attr::error("err", &error)]);
-            return Exit::code(1);
+            return Exit::early(1);
         }
     };
     if let Err(error) = docker::version::validate_client_api_version(settings.client_version()) {
@@ -494,7 +476,7 @@ where
             "unsupported Docker API version",
             &[Attr::error("err", &error)],
         );
-        return Exit::code(1);
+        return Exit::early(1);
     }
     let docker = Arc::new(Client::new(settings));
 
@@ -520,23 +502,5 @@ where
     Exit {
         code,
         deadline: deadline.get().copied(),
-    }
-}
-
-/// Resolves on the first SIGINT or SIGTERM. The handlers stay installed for the life of the
-/// process, so later signals are swallowed, as with Go's `signal.NotifyContext` until `run`
-/// returns. Signals cannot be watched when the runtime has no signal driver; then it never
-/// resolves.
-pub async fn shutdown_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut interrupt), Ok(mut terminate)) = (
-        signal(SignalKind::interrupt()),
-        signal(SignalKind::terminate()),
-    ) else {
-        return std::future::pending().await;
-    };
-    tokio::select! {
-        _ = interrupt.recv() => {}
-        _ = terminate.recv() => {}
     }
 }

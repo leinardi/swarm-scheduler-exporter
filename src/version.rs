@@ -25,34 +25,27 @@
 //! The build's version stamps, logged at startup and exported as `swarm_exporter_build_info`.
 //! They are read at compile time from `SWARM_SCHEDULER_EXPORTER_VERSION`, `_COMMIT` and `_DATE`
 //! (the make targets set them from git and the clock, as Go's `-ldflags -X` did), and fall back to
-//! Go's defaults when unset.
+//! Go's defaults when unset; a variable set to the empty string stamps the empty string, as
+//! `-X main.version=` did.
+
+use service_kit::{BuildInfo, Defaults, EmptyStamp, buildinfo};
+
+/// The stamps, read in this crate (`buildinfo!` expands its `option_env!` reads here).
+const BUILD: BuildInfo = buildinfo!(
+    "SWARM_SCHEDULER_EXPORTER",
+    Defaults {
+        version: "dev",
+        commit: "none",
+        date: "unknown",
+        empty: EmptyStamp::Kept,
+    },
+);
 
 /// The version, `dev` unless stamped.
-pub const VERSION: &str = stamp(option_env!("SWARM_SCHEDULER_EXPORTER_VERSION"), "dev");
+pub const VERSION: &str = BUILD.version;
 
 /// The commit, `none` unless stamped.
-pub const COMMIT: &str = stamp(option_env!("SWARM_SCHEDULER_EXPORTER_COMMIT"), "none");
+pub const COMMIT: &str = BUILD.commit;
 
 /// The build date, `unknown` unless stamped.
-pub const DATE: &str = stamp(option_env!("SWARM_SCHEDULER_EXPORTER_DATE"), "unknown");
-
-/// The stamp, or `default` when the variable was unset at build time. A variable set to the empty
-/// string stamps the empty string, as `-X main.version=` did.
-const fn stamp(value: Option<&'static str>, default: &'static str) -> &'static str {
-    match value {
-        Some(value) => value,
-        None => default,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unset_stamps_fall_back_to_go_defaults() {
-        assert_eq!(stamp(None, "dev"), "dev");
-        assert_eq!(stamp(Some(""), "dev"), "");
-        assert_eq!(stamp(Some("v1.2.3"), "dev"), "v1.2.3");
-    }
-}
+pub const DATE: &str = BUILD.date;

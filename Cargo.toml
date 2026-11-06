@@ -18,15 +18,15 @@ repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 # `[patch."https://github.com/leinardi/rust-common"]` table naming each crate with
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
-docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-go-clock = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-go-compat = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-go-http = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-go-prom = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-go-slog = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-service-kit = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
-testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "6d7bf52c92c8114a13dee785df4a17a90df2300f", version = "0.1" }
+docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+go-clock = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+go-compat = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+go-http = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+go-prom = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+go-slog = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+service-kit = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
+testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "f1c8ef2336cbe57119f058d11fcf4d34f0f3b52d", version = "0.1" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
@@ -91,6 +91,9 @@ go-prom.workspace = true
 # Go's keep-alive, the transparent gunzip) and TLS (`tls`: rustls on ring, Q5). No `write` or
 # `attach`: the exporter only reads (meta/tests/docker_boundary.rs checks it).
 docker-engine = { workspace = true, features = ["tcp", "tls"] }
+# The build stamps (buildinfo!), the runtime main builds, its shutdown bounded by the shutdown
+# budget (run_until_exit), and the lazy SIGINT and SIGTERM watch (rust-common).
+service-kit = { workspace = true, features = ["runtime"] }
 # Go's net/http server on hyper (rust-common): the mux's answers, header order and framing, the
 # four server deadlines, net.Listen's bind and the drain.
 go-http.workspace = true
@@ -107,14 +110,12 @@ clap = { version = "4.6.7", default-features = false, features = [
     "suggestions",
 ] }
 # The timer (TokioClock), the metrics listener, the reconciler's channels and select! for its
-# cancellable awaits, the multi-threaded runtime main builds (its worker count from
-# available_parallelism, Q12) and the SIGINT and SIGTERM watch.
+# cancellable awaits. The multi-threaded runtime (its worker count from available_parallelism,
+# Q12) and the signal driver come with service-kit's `runtime` feature.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",
     "net",
     "rt",
-    "rt-multi-thread",
-    "signal",
     "sync",
     "io-util",
     "macros",

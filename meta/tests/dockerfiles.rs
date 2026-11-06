@@ -247,10 +247,19 @@ fn runtime_stage_problems(dockerfile: &str) -> Vec<Problem> {
 
 /// The stamps of `dockerfile` and `makefile`, against src/version.rs and make-common's rust.mk.
 fn stamp_problems(dockerfile: &str, makefile: &str) -> Vec<Problem> {
+    stamp_problems_in(
+        &meta::repo().read(STAMPS.version_file),
+        dockerfile,
+        makefile,
+    )
+}
+
+/// [`stamp_problems`], with `version_rs` as the version module's text.
+fn stamp_problems_in(version_rs: &str, dockerfile: &str, makefile: &str) -> Vec<Problem> {
     let repo = meta::repo();
     let build = stage(dockerfile, "build");
     STAMPS.problems(&StampSources {
-        version_rs: &repo.read("src/version.rs"),
+        version_rs,
         build: &build,
         makefile,
         rust_mk: &repo.read(".mk/rust.mk"),
@@ -378,7 +387,8 @@ fn build_rules_refuse_each_edit() {
 }
 
 /// A negative control of the stamp rules: a stamp moved out of the building RUN, an undeclared
-/// argument, and a Makefile whose winning prefix is another.
+/// argument, a Makefile whose winning prefix is another, and a version module whose `buildinfo!`
+/// reads another prefix.
 #[test]
 fn stamp_rules_refuse_each_edit() {
     let content = shipped();
@@ -411,6 +421,16 @@ fn stamp_rules_refuse_each_edit() {
     ] {
         assert!(!stamp_problems(&content, &broken).is_empty(), "{broken}");
     }
+    // The version module's buildinfo! call, with another prefix, reads none of the stamps.
+    let version_rs = meta::repo().read(STAMPS.version_file);
+    assert!(stamp_problems_in(&version_rs, &content, &makefile).is_empty());
+    let call = "buildinfo!(\n    \"SWARM_SCHEDULER_EXPORTER\",";
+    assert!(version_rs.contains(call), "{call:?} is gone");
+    let broken = version_rs.replacen(call, "buildinfo!(\n    \"SWARM_SCHEDULER_EXPORTE\",", 1);
+    assert!(
+        !stamp_problems_in(&broken, &content, &makefile).is_empty(),
+        "a buildinfo! call with another prefix passes"
+    );
 }
 
 /// A negative control of the runtime rules: a shell, an extra label, the root user.
