@@ -25,20 +25,21 @@
 //! A fake Docker Engine serving the engine-wire captures over TCP, and the recorder of every
 //! request it gets: the port of the Go engine-wire test's `fakeEngine` and `requestRecorder`.
 //!
-//! It speaks just enough HTTP/1.1 for the client: keep-alive, `Content-Length` answers, and the
-//! event stream as a chunked body that ends with the terminating chunk, stays open until the
-//! client goes away, or is cut without the terminating chunk.
+//! It is built on `docker-engine`'s fake engine core (the listener, the HTTP/1.1 reading and
+//! writing, keep-alive, `Content-Length` answers and chunked bodies) and its recorder's
+//! normalisation; what it answers is this test's: the captures, the ping of a Docker 29 engine,
+//! the daemon's 404s and the scripted event streams, each of which ends with the terminating
+//! chunk, stays open until the client goes away, or is cut without the terminating chunk.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use serde_json::Value;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
+use docker_engine::test_util::fake_engine::{self, Connection, Listen, Request};
+use docker_engine::test_util::recorder::Target;
 
-use swarm_scheduler_exporter::docker::{Client, Settings};
+use swarm_scheduler_exporter::docker::{Client, settings_from_env};
 
 /// What the fake advertises on `/_ping`: the API version of a Docker 29 engine.
 pub const DAEMON_API_VERSION: &str = "1.56";
@@ -140,13 +141,8 @@ struct Shared {
 pub struct FakeEngine {
     shared: Arc<Shared>,
     addr: SocketAddr,
-    server: tokio::task::JoinHandle<()>,
-}
-
-impl Drop for FakeEngine {
-    fn drop(&mut self) {
-        self.server.abort();
-    }
+    // Serves until dropped.
+    _engine: fake_engine::FakeEngine,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -194,22 +190,22 @@ impl FakeEngine {
             recorder: Mutex::new(Recorder::default()),
             script: Mutex::new(Script::default()),
         });
-        let listener = TcpListener::bind(bind)
-            .await
-            .unwrap_or_else(|error| panic!("fake engine: bind: {error}"));
-        let addr = listener
-            .local_addr()
-            .unwrap_or_else(|error| panic!("fake engine: local address: {error}"));
         let server_shared = Arc::clone(&shared);
-        let server = tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(serve_connection(Arc::clone(&server_shared), stream));
-            }
-        });
+        let engine = fake_engine::FakeEngine::tcp(
+            bind,
+            fake_engine::responder(move |connection| {
+                serve_connection(Arc::clone(&server_shared), connection)
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("fake engine: bind: {error}"));
+        let Listen::Tcp(addr) = *engine.listen() else {
+            panic!("fake engine: not on TCP: {:?}", engine.listen());
+        };
         Self {
             shared,
             addr,
-            server,
+            _engine: engine,
         }
     }
 
@@ -223,7 +219,7 @@ impl FakeEngine {
     /// A Docker client built as [`FakeEngine::client`] builds it, with `host` as `DOCKER_HOST`.
     #[must_use]
     pub fn client_for(host: &str) -> Client {
-        let settings = Settings::from_env(|name| (name == "DOCKER_HOST").then(|| host.to_owned()))
+        let settings = settings_from_env(|name| (name == "DOCKER_HOST").then(|| host.to_owned()))
             .unwrap_or_else(|error| panic!("docker client: {error}"));
         Client::new(settings)
     }
@@ -282,48 +278,20 @@ fn read_fixture(shared: &Shared, name: &str) -> Option<Vec<u8>> {
     std::fs::read(shared.fixtures.join(base)).ok()
 }
 
-/// One request line and its headers.
-struct Head {
-    method: String,
-    target: String,
-    headers: Vec<(String, String)>,
-}
-
-async fn read_head(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> Option<Head> {
-    loop {
-        if let Some(end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
-            let text = String::from_utf8_lossy(&buffer[..end]).into_owned();
-            buffer.drain(..end + 4);
-            let mut lines = text.split("\r\n");
-            let mut request_line = lines.next()?.split(' ');
-            let method = request_line.next()?.to_owned();
-            let target = request_line.next()?.to_owned();
-            let headers = lines
-                .filter_map(|line| line.split_once(':'))
-                .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-                .collect();
-            return Some(Head {
-                method,
-                target,
-                headers,
-            });
-        }
-        let mut chunk = [0_u8; 4096];
-        match stream.read(&mut chunk).await {
-            Ok(0) | Err(_) => return None,
-            Ok(read) => buffer.extend_from_slice(&chunk[..read]),
-        }
-    }
-}
-
-async fn serve_connection(shared: Arc<Shared>, mut stream: TcpStream) {
-    let mut buffer = Vec::new();
-    while let Some(head) = read_head(&mut stream, &mut buffer).await {
-        let entry = record(&shared, &head);
+async fn serve_connection(shared: Arc<Shared>, mut connection: Connection) {
+    while let Some(request) = connection.read_request().await {
+        let entry = record(&shared, &request);
         let keep_open = if let Some(body) = shared.body_overrides.get(&entry.path) {
-            respond(&mut stream, 200, "application/json", body, &head.method).await
+            respond(
+                &mut connection,
+                200,
+                "application/json",
+                body,
+                &request.method,
+            )
+            .await
         } else {
-            route(&shared, &mut stream, &head, &entry).await
+            route(&shared, &mut connection, &request, &entry).await
         };
         if !keep_open {
             return;
@@ -334,26 +302,25 @@ async fn serve_connection(shared: Arc<Shared>, mut stream: TcpStream) {
 /// Answers one request; false when the connection is over.
 async fn route(
     shared: &Shared,
-    stream: &mut TcpStream,
-    head: &Head,
+    connection: &mut Connection,
+    request: &Request,
     entry: &RecordedRequest,
 ) -> bool {
+    let method = request.method.as_str();
     let path = entry.path.as_str();
     if path == "/_ping" {
-        let headers = format!(
-            "HTTP/1.1 200 OK\r\nApi-Version: {DAEMON_API_VERSION}\r\nOstype: linux\r\n\
-             Docker-Experimental: false\r\nSwarm: active/manager\r\n\
-             Content-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\n\r\n"
-        );
-        let mut out = headers.into_bytes();
-        if head.method == "GET" {
-            out.extend_from_slice(b"OK");
-        }
-        return stream.write_all(&out).await.is_ok();
+        let headers = [
+            ("Api-Version", DAEMON_API_VERSION),
+            ("Ostype", "linux"),
+            ("Docker-Experimental", "false"),
+            ("Swarm", "active/manager"),
+            ("Content-Type", "text/plain; charset=utf-8"),
+        ];
+        return connection.respond("200 OK", &headers, b"OK", method).await;
     }
     let fixture = |name: &str| read_fixture(shared, name);
     let answer = match path {
-        "/events" => return serve_events(shared, stream, &head.method).await,
+        "/events" => return serve_events(shared, connection, method).await,
         "/nodes" => fixture("nodes.json"),
         "/services" => fixture("services.json"),
         "/tasks" => fixture("tasks.json"),
@@ -361,15 +328,15 @@ async fn route(
         _ => None,
     };
     if let Some(body) = answer {
-        return respond(stream, 200, "application/json", &body, &head.method).await;
+        return respond(connection, 200, "application/json", &body, method).await;
     }
     if let Some(id) = path.strip_prefix("/services/") {
         return serve_object(
             shared,
-            stream,
+            connection,
             &format!("service-{id}.json"),
             &format!("service {id}"),
-            &head.method,
+            method,
         )
         .await;
     }
@@ -379,22 +346,22 @@ async fn route(
     {
         return serve_object(
             shared,
-            stream,
+            connection,
             &format!("container-{id}.json"),
             &format!("container {id}"),
-            &head.method,
+            method,
         )
         .await;
     }
     lock(&shared.recorder)
         .unexpected
-        .push(format!("{} {}", head.method, head.target));
+        .push(format!("{} {}", request.method, request.target));
     respond(
-        stream,
+        connection,
         404,
         "application/json",
         br#"{"message":"page not found"}"#,
-        &head.method,
+        method,
     )
     .await
 }
@@ -402,30 +369,30 @@ async fn route(
 /// An inspect: the fixture when there is one, else the daemon's 404.
 async fn serve_object(
     shared: &Shared,
-    stream: &mut TcpStream,
+    connection: &mut Connection,
     name: &str,
     what: &str,
     method: &str,
 ) -> bool {
     if let Some(body) = read_fixture(shared, name) {
-        return respond(stream, 200, "application/json", &body, method).await;
+        return respond(connection, 200, "application/json", &body, method).await;
     }
     let body = format!(r#"{{"message":"{what} not found"}}"#);
-    respond(stream, 404, "application/json", body.as_bytes(), method).await
+    respond(connection, 404, "application/json", body.as_bytes(), method).await
 }
 
-async fn serve_events(shared: &Shared, stream: &mut TcpStream, method: &str) -> bool {
-    let connection = {
+async fn serve_events(shared: &Shared, connection: &mut Connection, method: &str) -> bool {
+    let events = {
         let mut script = lock(&shared.script);
         let index = script.served;
         script.served += 1;
         script.connections.get(index).cloned()
     };
-    let Some(connection) = connection else {
+    let Some(events) = events else {
         // Recorded like every request; the tests count /events requests, so an extra one fails
         // them instead of hanging them.
         return respond(
-            stream,
+            connection,
             500,
             "application/json",
             br#"{"message":"unexpected extra events request"}"#,
@@ -433,200 +400,64 @@ async fn serve_events(shared: &Shared, stream: &mut TcpStream, method: &str) -> 
         )
         .await;
     };
+    // The head and every chunk in one write, as a daemon's buffered writer sends them.
     let mut out = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\n\r\n",
         shared.events_content_type
     )
     .into_bytes();
-    for chunk in connection.chunks.iter().filter(|chunk| !chunk.is_empty()) {
-        out.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
-        out.extend_from_slice(chunk);
-        out.extend_from_slice(b"\r\n");
+    for data in &events.chunks {
+        out.extend_from_slice(&fake_engine::chunk(data));
     }
-    if stream.write_all(&out).await.is_err() {
+    if !connection.write_all(&out).await {
         return false;
     }
-    match connection.end {
-        StreamEnd::Close => stream.write_all(b"0\r\n\r\n").await.is_ok(),
+    match events.end {
+        StreamEnd::Close => connection.end_chunks().await,
         StreamEnd::Cut => {
-            let _ = stream.shutdown().await;
+            connection.shutdown().await;
             false
         }
         StreamEnd::Hold => {
-            // Until the client goes away.
-            let mut scratch = [0_u8; 1024];
-            while matches!(stream.read(&mut scratch).await, Ok(read) if read > 0) {}
+            connection.hold_until_closed().await;
             false
         }
     }
 }
 
 async fn respond(
-    stream: &mut TcpStream,
+    connection: &mut Connection,
     status: u16,
     content_type: &str,
     body: &[u8],
     method: &str,
 ) -> bool {
-    let reason = match status {
-        200 => "OK",
-        404 => "Not Found",
-        _ => "Internal Server Error",
+    let status = match status {
+        200 => "200 OK",
+        404 => "404 Not Found",
+        _ => "500 Internal Server Error",
     };
-    let mut out = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    if method != "HEAD" {
-        out.extend_from_slice(body);
-    }
-    stream.write_all(&out).await.is_ok()
+    connection
+        .respond(status, &[("Content-Type", content_type)], body, method)
+        .await
 }
 
-fn record(shared: &Shared, head: &Head) -> RecordedRequest {
-    let (raw_path, raw_query) = head
-        .target
-        .split_once('?')
-        .map_or((head.target.as_str(), ""), |(path, query)| (path, query));
-    let raw_path = percent_decode(raw_path, false);
-    let (version_prefix, path) = split_version_prefix(&raw_path);
-    let query = parse_query(raw_query);
-    let header = |name: &str| -> Vec<&str> {
-        head.headers
-            .iter()
-            .filter(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-            .collect()
-    };
+fn record(shared: &Shared, request: &Request) -> RecordedRequest {
+    let target = Target::parse(&request.target);
     let entry = RecordedRequest {
-        method: head.method.clone(),
-        normalized: normalize(&head.method, &path, &query),
-        raw_path: raw_path.clone(),
-        raw_query: raw_query.to_owned(),
-        version_prefix,
-        path,
-        query,
-        accept: header("accept").join(", "),
-        user_agent: header("user-agent")
-            .first()
-            .copied()
-            .unwrap_or_default()
-            .to_owned(),
-        host: header("host")
-            .first()
-            .copied()
-            .unwrap_or_default()
-            .to_owned(),
+        method: request.method.clone(),
+        normalized: target.normalized(&request.method),
+        raw_path: target.raw_path,
+        raw_query: target.raw_query,
+        version_prefix: target.version_prefix,
+        path: target.path,
+        query: target.query,
+        accept: request.header("accept").join(", "),
+        user_agent: request.first_header("user-agent").to_owned(),
+        host: request.first_header("host").to_owned(),
     };
     let mut recorder = lock(&shared.recorder);
     recorder.all.push(entry.clone());
     recorder.phase.push(entry.clone());
     entry
-}
-
-/// `^(/v\d+\.\d+)(/.*)$`.
-fn split_version_prefix(path: &str) -> (String, String) {
-    let versioned = path.strip_prefix("/v").and_then(|rest| {
-        let slash = rest.find('/')?;
-        let (major, minor) = rest[..slash].split_once('.')?;
-        let digits =
-            |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-        (digits(major) && digits(minor)).then(|| slash + 2)
-    });
-    match versioned {
-        Some(split) => (path[..split].to_owned(), path[split..].to_owned()),
-        None => (String::new(), path.to_owned()),
-    }
-}
-
-/// Go's `url.ParseQuery`, pairs in order.
-fn parse_query(raw: &str) -> Vec<(String, String)> {
-    raw.split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| {
-            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            (percent_decode(key, true), percent_decode(value, true))
-        })
-        .collect()
-}
-
-/// `%XX` decoding, and `+` as a space in a query.
-fn percent_decode(text: &str, plus_is_space: bool) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' => {
-                let hex = bytes
-                    .get(index + 1..index + 3)
-                    .and_then(|hex| std::str::from_utf8(hex).ok())
-                    .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-                if let Some(byte) = hex {
-                    out.push(byte);
-                    index += 3;
-                    continue;
-                }
-                out.push(b'%');
-            }
-            b'+' if plus_is_space => out.push(b' '),
-            byte => out.push(byte),
-        }
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// The request without what legitimately varies: the version prefix (W1), the encoding of
-/// `filters` (decoded to a sorted canonical form) and the values of `since` and `until`.
-fn normalize(method: &str, path: &str, query: &[(String, String)]) -> String {
-    let mut pairs: Vec<(&str, String)> = query
-        .iter()
-        .map(|(key, value)| {
-            let value = match key.as_str() {
-                "filters" => canonical_filters(value),
-                "since" | "until" => "<time>".to_owned(),
-                _ => value.clone(),
-            };
-            (key.as_str(), value)
-        })
-        .collect();
-    pairs.sort_by(|left, right| left.0.cmp(right.0));
-    if pairs.is_empty() {
-        return format!("{method} {path}");
-    }
-    let joined: Vec<String> = pairs
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect();
-    format!("{method} {path}?{}", joined.join("&"))
-}
-
-/// Both filter encodings the Engine API has used, `{"key":{"value":true}}` and the legacy
-/// `{"key":["value"]}`, as `{key:[value,…];…}`.
-fn canonical_filters(raw: &str) -> String {
-    let Ok(Value::Object(terms)) = serde_json::from_str::<Value>(raw) else {
-        return format!("<invalid filters {raw}>");
-    };
-    let mut decoded: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (key, values) in terms {
-        let mut list: Vec<String> = match values {
-            Value::Object(set) => set.keys().cloned().collect(),
-            Value::Array(items) => items
-                .iter()
-                .map(|item| item.as_str().unwrap_or("<invalid>").to_owned())
-                .collect(),
-            other @ (Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)) => {
-                vec![format!("<invalid {other}>")]
-            }
-        };
-        list.sort();
-        decoded.insert(key, list);
-    }
-    let parts: Vec<String> = decoded
-        .iter()
-        .map(|(key, values)| format!("{key}:[{}]", values.join(",")))
-        .collect();
-    format!("{{{}}}", parts.join(";"))
 }

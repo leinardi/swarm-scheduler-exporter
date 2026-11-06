@@ -11,21 +11,22 @@ authors = ["Roberto Leinardi"]
 repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 
 # The crates shared with the other Rust services, from leinardi/rust-common: a git dependency
-# pinned by `rev` while the adoption is reviewed, then by release tag. `version` keeps cargo-deny's
+# pinned by `rev` (the tip of the branch that collects the adoption's fixes) while the adoption
+# is reviewed, then by release tag. `version` keeps cargo-deny's
 # `wildcards = "deny"` satisfied. Each member opts in with `<name>.workspace = true` and its own
 # features. Local work on both repositories: an uncommitted
 # `[patch."https://github.com/leinardi/rust-common"]` table naming each crate with
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
-docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-go-clock = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-go-compat = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-go-http = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-go-prom = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-go-slog = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-service-kit = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
-testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "7c3e4336087e31e166e2fe6be4f5562669d91df2", version = "0.1" }
+docker-engine = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+go-clock = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+go-compat = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+go-http = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+go-prom = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+go-slog = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+service-kit = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
+testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "5da82ad299ce541720fba968e8c4aa00eb24400f", version = "0.1" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
@@ -85,6 +86,11 @@ go-slog.workspace = true
 # The Prometheus Go client's registry and text exposition, byte for byte (rust-common), with
 # prometheus/common v0.71.0's content negotiation (ExpfmtVersion::V0_71_0).
 go-prom.workspace = true
+# The Docker Engine client (rust-common): moby client v0.6.0's requests over HTTP/1, its API
+# version negotiation, error wording and event stream, on unix sockets, TCP (`tcp`: DOCKER_HOST,
+# Go's keep-alive, the transparent gunzip) and TLS (`tls`: rustls on ring, Q5). No `write` or
+# `attach`: the exporter only reads (meta/tests/docker_boundary.rs checks it).
+docker-engine = { workspace = true, features = ["tcp", "tls"] }
 # Go's net/http server on hyper (rust-common): the mux's answers, header order and framing, the
 # four server deadlines, net.Listen's bind and the drain.
 go-http.workspace = true
@@ -100,9 +106,9 @@ clap = { version = "4.6.7", default-features = false, features = [
     "error-context",
     "suggestions",
 ] }
-# The timer (TokioClock), the sockets, tasks and lock of the Docker client, select! for the
-# cancellable awaits of the reconciler, the multi-threaded runtime main builds (its worker count
-# from available_parallelism, Q12) and the SIGINT and SIGTERM watch.
+# The timer (TokioClock), the metrics listener, the reconciler's channels and select! for its
+# cancellable awaits, the multi-threaded runtime main builds (its worker count from
+# available_parallelism, Q12) and the SIGINT and SIGTERM watch.
 tokio = { version = "1.54.1", default-features = false, features = [
     "time",
     "net",
@@ -115,12 +121,9 @@ tokio = { version = "1.54.1", default-features = false, features = [
 ] }
 # CancellationToken, Go's context cancellation for the long-lived tasks.
 tokio-util = { version = "0.7.20", default-features = false }
-# The Docker client's transparent gunzip on TCP (go-prom brings its own for /metrics); the
-# pure-Rust backend, so no C zlib.
-flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
-# The Docker client (S1): HTTP/1 only, on connections it dials and pools itself. The metrics and
-# health endpoints' status and header types (their server is go-http's). The healthcheck (S3):
-# hyper-util's legacy client, which reads no proxy variable and follows no redirect.
+# The metrics and health endpoints' status and header types (their server is go-http's). The
+# healthcheck (S3): hyper-util's legacy client, which reads no proxy variable and follows no
+# redirect.
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", default-features = false, features = [
     "tokio",
@@ -129,19 +132,12 @@ hyper-util = { version = "0.1.21", default-features = false, features = [
 ] }
 http-body-util = "0.1.5"
 bytes = "1.12.1"
-# TLS to the daemon (Q5): ring, TLS 1.2 and 1.3, the system roots plus ca.pem, and PEM parsing
-# through rustls-pki-types rather than rustls-pemfile.
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
-rustls-pki-types = { version = "1.15.1", features = ["std"] }
-rustls-native-certs = "0.8.5"
-# Go's TCP keep-alive settings on the Docker connection.
-socket2 = { version = "0.6.5", features = ["all"] }
-# The daemon's JSON (error bodies here; the API types in plan phase 8).
+# The Engine API types' decoding (docker-engine's decoders).
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
 
 [dev-dependencies]
+# The fake engine core, its request recorder and OrPanic, for the Docker tests.
+docker-engine = { workspace = true, features = ["tcp", "tls", "test-util"] }
 # The Go tests' gatherSeries and seriesID, for the collectors' tests.
 go-prom = { workspace = true, features = ["testing"] }
 # The Go wire captures' replay (read_captures, replay, exchange).
@@ -157,8 +153,12 @@ tokio = { version = "1.54.1", default-features = false, features = [
     "io-util",
     "sync",
 ] }
-# Test certificates for the Docker TLS tests, made at run time as the Go tests make theirs.
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+# The gzip exposition's decoding (tests/exposition.rs); the pure-Rust backend, so no C zlib.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+# The listener's socket options in the server tests.
+socket2 = { version = "0.6.5", features = ["all"] }
+# The Engine API fixtures of tests/run.rs.
+serde_json = "1.0.154"
 
 [profile.release]
 lto = true

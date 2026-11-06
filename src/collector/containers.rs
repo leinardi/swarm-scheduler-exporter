@@ -34,7 +34,8 @@ use tokio::time::Instant;
 
 use crate::docker::types::{ContainerInspect, Labels};
 use crate::docker::{
-    CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, DockerApi, with_deadline, with_timeout,
+    CONTAINERS_INSPECT_TIMEOUT, CONTAINERS_LIST_TIMEOUT, DockerApi, with_bare_deadline,
+    with_bare_timeout,
 };
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
 use go_compat::strings::{equal_fold, to_lower, trim_space};
@@ -236,7 +237,7 @@ impl ContainersState {
         if !self.config.enabled {
             return Ok(Vec::new());
         }
-        let list = with_timeout(CONTAINERS_LIST_TIMEOUT, docker.container_list())
+        let list = with_bare_timeout(CONTAINERS_LIST_TIMEOUT, docker.container_list())
             .await
             .map_err(|error| CallError::new("container list", error))?;
 
@@ -316,7 +317,7 @@ impl ContainersState {
                 continue;
             }
             inspected += 1;
-            match with_deadline(deadline, docker.container_inspect(&row.id)).await {
+            match with_bare_deadline(deadline, docker.container_inspect(&row.id)).await {
                 Err(error) => {
                     self.logger.warn(
                         "container inspect failed; using base state",

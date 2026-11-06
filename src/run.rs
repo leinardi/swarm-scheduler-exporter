@@ -47,7 +47,7 @@ use crate::collector::reconciler::{
 use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
-use crate::docker::{self, Client, DockerApi, Settings};
+use crate::docker::{self, Client, DockerApi};
 use crate::healthcheck::run_healthcheck;
 use crate::server::{self, App, HealthFn, MetricsFn, MetricsRequest};
 use crate::version::{COMMIT, DATE, VERSION};
@@ -482,7 +482,7 @@ where
 
     // Configured from DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY.
     // The API version is negotiated lazily, on the first request.
-    let settings = match Settings::from_env(&getenv) {
+    let settings = match docker::settings_from_env(&getenv) {
         Ok(settings) => settings,
         Err(error) => {
             logger.error("docker client init failed", &[Attr::error("err", &error)]);
