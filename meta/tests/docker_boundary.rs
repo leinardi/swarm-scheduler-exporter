@@ -268,6 +268,10 @@ static WRITE_CALL: LazyLock<Regex> = LazyLock::new(|| {
 /// The event stream and the version negotiation, the two calls that are not `list_*` or
 /// `inspect_*`.
 static EVENTS_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\.\s*events\s*\("));
+/// The established event stream of `docker-client`, which the exporter's client calls instead of
+/// bollard's lazy `events`.
+static EVENTS_ESTABLISHED_CALL: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"\bevents_established\s*\("));
 static VERSION_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\.\s*version\s*\("));
 static NEGOTIATE_CALL: LazyLock<Regex> = LazyLock::new(|| regex(r"\bnegotiate(?:_version)?\s*\("));
 static METHOD: LazyLock<Regex> = LazyLock::new(|| regex(r"\bMethod::[A-Za-z_]+"));
@@ -347,6 +351,11 @@ fn client_violations(sources: &[(&str, &str)], env: &str) -> Vec<String> {
                 .map(|_| ("events".to_owned(), "events".to_owned())),
         );
         sections.extend(
+            EVENTS_ESTABLISHED_CALL
+                .find_iter(text)
+                .map(|_| ("events".to_owned(), "events".to_owned())),
+        );
+        sections.extend(
             VERSION_CALL
                 .find_iter(text)
                 .map(|_| ("version".to_owned(), "version".to_owned())),
@@ -367,6 +376,15 @@ fn client_violations(sources: &[(&str, &str)], env: &str) -> Vec<String> {
     }
     if calls == 0 {
         violations.push("no client call found: the call patterns no longer match".to_owned());
+    }
+    let events_calls = sources
+        .iter()
+        .any(|(_, text)| EVENTS_CALL.is_match(text) || EVENTS_ESTABLISHED_CALL.is_match(text));
+    if !events_calls {
+        violations.push(
+            "no events call found: the exporter follows events, so the events call patterns no longer match"
+                .to_owned(),
+        );
     }
     violations
 }
@@ -640,7 +658,7 @@ const SOURCES_OK: &[(&str, &str)] = &[
         r"
 async fn service_list(&self) { self.docker.list_services(None).await }
 async fn container_inspect(&self) { self.docker.inspect_container(id, None).await }
-async fn events(&self) { self.docker.events(Some(options)) }
+async fn events(&self) { events_established(&config, Some(options), timeout, &cancel).await }
 async fn version(&self) { negotiate(docker, &self.config).await }
 ",
     ),
@@ -750,6 +768,24 @@ fn client_rules_reject_each_escape() {
             .iter()
             .any(|violation| violation.contains("no client call")),
         "{pathless:?}"
+    );
+}
+
+/// A client with no events call at all is a violation: the patterns would have stopped matching.
+#[test]
+fn a_client_without_an_events_call_is_rejected() {
+    let no_events = client_violations(
+        &[(
+            "src/docker/api.rs",
+            "async fn service_list(&self) { self.docker.list_services(None).await }\n",
+        )],
+        ENV,
+    );
+    assert!(
+        no_events
+            .iter()
+            .any(|violation| violation.contains("no events call found")),
+        "{no_events:?}"
     );
 }
 
