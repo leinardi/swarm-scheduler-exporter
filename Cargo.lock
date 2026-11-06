@@ -254,8 +254,8 @@ dependencies = [
 
 [[package]]
 name = "docker-engine"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "bytes",
  "flate2",
@@ -420,8 +420,8 @@ dependencies = [
 
 [[package]]
 name = "go-clock"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "jiff",
  "tokio",
@@ -429,16 +429,16 @@ dependencies = [
 
 [[package]]
 name = "go-compat"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "jiff",
 ]
 
 [[package]]
 name = "go-http"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "bytes",
  "go-clock",
@@ -454,8 +454,8 @@ dependencies = [
 
 [[package]]
 name = "go-prom"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "flate2",
  "go-compat",
@@ -463,8 +463,8 @@ dependencies = [
 
 [[package]]
 name = "go-slog"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "go-clock",
  "go-compat",
@@ -543,8 +543,8 @@ dependencies = [
 
 [[package]]
 name = "http-framing"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 
 [[package]]
 name = "httparse"
@@ -979,8 +979,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-meta"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "go-compat",
  "regex",
@@ -1205,8 +1205,8 @@ dependencies = [
 
 [[package]]
 name = "service-kit"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "tokio",
 ]
@@ -1375,8 +1375,8 @@ dependencies = [
 
 [[package]]
 name = "testenv-core"
-version = "0.1.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v0.2.0#9bea100d0c0c52248d1adbd3bb9be0fe56e6d33e"
+version = "0.2.1"
+source = "git+https://github.com/leinardi/rust-common?tag=v0.2.1#569a99a81fc58964f3cd1c3c12e15f823be9cf29"
 dependencies = [
  "bollard",
  "go-compat",
