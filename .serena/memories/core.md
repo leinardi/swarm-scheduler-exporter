@@ -12,7 +12,7 @@ The README "Migrating" section lists the intended differences from 1.x (Go) and 
 
 ## Source map
 
-- Shared code is rust-common's (git dependency pinned by tag `v0.4.0`): clock,
+- Shared code is rust-common's (git dependency pinned by release tag (`tag`)): clock,
   tracing-setup, docker-client, service-kit, testenv-core,
   repo-meta. A per-project difference is a parameter there, never a fork here; fixes land in
   rust-common first.
@@ -39,8 +39,7 @@ The README "Migrating" section lists the intended differences from 1.x (Go) and 
   behind its `integration` feature; `tests/integration/` is the `harness = false` suite that runs
   the release binary (`SSE_IT_BINARY`).
 - `meta/`: meta-tests over the repository, repo-meta's checks with this repository's parameters
-  (toolchain pins, Dockerfile, docs links, licence headers, suppression ratchet) plus the local
-  Docker SDK boundary, no Docker needed.
+  (toolchain pins, Dockerfile) plus the local Docker SDK boundary, no Docker needed.
 - User-facing contract: the README Metrics section (and alert examples).
 
 ## Non-obvious anchors

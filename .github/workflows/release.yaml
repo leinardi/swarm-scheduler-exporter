@@ -111,16 +111,17 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # What dtolnay/rust-toolchain exported to every later step of the job.
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: 1.98.1
-          components: clippy, rustfmt
+        run: rustup toolchain install --no-self-update
 
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -157,6 +158,10 @@ jobs:
       - audit
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # What dtolnay/rust-toolchain exported to every later step of the job.
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
     # Created on first run with no protection rules, which changes nothing by
     # itself. Add a deployment branch rule limiting it to `master`, and required
     # reviewers if a release should need a second pair of eyes - docs/release.md.
@@ -180,10 +185,7 @@ jobs:
       # rebuilds with the same one, which is what makes its binaries
       # byte-identical.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: 1.98.1
-          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+        run: rustup toolchain install --no-self-update
 
       - name: Set up cargo-zigbuild
         uses: ./.github/actions/setup-zigbuild
@@ -587,6 +589,67 @@ jobs:
             SCANNED+=("$platform=$PLATFORM_DIGEST")
           done
           echo "platforms=${SCANNED[*]}" >> "$GITHUB_OUTPUT"
+
+      # Running the arm64 image on the amd64 runner needs binfmt emulation. The binfmt image is
+      # pinned by digest, like every image this workflow runs; the build itself is cross-compiled
+      # and needs none.
+      - name: Set up QEMU
+        if: steps.mode.outputs.build == 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
+      # What the built image reports as its version and commit is the release's own: a build that
+      # lost a build argument ships an image that says dev or unknown, and the scan cannot see it.
+      # The binary has no --version, so each platform image is started and its startup line is
+      # read. Runs against the digests that were just scanned in the job-local registry, before the
+      # tag is pushed, so a failure leaves no tag and nothing published. No Docker socket is
+      # mounted: the exporter logs the line, then retries until it is stopped.
+      - name: Smoke-test the version stamps of both platform images
+        if: steps.mode.outputs.build == 'true'
+        env:
+          SCANNED: ${{ steps.scan.outputs.platforms }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SCANNED" ]; then
+            echo "The scan step recorded no platform image to test." >&2
+            exit 1
+          fi
+          CID=""
+          cleanup() {
+            if [ -n "$CID" ]; then
+              docker rm -f "$CID" >/dev/null 2>&1 || echo "Could not remove the container $CID." >&2
+            fi
+          }
+          trap cleanup EXIT
+          for entry in $SCANNED; do
+            platform="${entry%%=*}"
+            ref="$LOCAL_IMAGE@${entry#*=}"
+            CID=$(docker run -d --platform "$platform" "$ref")
+            LINE=""
+            for _ in $(seq 1 30); do
+              LOGS=$(docker logs "$CID" 2>&1)
+              if LINE=$(grep -m1 -F ' starting version=' <<<"$LOGS"); then
+                break
+              fi
+              sleep 1
+            done
+            if [ -z "$LINE" ]; then
+              echo "$platform ($ref) logged no startup line within 30 seconds." >&2
+              docker logs "$CID" >&2
+              exit 1
+            fi
+            echo "$platform: $LINE"
+            if ! grep -qF "version=\"$VERSION\"" <<<"$LINE" || ! grep -qF "commit=\"$COMMIT\"" <<<"$LINE"; then
+              echo "$platform ($ref) does not report version $VERSION and commit $COMMIT." >&2
+              exit 1
+            fi
+            cleanup
+            CID=""
+          done
 
       # The last look at the tags before the point of no return. Concurrency
       # serializes the workflow, but a tag can also arrive from outside it, and

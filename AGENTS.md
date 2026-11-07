@@ -32,11 +32,9 @@ make docker-run           # runs the image locally (read-only, no capabilities),
 ```
 
 The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the
-exporter, and need no Docker: the toolchain pins and the always-run hooks (`toolchain.rs`), the
-plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
-the Docker SDK boundary (`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the
-Markdown links (`docs.rs`) and the two scripts below (`license_headers.rs`, `suppressions.rs`).
-None of them skips on a missing tool.
+exporter, and need no Docker: the toolchain pins (`toolchain.rs`), the Dockerfile's frontend and
+base images (`dockerfiles.rs`), the Docker SDK boundary (`docker_boundary.rs`), and the workspace
+lints (`workspace_lints.rs`).
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -100,13 +98,13 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 - `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
-- `scripts/` — the licence-header check, the suppression ratchet, the make-common bootstrap and the
+- `scripts/` — the licence-header check, the make-common bootstrap and the
   Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`).
 
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v0.4.0"`, with `version = "0.4"`) in
+dependency pinned by the release tag (`tag = "v1.0.0"`, with `version = "1.0"`) in
 `[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
@@ -116,7 +114,7 @@ meta-tests' checks). The exporter keeps only what is its own.
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
-  the `rev` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
+  the `tag` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
   `git diff Cargo.lock` touches only the rust-common lines.
 - The parameters this exporter passes (the README's Migrating section lists what differs from 1.x
   and 2.x):
@@ -195,18 +193,11 @@ The ones to keep in mind while writing code:
 - An older test may carry its Go provenance (`/// Go: TestX`) as a doc comment; new tests do not
   need one, and sources name no Go source file.
 
-## Licence headers and suppressions
+## Licence headers
 
 Every Rust and shell source, Dockerfile, Makefile and repo-local `.mk` snippet carries the MIT
 header, with the year of the file's first commit (`scripts/check-license-headers.sh`, the
 `check-license-headers` hook). The make-common files are exempt: they carry make-common's own.
-
-Every in-file suppression is counted per rule against `.suppressions-baseline` by the
-`check-suppressions` hook (`scripts/check-suppressions.sh`), in five families: each lint of an
-`#[expect(...)]` or `#[allow(...)]`, `# shellcheck disable=`, `# droast ignore=` and
-`# droast global ignore=`. A commit that adds one, swaps one or moves one must change the
-baseline too, and so must one whose count fell below it: run
-`scripts/check-suppressions.sh --update` and commit the baseline with the change.
 
 ## Validation matrix
 
@@ -217,13 +208,12 @@ Run before considering an edit done. `make check` applies to every row.
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
 | `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
-| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles` |
+| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
-| `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
-| `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
+| `scripts/check-license-headers.sh` | `pre-commit run check-license-headers --all-files` |
 | `meta/**` | `cargo test -p meta` |
-| `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
+| `**/*.md` | `pre-commit run lychee markdownlint-cli2 --files <file>`; prose wraps at 100 columns |
 
 To work on a shared crate from here, add an uncommitted
 `[patch."https://github.com/leinardi/rust-common"]` table to the root `Cargo.toml`, one

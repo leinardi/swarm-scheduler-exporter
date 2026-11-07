@@ -244,19 +244,15 @@ string that no longer matches the code is a finding.
 
 ### Meta-tests must not pass on nothing
 
-A meta-test guards a claim nothing else checks: the toolchain pins and the closed tool list, the
-always-run hooks and vacuous flags (`meta/tests/toolchain.rs`), the plain/integration separation
-(`integration_targets.rs`), the Dockerfile's posture (`dockerfiles.rs`), the Docker boundary
-(`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the Markdown links
-(`docs.rs`), the licence headers and the suppression ratchet (`license_headers.rs`,
-`suppressions.rs`). Run the vacuity pass on every one the diff touches, or whose input the diff
-changes: try to make the guarded thing go wrong and see whether the test still notices. A test
-that passes because its walk found no file, its regex matched nothing, its rule never ran or its
-tool was missing is a false pass (no meta-test may skip on one:
-`no_meta_test_skips_on_a_missing_tool`). Every rule needs a negative control
-that fails on a planted violation, and a non-empty-input assertion. A change that loosens one —
-a wider allowlist, a narrower walk, a dropped negative control, a pattern that no longer
-matches the file it reads — is a finding unless it says why.
+A meta-test guards a claim nothing else checks: the toolchain pins and the vacuous flags
+(`meta/tests/toolchain.rs`), the Dockerfile's frontend and bases (`dockerfiles.rs`), the Docker
+boundary (`docker_boundary.rs`) and the workspace lints (`workspace_lints.rs`). Run the vacuity
+pass on every one the diff touches, or whose input the diff changes: try to make the guarded thing
+go wrong and see whether the test still notices. A test that passes because its walk found no
+file, its regex matched nothing or its rule never ran is a false pass. Every rule needs a negative
+control that fails on a planted violation, and a non-empty-input assertion. A change that
+loosens one — a wider allowlist, a narrower walk, a dropped negative control, a pattern that no
+longer matches the file it reads — is a finding unless it says why.
 
 ## 4. Adversarial passes — language-agnostic
 
@@ -310,8 +306,7 @@ intent was. If one exists, is the diff removing exactly what that line retires a
 ### (c) A new suppression has to show its work
 
 Any new `#[expect(...)]`, `# shellcheck disable=` or `# droast ignore=` is a standing decision to
-let a linter stay silent. `scripts/check-suppressions.sh` makes the count visible -- the commit
-has to change `.suppressions-baseline` -- but it cannot judge the reason. So demand the attempt:
+let a linter stay silent, and nothing but the reviewer judges the reason. So demand the attempt:
 for `too_many_lines`, was the obvious extraction tried and what broke? For a cast lint, why is
 the range safe? For `struct_excessive_bools`, why is an enum wrong here?
 A suppression whose reason comment restates the rule instead of explaining why the fix does not
@@ -351,7 +346,7 @@ treat a failure it caused as a confirmed finding with the output attached:
 | --- | --- |
 | any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` (build, fmt, clippy, tests), then `make check` |
 | `src/collector/**`, `src/docker/**`, `testenv/**` | also `make test-integration` (a DinD Swarm; needs Docker with privileged containers) |
-| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `rev` bump | `make rust-deny` (cargo-deny; network required) |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny` (cargo-deny; network required) |
 | `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
 | `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, plus `make docker-build` |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
