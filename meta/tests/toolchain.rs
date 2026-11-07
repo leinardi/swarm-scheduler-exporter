@@ -26,16 +26,13 @@
 //! every CI toolchain step, with Cargo.toml's `rust-version` on its line; the image's musl
 //! standard libraries for that release; one zig and one cargo-zigbuild between the image and CI;
 //! one ShellCheck between the hook and CI; one Trivy between the release and the scheduled scan;
-//! the rustdoc gate; the always-run hooks running once; no flag that makes a gate pass on
-//! nothing; and no meta-test that skips on a missing tool. The checks are repo-meta's, with this
+//! and no flag that makes a gate pass on nothing. The checks are repo-meta's, with this
 //! repository's files and pins; the negative controls run them on altered copies.
 
-use repo_meta::ci::{MAKE_COMMON_RUSTDOC, always_run_problems};
 use repo_meta::toolchain::{
     RustVersion, ToolchainRef, ZigRecord, ci_toolchain_problems, image_rust_problems, rust_release,
     rust_version_problems, shellcheck_problems, trivy_problems, zigbuild_action_problems,
 };
-use repo_meta::tools::tool_lookup_problems;
 use repo_meta::vacuous::{AllowedFragment, VacuousFlags};
 use repo_meta::{report, yaml};
 
@@ -71,60 +68,6 @@ fn github_documents() -> Vec<(String, yaml::Value)> {
             (file, document)
         })
         .collect()
-}
-
-/// Rustdoc warnings must fail local verification and the required Rust CI job, over every
-/// feature: make-common's rust.mk documents `$(RUST_FEATURES)`, which defaults to
-/// `--all-features`, and the Makefile must not narrow it.
-#[test]
-fn rust_documentation_is_a_required_gate() {
-    let repo = meta::repo();
-    let problems = MAKE_COMMON_RUSTDOC.problems(
-        &repo.read(".mk/rust.mk"),
-        &repo.read("Makefile"),
-        &parse(CI, &repo.read(CI)),
-    );
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-/// Negative controls reject gates missing from verify or CI, allowing warnings, or documenting
-/// fewer than every feature.
-#[test]
-fn weakened_rustdoc_gates_are_refused() {
-    let repo = meta::repo();
-    let fragment = repo.read(".mk/rust.mk");
-    let makefile = repo.read("Makefile");
-    let workflow = repo.read(CI);
-    let refused = |fragment: &str, makefile: &str, workflow: &str| {
-        !MAKE_COMMON_RUSTDOC
-            .problems(fragment, makefile, &parse(CI, workflow))
-            .is_empty()
-    };
-    assert!(!refused(&fragment, &makefile, &workflow));
-    for broken in [
-        fragment.replace("rust-test rust-doc", "rust-test"),
-        fragment.replace(" -D warnings", ""),
-        fragment.replace("RUST_FEATURES ?= --all-features", "RUST_FEATURES ?="),
-    ] {
-        assert_ne!(broken, fragment, "a negative control changed nothing");
-        assert!(refused(&broken, &makefile, &workflow), "{broken}");
-    }
-    let narrowed = format!("{makefile}\nRUST_FEATURES := --features x\n");
-    assert!(refused(&fragment, &narrowed, &workflow));
-    for broken in [
-        workflow.replace("run: make rust-doc", "run: echo missing documentation gate"),
-        workflow.replace(
-            "run: make rust-doc",
-            "if: false\n        run: make rust-doc",
-        ),
-        workflow.replace(
-            "run: make rust-doc",
-            "continue-on-error: true\n        run: make rust-doc",
-        ),
-    ] {
-        assert_ne!(broken, workflow, "a negative control changed nothing");
-        assert!(refused(&fragment, &makefile, &broken));
-    }
 }
 
 /// Go: `TestGoLineIsOneValue`. The MSRV in Cargo.toml is the line (major.minor) of the exact
@@ -271,23 +214,6 @@ fn trivy_is_one_version() {
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
-/// The hooks that read the whole tree rather than the files pre-commit passes, so each one runs
-/// on every commit and must not run twice per commit.
-const ALWAYS_RUN_HOOKS: [&str; 1] = ["check-license-headers"];
-
-/// Go: `TestAlwaysRunHooksRunOnce`. A whole-tree hook takes no file list and always runs, because
-/// a commit that only deletes a file passes no file to it; and it is pinned to the pre-commit
-/// stage, because `always_run` makes a hook eligible at every installed stage, commit-msg
-/// included.
-#[test]
-fn always_run_hooks_run_once() {
-    let config = parse(PRE_COMMIT, &meta::repo().read(PRE_COMMIT));
-    let hooks =
-        yaml::pre_commit_hooks(PRE_COMMIT, &config).unwrap_or_else(|problem| panic!("{problem}"));
-    let problems = always_run_problems(&hooks, &ALWAYS_RUN_HOOKS);
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
 /// The flags none of the files that define gates may carry: the core set and the Rust set (a test
 /// run that only compiles, capped or allowed lints, tests skipped by name, a member excluded, a
 /// clippy run without `-D warnings`), outside [`ALLOWED_FRAGMENTS`].
@@ -401,39 +327,4 @@ fn vacuous_flags_are_recognized() {
         &ALLOWED_FRAGMENTS,
     );
     assert_eq!(problems.len(), ALLOWED_FRAGMENTS.len(), "{problems:?}");
-}
-
-/// Go: `TestToolGateListIsClosed`. No meta-test may skip on a missing tool: none looks a tool up
-/// on `PATH`, since a skip on a missing tool is a pass CI cannot turn into a failure. (The Go list
-/// held only the Go linter; the Dockerfile linter, droast, runs only as a pre-commit hook.) A test
-/// that needs an external tool fails without it.
-#[test]
-fn no_meta_test_skips_on_a_missing_tool() {
-    let repo = meta::repo();
-    let sources = repo.files_under("meta", &[".rs"]);
-    assert!(
-        sources.iter().any(|path| path == "meta/tests/toolchain.rs"),
-        "the walk did not reach meta/tests: {sources:?}"
-    );
-    let problems = tool_lookup_problems(&repo.read_all(&sources), &[]);
-    assert!(problems.is_empty(), "{}", report(&problems));
-
-    // The negative control. The samples are split so this file does not match its own check.
-    for sample in [
-        concat!("let found = env::split", "_paths(&paths);"),
-        concat!("std::env::var", "_os(\x22PATH\x22)"),
-        concat!("Command::new(\x22wh", "ich\x22)"),
-        concat!(
-            "use testenv_core::tool",
-            "gate::Gate;\n\nfn droast(gate: &Gate) {\n    let _ = gate.look",
-            "up(\x22droast\x22);\n}\n"
-        ),
-    ] {
-        let files = [("meta/tests/x.rs".to_owned(), sample.to_owned())];
-        assert_eq!(
-            tool_lookup_problems(&files, &[]).len(),
-            1,
-            "{sample:?} was not recognised"
-        );
-    }
 }

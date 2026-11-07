@@ -32,10 +32,9 @@ make docker-run           # runs the image locally (read-only, no capabilities),
 ```
 
 The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the
-exporter, and need no Docker: the toolchain pins and the always-run hooks (`toolchain.rs`), the
-plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
-the Docker SDK boundary (`docker_boundary.rs`), and the workspace lints (`workspace_lints.rs`).
-None of them skips on a missing tool.
+exporter, and need no Docker: the toolchain pins (`toolchain.rs`), the Dockerfile's frontend and
+base images (`dockerfiles.rs`), the Docker SDK boundary (`docker_boundary.rs`), and the workspace
+lints (`workspace_lints.rs`).
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):

@@ -42,9 +42,8 @@
 //!   whose API sections the shipped socket-proxy allowlist grants.
 //!
 //! Each rule is a function over the files' text, so each has a negative control. They are this
-//! repository's own: repo-meta's `docker_drivers`, which `integration_targets.rs` runs, sees a
-//! client only where code imports or calls it, and these rules see the name anywhere on a line, a
-//! comment and `extern crate` included.
+//! repository's own: a scan for imports and calls sees a client only where code imports or calls
+//! it, and these rules see the name anywhere on a line, a comment and `extern crate` included.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;

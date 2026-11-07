@@ -596,6 +596,7 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
 
       # What the built image reports as its version and commit is the release's own: a build that
       # lost a build argument ships an image that says dev or unknown, and the scan cannot see it.
