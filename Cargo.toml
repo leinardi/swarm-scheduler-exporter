@@ -11,21 +11,21 @@ authors = ["Roberto Leinardi"]
 repository = "https://github.com/leinardi/swarm-scheduler-exporter"
 
 # The crates shared with the other Rust services, from leinardi/rust-common: a git dependency
-# pinned by the release tag (`tag = "v0.4.0"`) with `version = "0.4"`, the tag's
-# `<major>.<minor>`, which keeps cargo-deny's `wildcards = "deny"` satisfied. To move the pin,
-# change the `tag` on every rust-common line (and `version` when the tag's `<major>.<minor>`
-# moves) and run `cargo fetch` (not `cargo update -p`): `git diff Cargo.lock` must touch only the
+# pinned by commit (`rev`) with `version = "0.4"`, the crates' `<major>.<minor>`, which keeps
+# cargo-deny's `wildcards = "deny"` satisfied. To move the pin, change the `rev` on every
+# rust-common line (and `version` when the crates' `<major>.<minor>` moves) and run `cargo fetch`
+# (not `cargo update -p`): `git diff Cargo.lock` must touch only the
 # rust-common lines. Each member opts in with
 # `<name>.workspace = true` and its own features. Local work on both repositories: an uncommitted
 # `[patch."https://github.com/leinardi/rust-common"]` table naming each crate with
 # `path = "../rust-common/crates/<name>"`.
 [workspace.dependencies]
-clock = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
-docker-client = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
-repo-meta = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
-service-kit = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
-testenv-core = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
-tracing-setup = { git = "https://github.com/leinardi/rust-common", tag = "v0.4.0", version = "0.4" }
+clock = { git = "https://github.com/leinardi/rust-common", rev = "56ed48cc70eed602524cc2014fb5f8dfecc8fd21", version = "0.4" }
+docker-client = { git = "https://github.com/leinardi/rust-common", rev = "56ed48cc70eed602524cc2014fb5f8dfecc8fd21", version = "0.4" }
+repo-meta = { git = "https://github.com/leinardi/rust-common", rev = "56ed48cc70eed602524cc2014fb5f8dfecc8fd21", version = "0.4" }
+service-kit = { git = "https://github.com/leinardi/rust-common", rev = "56ed48cc70eed602524cc2014fb5f8dfecc8fd21", version = "0.4" }
+testenv-core = { git = "https://github.com/leinardi/rust-common", rev = "56ed48cc70eed602524cc2014fb5f8dfecc8fd21", version = "0.4" }
+tracing-setup = { git = "https://github.com/leinardi/rust-common", rev = "56ed48cc70eed602524cc2014fb5f8dfecc8fd21", version = "0.4" }
 
 # The lint set lives here once. Every member opts in with `[lints] workspace = true` (a member does
 # not inherit it otherwise, and the meta crate asserts that each one does), and every clippy run is
