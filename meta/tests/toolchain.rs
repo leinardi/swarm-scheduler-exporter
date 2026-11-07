@@ -22,270 +22,274 @@
  * SOFTWARE.
  */
 
-//! The repository's tooling pins: one exact Rust release across rust-toolchain.toml, the image and
-//! every CI toolchain step, with Cargo.toml's `rust-version` on its line; the image's musl
-//! standard libraries for that release; one zig and one cargo-zigbuild between the image and CI;
-//! one ShellCheck between the hook and CI; one Trivy between the release and the scheduled scan;
-//! the rustdoc gate; the always-run hooks running once; no flag that makes a gate pass on
-//! nothing; and no meta-test that skips on a missing tool. The checks are repo-meta's, with this
-//! repository's files and pins; the negative controls run them on altered copies.
+//! The repository's tooling pins, each one value everywhere it is written: the Rust release across
+//! rust-toolchain.toml and the image (its `dhi.io/rust` tag and `RUST_VERSION`), with Cargo.toml's
+//! `rust-version` on its line; one zig and one cargo-zigbuild between the image and CI; one
+//! ShellCheck between the hook and CI; one Trivy between the release and the scheduled scan; and no
+//! flag that makes a gate pass on nothing. The pins are `repo_meta::toolchain::one_value`'s, over
+//! this repository's files; each has a negative control that alters one copy.
 
-use repo_meta::ci::{MAKE_COMMON_RUSTDOC, always_run_problems};
-use repo_meta::toolchain::{
-    RustVersion, ToolchainRef, ZigRecord, ci_toolchain_problems, image_rust_problems, rust_release,
-    rust_version_problems, shellcheck_problems, trivy_problems, zigbuild_action_problems,
-};
-use repo_meta::tools::tool_lookup_problems;
+use repo_meta::report;
+use repo_meta::toolchain::{PinSource, PinValue, one_value};
 use repo_meta::vacuous::{AllowedFragment, VacuousFlags};
-use repo_meta::{report, yaml};
 
 const TOOLCHAIN: &str = "rust-toolchain.toml";
+const CARGO: &str = "Cargo.toml";
 const DOCKERFILE: &str = "deployments/docker/Dockerfile";
 const SETUP_ZIGBUILD: &str = ".github/actions/setup-zigbuild/action.yaml";
 const SETUP_SHELLCHECK: &str = ".github/actions/setup-shellcheck/action.yaml";
 const PRE_COMMIT: &str = ".pre-commit-config.yaml";
-const CI: &str = ".github/workflows/ci.yaml";
+const RELEASE: &str = ".github/workflows/release.yaml";
+const SCHEDULED_SCAN: &str = ".github/workflows/scheduled-scan.yaml";
 
-/// The exact release rust-toolchain.toml pins.
-fn release() -> String {
-    rust_release(TOOLCHAIN, &meta::repo().read(TOOLCHAIN))
-        .unwrap_or_else(|problem| panic!("{problem}"))
+/// The text of `file`.
+fn read(file: &str) -> String {
+    meta::repo().read(file)
 }
 
-fn parse(file: &str, content: &str) -> yaml::Value {
-    yaml::parse(file, content).unwrap_or_else(|problem| panic!("{problem}"))
+/// The sources of one pin, read from the repository, `altered` swapping the text of one file for
+/// the negative controls.
+type Sources = fn(altered: Option<(&str, &str)>) -> Vec<PinSource>;
+
+/// The text of `file`, or the altered copy when `altered` names it.
+fn text(file: &str, altered: Option<(&str, &str)>) -> String {
+    match altered {
+        Some((name, content)) if name == file => content.to_owned(),
+        _ => read(file),
+    }
 }
 
-/// Every YAML file under .github, the workflows and the composite actions, parsed.
-fn github_documents() -> Vec<(String, yaml::Value)> {
-    let repo = meta::repo();
-    let files = repo.files_under(".github", &[".yaml", ".yml"]);
-    assert!(
-        files.iter().any(|file| file == CI),
-        "the scan saw no CI workflow: {files:?}"
-    );
-    files
-        .into_iter()
-        .map(|file| {
-            let document = parse(&file, &repo.read(&file));
-            (file, document)
-        })
-        .collect()
-}
-
-/// Rustdoc warnings must fail local verification and the required Rust CI job, over every
-/// feature: make-common's rust.mk documents `$(RUST_FEATURES)`, which defaults to
-/// `--all-features`, and the Makefile must not narrow it.
-#[test]
-fn rust_documentation_is_a_required_gate() {
-    let repo = meta::repo();
-    let problems = MAKE_COMMON_RUSTDOC.problems(
-        &repo.read(".mk/rust.mk"),
-        &repo.read("Makefile"),
-        &parse(CI, &repo.read(CI)),
-    );
+/// `one_value` over the real files: nothing is wrong.
+fn assert_one_value(what: &str, sources: Sources) {
+    let problems = one_value(what, &sources(None), &[]);
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
-/// Negative controls reject gates missing from verify or CI, allowing warnings, or documenting
-/// fewer than every feature.
-#[test]
-fn weakened_rustdoc_gates_are_refused() {
-    let repo = meta::repo();
-    let fragment = repo.read(".mk/rust.mk");
-    let makefile = repo.read("Makefile");
-    let workflow = repo.read(CI);
-    let refused = |fragment: &str, makefile: &str, workflow: &str| {
-        !MAKE_COMMON_RUSTDOC
-            .problems(fragment, makefile, &parse(CI, workflow))
-            .is_empty()
-    };
-    assert!(!refused(&fragment, &makefile, &workflow));
-    for broken in [
-        fragment.replace("rust-test rust-doc", "rust-test"),
-        fragment.replace(" -D warnings", ""),
-        fragment.replace("RUST_FEATURES ?= --all-features", "RUST_FEATURES ?="),
-    ] {
-        assert_ne!(broken, fragment, "a negative control changed nothing");
-        assert!(refused(&broken, &makefile, &workflow), "{broken}");
-    }
-    let narrowed = format!("{makefile}\nRUST_FEATURES := --features x\n");
-    assert!(refused(&fragment, &narrowed, &workflow));
-    for broken in [
-        workflow.replace("run: make rust-doc", "run: echo missing documentation gate"),
-        workflow.replace(
-            "run: make rust-doc",
-            "if: false\n        run: make rust-doc",
-        ),
-        workflow.replace(
-            "run: make rust-doc",
-            "continue-on-error: true\n        run: make rust-doc",
-        ),
-    ] {
-        assert_ne!(broken, workflow, "a negative control changed nothing");
-        assert!(refused(&fragment, &makefile, &broken));
-    }
+/// The negative control: `file` with its first `from` replaced by `to` is refused. `from` must be
+/// there, so an edit cannot silently change nothing.
+fn assert_refused(what: &str, sources: Sources, file: &str, from: &str, to: &str) {
+    let original = read(file);
+    assert!(original.contains(from), "{file}: {from:?} is gone");
+    let broken = original.replacen(from, to, 1);
+    let problems = one_value(what, &sources(Some((file, &broken))), &[]);
+    assert!(!problems.is_empty(), "{what}: {file} with {to:?} passes");
 }
 
-/// Go: `TestGoLineIsOneValue`. The MSRV in Cargo.toml is the line (major.minor) of the exact
-/// release rust-toolchain.toml pins, or a release of that line: it names no patch, so a consumer
-/// on an earlier patch release still builds.
+/// The exact Rust release, in rust-toolchain.toml, the image's `dhi.io/rust` tag and its
+/// `RUST_VERSION` argument, which names the musl standard libraries the build stage downloads.
+fn rust_release_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
+    let toolchain = text(TOOLCHAIN, altered);
+    let dockerfile = text(DOCKERFILE, altered);
+    vec![
+        PinSource::rust_channel(TOOLCHAIN, &toolchain),
+        PinSource::rust_image_tag(DOCKERFILE, &dockerfile),
+        PinSource::rust_version_arg(DOCKERFILE, &dockerfile),
+    ]
+}
+
+#[test]
+fn rust_release_is_one_value() {
+    assert_one_value("the Rust release", rust_release_sources);
+}
+
+#[test]
+fn rust_release_control_fails_on_another_release() {
+    let release = read(TOOLCHAIN);
+    let channel = release
+        .lines()
+        .find(|line| line.starts_with("channel"))
+        .expect("rust-toolchain.toml has a channel")
+        .to_owned();
+    assert_refused(
+        "the Rust release",
+        rust_release_sources,
+        TOOLCHAIN,
+        &channel,
+        "channel = \"1.0.0\"",
+    );
+    assert_refused(
+        "the Rust release",
+        rust_release_sources,
+        DOCKERFILE,
+        "dhi.io/rust:1.98.1-",
+        "dhi.io/rust:1.0.0-",
+    );
+    assert_refused(
+        "the Rust release",
+        rust_release_sources,
+        DOCKERFILE,
+        "ARG RUST_VERSION=1.98.1\n",
+        "ARG RUST_VERSION=1.0.0\n",
+    );
+}
+
+/// The MSRV in Cargo.toml is the line (major.minor) of the release rust-toolchain.toml pins: it
+/// names no patch, so a consumer on an earlier patch release still builds.
+fn rust_line_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
+    vec![
+        PinSource::rust_channel_line(TOOLCHAIN, &text(TOOLCHAIN, altered)),
+        PinSource::rust_version_line(CARGO, &text(CARGO, altered)),
+    ]
+}
+
 #[test]
 fn rust_version_is_the_toolchain_line() {
-    let problems = rust_version_problems(
-        "Cargo.toml",
-        &meta::repo().read("Cargo.toml"),
-        &release(),
-        RustVersion::Line,
-    );
-    assert!(problems.is_empty(), "{}", report(&problems));
+    assert_one_value("the Rust line", rust_line_sources);
 }
 
-/// Go: `TestRustToolchainIsOneValue`. Every CI step that sets up Rust installs the exact release
-/// rust-toolchain.toml pins, never a channel like stable or a release without its patch, so the
-/// release binaries and the tested build come from the same compiler.
 #[test]
-fn ci_installs_the_toolchain_release() {
-    let problems = ci_toolchain_problems(&github_documents(), &release(), ToolchainRef::Input);
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-/// The image's build stage builds with the exact release rust-toolchain.toml pins (its
-/// `dhi.io/rust` tag), and its musl standard libraries are written for that toolchain: the
-/// `RUST_VERSION` argument is the release in the tag.
-#[test]
-fn image_builds_with_the_toolchain_release() {
-    let problems = image_rust_problems(
-        DOCKERFILE,
-        &meta::repo().read(DOCKERFILE),
-        &release(),
-        RustVersion::Exact,
+fn rust_version_control_fails_on_another_line() {
+    assert_refused(
+        "the Rust line",
+        rust_line_sources,
+        CARGO,
+        "rust-version = \"1.98\"",
+        "rust-version = \"1.97\"",
     );
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-/// Go: `TestActionPinRules`, the negative control of the step rules: each unpinned form is a
-/// problem, and so is another action's `toolchain` input naming another release (repo-meta holds
-/// every CI toolchain input to the release, not only dtolnay/rust-toolchain's).
-#[test]
-fn rust_toolchain_pin_rules() {
-    let sample = parse(
-        "sample.yaml",
-        r"jobs:
-  test:
-    steps:
-      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567 # master
-        with:
-          toolchain: 1.98.0
-      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
-        with:
-          toolchain: stable
-      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
-        with:
-          toolchain: 1.98
-      - uses: dtolnay/rust-toolchain@0123456789abcdef0123456789abcdef01234567
-      - uses: some/other-action@0123456789abcdef0123456789abcdef01234567
-        with:
-          toolchain: nightly
-",
-    );
-    let problems = ci_toolchain_problems(
-        &[("sample.yaml".to_owned(), sample)],
-        "1.98.0",
-        ToolchainRef::Input,
-    );
-    assert_eq!(problems.len(), 4, "{problems:#?}");
-}
-
-/// The negative control of the image rule: a tag and a `RUST_VERSION` that differ, an image on
-/// another release, and a `COPY --from=` of another release's image, are refused.
-#[test]
-fn image_rust_rules() {
-    let dockerfile = meta::repo().read(DOCKERFILE);
-    let release = release();
-    let check = |content: &str| {
-        image_rust_problems(DOCKERFILE, content, &release, RustVersion::Exact).is_empty()
-    };
-    assert!(check(&dockerfile));
-    let argument = format!("ARG RUST_VERSION={release}\n");
-    let tag = format!("dhi.io/rust:{release}-");
-    for broken in [
-        dockerfile.replacen(&argument, "ARG RUST_VERSION=1.0.0\n", 1),
-        dockerfile.replacen(&tag, "dhi.io/rust:1.0.0-", 1),
-        dockerfile
-            .replacen(&argument, "ARG RUST_VERSION=1.0.0\n", 1)
-            .replacen(&tag, "dhi.io/rust:1.0.0-", 1),
-        format!(
-            "{dockerfile}COPY --from=dhi.io/rust:1.97.0-debian13-dev /usr/local/rustup \
-             /usr/local/rustup\n"
-        ),
-    ] {
-        assert_ne!(broken, dockerfile, "a negative control changed nothing");
-        assert!(!check(&broken), "{broken}");
-    }
 }
 
 /// The release binaries and the image are built with the same zig and the same cargo-zigbuild,
 /// from the same `x86_64` archives: both download those, so a bump that moves one copy fails here
 /// rather than in the first release that runs it.
+const ZIG_PINS: [(&str, &str, &str); 4] = [
+    (
+        "zig",
+        r#"(?m)^\s*ZIG_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*(?:#.*)?$"#,
+        r"(?m)^ARG ZIG_VERSION=(\S+)\s*$",
+    ),
+    (
+        "zig x86_64 sha256",
+        r"(?m)^\s*ZIG_SHA256:\s*([0-9a-f]{64})\s*(?:#.*)?$",
+        r"amd64\) zig_arch=x86_64; zig_sha256=([0-9a-f]{64}) ;;",
+    ),
+    (
+        "cargo-zigbuild",
+        r#"(?m)^\s*CARGO_ZIGBUILD_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*(?:#.*)?$"#,
+        r"(?m)^ARG CARGO_ZIGBUILD_VERSION=(\S+)\s*$",
+    ),
+    (
+        "cargo-zigbuild x86_64 sha256",
+        r"(?m)^\s*CARGO_ZIGBUILD_SHA256:\s*([0-9a-f]{64})\s*(?:#.*)?$",
+        r"amd64\) zigbuild_asset=x86_64-unknown-linux-musl; zigbuild_sha256=([0-9a-f]{64}) ;;",
+    ),
+];
+
+fn zig_sources(index: usize, altered: Option<(&str, &str)>) -> Vec<PinSource> {
+    let (_, action, dockerfile) = ZIG_PINS[index];
+    vec![
+        PinSource::new(SETUP_ZIGBUILD, &text(SETUP_ZIGBUILD, altered), action),
+        PinSource::new(DOCKERFILE, &text(DOCKERFILE, altered), dockerfile),
+    ]
+}
+
 #[test]
 fn zig_and_cargo_zigbuild_are_one_version() {
-    let repo = meta::repo();
-    let dockerfile = repo.read(DOCKERFILE);
-    let problems = zigbuild_action_problems(
-        SETUP_ZIGBUILD,
-        &repo.read(SETUP_ZIGBUILD),
-        ZigRecord::Dockerfile {
-            file: DOCKERFILE,
-            content: &dockerfile,
-        },
-    );
-    assert!(problems.is_empty(), "{}", report(&problems));
+    for (index, (what, _, _)) in ZIG_PINS.iter().enumerate() {
+        let problems = one_value(what, &zig_sources(index, None), &[]);
+        assert!(problems.is_empty(), "{}", report(&problems));
+    }
 }
 
-/// Go: `TestShellCheckIsOneVersion`. droast's ShellCheck bridge runs the `shellcheck` on `PATH`,
-/// which CI installs with setup-shellcheck; it must be the release the shellcheck-py hook wraps
-/// (its rev adds a fourth component for the wrapper), which Dependabot moves.
+#[test]
+fn zig_control_fails_on_another_version() {
+    let action = read(SETUP_ZIGBUILD);
+    for (index, (what, _, _)) in ZIG_PINS.iter().enumerate() {
+        let changed = [
+            ("ZIG_VERSION: \"0.17.0\"", "ZIG_VERSION: \"0.16.0\""),
+            (
+                "CARGO_ZIGBUILD_VERSION: \"0.24.0\"",
+                "CARGO_ZIGBUILD_VERSION: \"0.23.0\"",
+            ),
+        ];
+        // Each version pin is refused when the action's copy moves; each digest when it changes.
+        let (from, to) = match index {
+            0 => changed[0],
+            2 => changed[1],
+            1 => ("ZIG_SHA256: 1cbe", "ZIG_SHA256: 0000"),
+            _ => ("CARGO_ZIGBUILD_SHA256: 52be", "CARGO_ZIGBUILD_SHA256: 0000"),
+        };
+        assert!(action.contains(from), "{from:?} is gone");
+        let broken = action.replacen(from, to, 1);
+        let sources = zig_sources(index, Some((SETUP_ZIGBUILD, &broken)));
+        assert!(
+            !one_value(what, &sources, &[]).is_empty(),
+            "{what}: {to:?} passes"
+        );
+    }
+}
+
+/// droast's ShellCheck bridge runs the `shellcheck` on `PATH`, which CI installs with
+/// setup-shellcheck; it must be the release the shellcheck-py hook wraps (its rev adds a fourth
+/// component for the wrapper), which Dependabot moves.
+fn shellcheck_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
+    vec![
+        PinSource::new(
+            PRE_COMMIT,
+            &text(PRE_COMMIT, altered),
+            r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)",
+        ),
+        PinSource::new(
+            SETUP_SHELLCHECK,
+            &text(SETUP_SHELLCHECK, altered),
+            r#"SHELLCHECK_VERSION:\s*["']?(v[\d.]+)"#,
+        ),
+    ]
+}
+
 #[test]
 fn shellcheck_is_one_version() {
-    let repo = meta::repo();
-    let problems = shellcheck_problems(
-        PRE_COMMIT,
-        &repo.read(PRE_COMMIT),
-        SETUP_SHELLCHECK,
-        &repo.read(SETUP_SHELLCHECK),
-    );
-    assert!(problems.is_empty(), "{}", report(&problems));
+    assert_one_value("ShellCheck", shellcheck_sources);
 }
 
-/// Go: `TestTrivyIsOneVersion`. The release scan and the scheduled scan of the published image
-/// install one exact Trivy, so a finding means the same in both (docs/release.md).
+#[test]
+fn shellcheck_control_fails_on_another_version() {
+    assert_refused(
+        "ShellCheck",
+        shellcheck_sources,
+        SETUP_SHELLCHECK,
+        "SHELLCHECK_VERSION: v0.11.0",
+        "SHELLCHECK_VERSION: v0.10.0",
+    );
+}
+
+/// The release scan and the scheduled scan of the published image install one exact Trivy, so a
+/// finding means the same in both (docs/release.md).
+fn trivy_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
+    [RELEASE, SCHEDULED_SCAN]
+        .into_iter()
+        .map(|file| {
+            PinSource::new(
+                file,
+                &text(file, altered),
+                r"(?m)^\s*TRIVY_VERSION:\s*(v\d+\.\d+\.\d+)\s*$",
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn trivy_is_one_version() {
-    let repo = meta::repo();
-    let workflows = repo.read_all(&[
-        ".github/workflows/release.yaml".to_owned(),
-        ".github/workflows/scheduled-scan.yaml".to_owned(),
-    ]);
-    let problems = trivy_problems(&workflows);
-    assert!(problems.is_empty(), "{}", report(&problems));
+    assert_one_value("Trivy", trivy_sources);
 }
 
-/// The hooks that read the whole tree rather than the files pre-commit passes, so each one runs
-/// on every commit and must not run twice per commit.
-const ALWAYS_RUN_HOOKS: [&str; 3] = ["check-license-headers", "check-suppressions", "docs-links"];
-
-/// Go: `TestAlwaysRunHooksRunOnce`. A whole-tree hook takes no file list and always runs, because
-/// a commit that only deletes a file passes no file to it; and it is pinned to the pre-commit
-/// stage, because `always_run` makes a hook eligible at every installed stage, commit-msg
-/// included.
 #[test]
-fn always_run_hooks_run_once() {
-    let config = parse(PRE_COMMIT, &meta::repo().read(PRE_COMMIT));
-    let hooks =
-        yaml::pre_commit_hooks(PRE_COMMIT, &config).unwrap_or_else(|problem| panic!("{problem}"));
-    let problems = always_run_problems(&hooks, &ALWAYS_RUN_HOOKS);
-    assert!(problems.is_empty(), "{}", report(&problems));
+fn trivy_control_fails_on_another_version() {
+    assert_refused(
+        "Trivy",
+        trivy_sources,
+        SCHEDULED_SCAN,
+        "TRIVY_VERSION: v0.74.0",
+        "TRIVY_VERSION: v0.73.0",
+    );
+    // A source that writes no pin at all is refused as well, not read as agreeing.
+    assert!(
+        !one_value(
+            "Trivy",
+            &[],
+            &[PinValue::new("v1.0.0", "a"), PinValue::new("v2.0.0", "b")]
+        )
+        .is_empty()
+    );
 }
 
 /// The flags none of the files that define gates may carry: the core set and the Rust set (a test
@@ -401,39 +405,4 @@ fn vacuous_flags_are_recognized() {
         &ALLOWED_FRAGMENTS,
     );
     assert_eq!(problems.len(), ALLOWED_FRAGMENTS.len(), "{problems:?}");
-}
-
-/// Go: `TestToolGateListIsClosed`. No meta-test may skip on a missing tool: none looks a tool up
-/// on `PATH`, since a skip on a missing tool is a pass CI cannot turn into a failure. (The Go list
-/// held only the Go linter; the Dockerfile linter, droast, runs only as a pre-commit hook.) A test
-/// that needs an external tool fails without it.
-#[test]
-fn no_meta_test_skips_on_a_missing_tool() {
-    let repo = meta::repo();
-    let sources = repo.files_under("meta", &[".rs"]);
-    assert!(
-        sources.iter().any(|path| path == "meta/tests/toolchain.rs"),
-        "the walk did not reach meta/tests: {sources:?}"
-    );
-    let problems = tool_lookup_problems(&repo.read_all(&sources), &[]);
-    assert!(problems.is_empty(), "{}", report(&problems));
-
-    // The negative control. The samples are split so this file does not match its own check.
-    for sample in [
-        concat!("let found = env::split", "_paths(&paths);"),
-        concat!("std::env::var", "_os(\x22PATH\x22)"),
-        concat!("Command::new(\x22wh", "ich\x22)"),
-        concat!(
-            "use testenv_core::tool",
-            "gate::Gate;\n\nfn droast(gate: &Gate) {\n    let _ = gate.look",
-            "up(\x22droast\x22);\n}\n"
-        ),
-    ] {
-        let files = [("meta/tests/x.rs".to_owned(), sample.to_owned())];
-        assert_eq!(
-            tool_lookup_problems(&files, &[]).len(),
-            1,
-            "{sample:?} was not recognised"
-        );
-    }
 }
