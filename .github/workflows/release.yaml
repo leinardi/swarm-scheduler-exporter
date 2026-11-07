@@ -588,6 +588,66 @@ jobs:
           done
           echo "platforms=${SCANNED[*]}" >> "$GITHUB_OUTPUT"
 
+      # Running the arm64 image on the amd64 runner needs binfmt emulation. The binfmt image is
+      # pinned by digest, like every image this workflow runs; the build itself is cross-compiled
+      # and needs none.
+      - name: Set up QEMU
+        if: steps.mode.outputs.build == 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      # What the built image reports as its version and commit is the release's own: a build that
+      # lost a build argument ships an image that says dev or unknown, and the scan cannot see it.
+      # The binary has no --version, so each platform image is started and its startup line is
+      # read. Runs against the digests that were just scanned in the job-local registry, before the
+      # tag is pushed, so a failure leaves no tag and nothing published. No Docker socket is
+      # mounted: the exporter logs the line, then retries until it is stopped.
+      - name: Smoke-test the version stamps of both platform images
+        if: steps.mode.outputs.build == 'true'
+        env:
+          SCANNED: ${{ steps.scan.outputs.platforms }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SCANNED" ]; then
+            echo "The scan step recorded no platform image to test." >&2
+            exit 1
+          fi
+          CID=""
+          cleanup() {
+            if [ -n "$CID" ]; then
+              docker rm -f "$CID" >/dev/null 2>&1 || echo "Could not remove the container $CID." >&2
+            fi
+          }
+          trap cleanup EXIT
+          for entry in $SCANNED; do
+            platform="${entry%%=*}"
+            ref="$LOCAL_IMAGE@${entry#*=}"
+            CID=$(docker run -d --platform "$platform" "$ref")
+            LINE=""
+            for _ in $(seq 1 30); do
+              LOGS=$(docker logs "$CID" 2>&1)
+              if LINE=$(grep -m1 -F ' starting version=' <<<"$LOGS"); then
+                break
+              fi
+              sleep 1
+            done
+            if [ -z "$LINE" ]; then
+              echo "$platform ($ref) logged no startup line within 30 seconds." >&2
+              docker logs "$CID" >&2
+              exit 1
+            fi
+            echo "$platform: $LINE"
+            if ! grep -qF "version=\"$VERSION\"" <<<"$LINE" || ! grep -qF "commit=\"$COMMIT\"" <<<"$LINE"; then
+              echo "$platform ($ref) does not report version $VERSION and commit $COMMIT." >&2
+              exit 1
+            fi
+            cleanup
+            CID=""
+          done
+
       # The last look at the tags before the point of no return. Concurrency
       # serializes the workflow, but a tag can also arrive from outside it, and
       # the check in the version step ran before several minutes of building.
