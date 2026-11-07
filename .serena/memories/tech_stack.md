@@ -1,13 +1,14 @@
 # Tech stack
 
 - Rust: one line (1.98) across rust-toolchain.toml, the MSRV, the Dockerfile's `dhi.io/rust` tag
-  and every CI toolchain step (`meta/tests/toolchain.rs`); static musl binaries for amd64 and
+  (`meta/tests/toolchain.rs`); CI installs rust-toolchain.toml with
+  `rustup toolchain install`; static musl binaries for amd64 and
   arm64 via cargo-zigbuild and zig (pins shared by the Dockerfile and
   `.github/actions/setup-zigbuild`); version strings from `SWARM_SCHEDULER_EXPORTER_{VERSION,
   COMMIT,DATE}` at compile time.
 - Libraries: humantime (durations), ipnet (CIDR), tokio, hyper + hyper-util (healthcheck client),
   axum (routes), clap, jiff, serde, prometheus-client (registry and OpenMetrics encoder). From
-  leinardi/rust-common (git, pinned by tag `v0.4.0`): docker-client (Docker connection over bollard,
+  leinardi/rust-common (git, pinned by commit (`rev`)): docker-client (Docker connection over bollard,
   rustls with ring), tracing-setup (logger subscriber),
   clock, service-kit (with
   `runtime`, `process-metrics` and `http`), testenv-core, repo-meta.
