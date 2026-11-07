@@ -346,7 +346,7 @@ treat a failure it caused as a confirmed finding with the output attached:
 | --- | --- |
 | any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` (build, fmt, clippy, tests), then `make check` |
 | `src/collector/**`, `src/docker/**`, `testenv/**` | also `make test-integration` (a DinD Swarm; needs Docker with privileged containers) |
-| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `rev` bump | `make rust-deny` (cargo-deny; network required) |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny` (cargo-deny; network required) |
 | `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
 | `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, plus `make docker-build` |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |

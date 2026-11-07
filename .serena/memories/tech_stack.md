@@ -8,7 +8,7 @@
   COMMIT,DATE}` at compile time.
 - Libraries: humantime (durations), ipnet (CIDR), tokio, hyper + hyper-util (healthcheck client),
   axum (routes), clap, jiff, serde, prometheus-client (registry and OpenMetrics encoder). From
-  leinardi/rust-common (git, pinned by commit (`rev`)): docker-client (Docker connection over bollard,
+  leinardi/rust-common (git, pinned by release tag): docker-client (Docker connection over bollard,
   rustls with ring), tracing-setup (logger subscriber),
   clock, service-kit (with
   `runtime`, `process-metrics` and `http`), testenv-core, repo-meta.

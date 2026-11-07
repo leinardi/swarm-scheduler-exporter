@@ -104,7 +104,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by commit (`rev = "<sha>"`, with `version = "0.4"`) in
+dependency pinned by the release tag (`tag = "v1.0.0"`, with `version = "1.0"`) in
 `[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
@@ -114,7 +114,7 @@ meta-tests' checks). The exporter keeps only what is its own.
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
-  the `rev` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
+  the `tag` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
   `git diff Cargo.lock` touches only the rust-common lines.
 - The parameters this exporter passes (the README's Migrating section lists what differs from 1.x
   and 2.x):
@@ -206,7 +206,7 @@ Run before considering an edit done. `make check` applies to every row.
 | You edited | Run |
 | --- | --- |
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
-| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `rev` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
+| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
 | `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
 | `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
