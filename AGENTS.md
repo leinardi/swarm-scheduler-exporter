@@ -35,7 +35,7 @@ The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather
 exporter, and need no Docker: the toolchain pins and the always-run hooks (`toolchain.rs`), the
 plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
 the Docker SDK boundary (`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the
-and the two scripts below (`license_headers.rs`, `suppressions.rs`).
+and the suppression script below (`suppressions.rs`).
 None of them skips on a missing tool.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
@@ -220,7 +220,7 @@ Run before considering an edit done. `make check` applies to every row.
 | `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles` |
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
-| `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
+| `scripts/check-license-headers.sh` | `pre-commit run check-license-headers --all-files` |
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
 | `meta/**` | `cargo test -p meta` |
 | `**/*.md` | `pre-commit run lychee markdownlint-cli2 --files <file>`; prose wraps at 100 columns |
