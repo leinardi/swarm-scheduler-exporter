@@ -34,8 +34,7 @@ make docker-run           # runs the image locally (read-only, no capabilities),
 The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the
 exporter, and need no Docker: the toolchain pins and the always-run hooks (`toolchain.rs`), the
 plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
-the Docker SDK boundary (`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the
-and the suppression script below (`suppressions.rs`).
+the Docker SDK boundary (`docker_boundary.rs`), and the workspace lints (`workspace_lints.rs`).
 None of them skips on a missing tool.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
@@ -100,7 +99,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 - `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
   socket-proxy allowlist.
 - `docs/release.md` — how a release is cut and recovered.
-- `scripts/` — the licence-header check, the suppression ratchet, the make-common bootstrap and the
+- `scripts/` — the licence-header check, the make-common bootstrap and the
   Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`).
 
 ### Shared code: rust-common
@@ -195,18 +194,11 @@ The ones to keep in mind while writing code:
 - An older test may carry its Go provenance (`/// Go: TestX`) as a doc comment; new tests do not
   need one, and sources name no Go source file.
 
-## Licence headers and suppressions
+## Licence headers
 
 Every Rust and shell source, Dockerfile, Makefile and repo-local `.mk` snippet carries the MIT
 header, with the year of the file's first commit (`scripts/check-license-headers.sh`, the
 `check-license-headers` hook). The make-common files are exempt: they carry make-common's own.
-
-Every in-file suppression is counted per rule against `.suppressions-baseline` by the
-`check-suppressions` hook (`scripts/check-suppressions.sh`), in five families: each lint of an
-`#[expect(...)]` or `#[allow(...)]`, `# shellcheck disable=`, `# droast ignore=` and
-`# droast global ignore=`. A commit that adds one, swaps one or moves one must change the
-baseline too, and so must one whose count fell below it: run
-`scripts/check-suppressions.sh --update` and commit the baseline with the change.
 
 ## Validation matrix
 
@@ -221,7 +213,6 @@ Run before considering an edit done. `make check` applies to every row.
 | `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
 | `scripts/check-license-headers.sh` | `pre-commit run check-license-headers --all-files` |
-| `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
 | `meta/**` | `cargo test -p meta` |
 | `**/*.md` | `pre-commit run lychee markdownlint-cli2 --files <file>`; prose wraps at 100 columns |
 

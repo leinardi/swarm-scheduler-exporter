@@ -11,5 +11,4 @@
 - `make check` (pre-commit, all files; the CI gate) / `make check-stage` (staged only).
 - `make audit-deps` (cargo-deny advisories, network), `make rust-deny` (every cargo-deny check).
 - `make docker-build` / `make docker-run` (dhi.io login required).
-- Suppression baseline refresh: `scripts/check-suppressions.sh --update`.
 - Workflow lint: `pre-commit run actionlint --all-files`.

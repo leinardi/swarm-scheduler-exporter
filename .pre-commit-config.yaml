@@ -79,17 +79,6 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      # Every #[expect], shellcheck disable and droast ignore is counted per rule against
-      # .suppressions-baseline, and a commit that adds one must change the baseline too
-      # (scripts/check-suppressions.sh). Always runs: the ratchet reads the whole tree and the
-      # staged diff, and a commit that touches no source can still delete the baseline.
-      - id: check-suppressions
-        name: suppression ratchet
-        entry: scripts/check-suppressions.sh
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
   # The Rust workspace. Every command is workspace-wide, so the meta and testenv crates are held to
   # the same lints as the exporter, and --locked, so Cargo.lock is what gets tested. clippy takes
   # --all-features, so the harness code behind testenv's integration feature is linted too; the

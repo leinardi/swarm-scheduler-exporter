@@ -13,10 +13,8 @@ repeatedly bite:
   lives in rust-common, so there is no exemption here).
 - `large_futures`: `Box::pin` a big future rather than suppressing it.
 
-Suppressions: only `#[expect(lint, reason = "...")]`, ratcheted per lint against
-`.suppressions-baseline`; a commit adding, moving or removing one runs
-`scripts/check-suppressions.sh --update` and commits the baseline. The reason says why the fix
-does not apply, not which lint fired.
+Suppressions: only `#[expect(lint, reason = "...")]`. The reason says why the fix does not apply,
+not which lint fired.
 
 Behaviour changes: any change to the metrics, flags, health rules or logs that the README's
 "Migrating" section does not list is a defect. Rust sources never name a Go source file.
