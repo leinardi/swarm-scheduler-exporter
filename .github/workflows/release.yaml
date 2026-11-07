@@ -111,16 +111,17 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # What dtolnay/rust-toolchain exported to every later step of the job.
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: 1.98.1
-          components: clippy, rustfmt
+        run: rustup toolchain install --no-self-update
 
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -157,6 +158,10 @@ jobs:
       - audit
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # What dtolnay/rust-toolchain exported to every later step of the job.
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
     # Created on first run with no protection rules, which changes nothing by
     # itself. Add a deployment branch rule limiting it to `master`, and required
     # reviewers if a release should need a second pair of eyes - docs/release.md.
@@ -180,10 +185,7 @@ jobs:
       # rebuilds with the same one, which is what makes its binaries
       # byte-identical.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: 1.98.1
-          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+        run: rustup toolchain install --no-self-update
 
       - name: Set up cargo-zigbuild
         uses: ./.github/actions/setup-zigbuild

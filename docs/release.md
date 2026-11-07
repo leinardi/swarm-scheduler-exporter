@@ -409,9 +409,10 @@ whose check fails. That is a deliberate escape hatch, not a gap in the check.
 
 ### Bumping the Rust toolchain
 
-One exact Rust release builds everything: `rust-toolchain.toml`, every `dtolnay/rust-toolchain`
-step in the workflows and the `dhi.io/rust:<version>-debian13-dev` tag of the Dockerfile's build
-stage, and `meta/tests/toolchain.rs` fails when any of them differs, patch included. Dependabot
+One exact Rust release builds everything: `rust-toolchain.toml` (which the workflows install with
+`rustup toolchain install`, so they name no release of their own) and the
+`dhi.io/rust:<version>-debian13-dev` tag of the Dockerfile's build stage, and
+`meta/tests/toolchain.rs` fails when they differ, patch included. Dependabot
 ignores the `rust` image on purpose: `dhi.io/rust` has no rustup, so the build stage adds each musl
 target by unpacking `rust-std-<version>-<triple>.tar.xz` from static.rust-lang.org and checking it
 against a sha256 written in the Dockerfile, and those archives must be the image's exact release.
@@ -419,7 +420,7 @@ A bump is therefore one hand-made pull request that moves, together:
 
 1. the image tag and `ARG RUST_VERSION` in the Dockerfile;
 2. the two `rust-std` sha256s (the `.sha256` file published next to each archive);
-3. `rust-toolchain.toml` and every toolchain step under `.github`;
+3. `rust-toolchain.toml`;
 4. the MSRV in `Cargo.toml` when the minor version changes.
 
 zig and cargo-zigbuild follow the same rule between the Dockerfile and
