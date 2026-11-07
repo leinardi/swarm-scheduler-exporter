@@ -79,16 +79,6 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      # Every relative link and fragment in the tracked Markdown resolves (meta/tests/docs.rs).
-      # always_run because deleting a linked page passes no file to the hook at all; cargo test
-      # caches no result, so the file list git ls-files gives is read on every run.
-      - id: docs-links
-        name: docs links
-        entry: cargo test --locked -p meta --test docs
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
       # Every #[expect], shellcheck disable and droast ignore is counted per rule against
       # .suppressions-baseline, and a commit that adds one must change the baseline too
       # (scripts/check-suppressions.sh). Always runs: the ratchet reads the whole tree and the
@@ -146,6 +136,20 @@ repos:
     hooks:
       - id: cargo-machete
         types_or: [rust, cargo, cargo-lock]
+  # Every relative link and fragment in the Markdown resolves, offline: an external URL is not
+  # fetched. A whole-tree check, so it always runs (deleting a linked page passes no file to the
+  # hook at all) and takes its inputs from args rather than from the file list. --hidden reaches
+  # .github, .agents and .claude, which the glob skips otherwise; .gitignore still applies.
+  - repo: https://github.com/lycheeverse/lychee
+    rev: lychee-v0.24.2
+    hooks:
+      - id: lychee
+        name: lychee
+        args: ["--offline", "--include-fragments", "--no-progress", "--hidden", "**/*.md"]
+        types: [markdown]
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
     hooks:

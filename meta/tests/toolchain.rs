@@ -273,7 +273,7 @@ fn trivy_is_one_version() {
 
 /// The hooks that read the whole tree rather than the files pre-commit passes, so each one runs
 /// on every commit and must not run twice per commit.
-const ALWAYS_RUN_HOOKS: [&str; 3] = ["check-license-headers", "check-suppressions", "docs-links"];
+const ALWAYS_RUN_HOOKS: [&str; 2] = ["check-license-headers", "check-suppressions"];
 
 /// Go: `TestAlwaysRunHooksRunOnce`. A whole-tree hook takes no file list and always runs, because
 /// a commit that only deletes a file passes no file to it; and it is pinned to the pre-commit

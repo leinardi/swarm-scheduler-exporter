@@ -39,7 +39,7 @@ The README "Migrating" section lists the intended differences from 1.x (Go) and 
   behind its `integration` feature; `tests/integration/` is the `harness = false` suite that runs
   the release binary (`SSE_IT_BINARY`).
 - `meta/`: meta-tests over the repository, repo-meta's checks with this repository's parameters
-  (toolchain pins, Dockerfile, docs links, licence headers, suppression ratchet) plus the local
+  (toolchain pins, Dockerfile, licence headers, suppression ratchet) plus the local
   Docker SDK boundary, no Docker needed.
 - User-facing contract: the README Metrics section (and alert examples).
 

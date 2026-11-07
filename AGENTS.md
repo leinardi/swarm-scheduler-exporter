@@ -35,7 +35,7 @@ The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather
 exporter, and need no Docker: the toolchain pins and the always-run hooks (`toolchain.rs`), the
 plain/integration test separation (`integration_targets.rs`), the Dockerfile (`dockerfiles.rs`),
 the Docker SDK boundary (`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the
-Markdown links (`docs.rs`) and the two scripts below (`license_headers.rs`, `suppressions.rs`).
+and the two scripts below (`license_headers.rs`, `suppressions.rs`).
 None of them skips on a missing tool.
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
@@ -223,7 +223,7 @@ Run before considering an edit done. `make check` applies to every row.
 | `scripts/check-license-headers.sh` | `cargo test -p meta --test license_headers` |
 | `scripts/check-suppressions.sh`, `.suppressions-baseline` | `cargo test -p meta --test suppressions` |
 | `meta/**` | `cargo test -p meta` |
-| `**/*.md` | `cargo test -p meta --test docs`; prose wraps at 100 columns |
+| `**/*.md` | `pre-commit run lychee markdownlint-cli2 --files <file>`; prose wraps at 100 columns |
 
 To work on a shared crate from here, add an uncommitted
 `[patch."https://github.com/leinardi/rust-common"]` table to the root `Cargo.toml`, one
