@@ -17,9 +17,9 @@ updates:
     # 3 days), so a broken or compromised release has time to be yanked.
     cooldown:
       default-days: 7
+    labels: ["dependencies", "ci"]
     commit-message:
       prefix: "chore(deps)"
-    labels: ["dependencies", "ci"]
     groups:
       github-actions:
         patterns:
@@ -31,14 +31,20 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
+    labels: ["dependencies", "ci"]
     commit-message:
       prefix: "chore(deps)"
-    labels: ["dependencies", "ci"]
     groups:
       pre-commit-hooks:
         patterns:
           - "*"
 
+  # The Dockerfile's dhi.io bases, each pinned by an explicit tag in one literal FROM (Dependabot
+  # does not read ARG defaults), deliberately not by digest: dhi.io rebuilds its tags too often.
+  # Dependabot moves the tags, such as a newer dhi.io/static date tag. The runtime base,
+  # dhi.io/static, is what the image ships, so its bumps are fix(deps) and release a patch. dhi.io
+  # needs a login: the dhi registry above reads the Dependabot secret DHI_TOKEN (docs/release.md,
+  # "One-time setup").
   - package-ecosystem: "docker"
     directory: "/deployments/docker"
     registries: ["dhi"]
@@ -46,19 +52,19 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
-    commit-message:
-      prefix: "chore(deps)"
-    open-pull-requests-limit: 5
     labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "fix(deps)"
+    open-pull-requests-limit: 5
     ignore:
-      # The build stage's Rust is one line with rust-toolchain.toml, and its
-      # patch release is the one the RUST_VERSION argument and the musl
-      # standard libraries' sha256s are written for: a tag bump alone would
-      # break the build. Bump the image, RUST_VERSION and the checksums
-      # together, by hand.
+      # The build stage's Rust is one line with rust-toolchain.toml, and its patch release is the
+      # one the RUST_VERSION argument and the musl standard libraries' sha256s are written for: a
+      # tag bump alone would break the build. Bump the image tag, RUST_VERSION and the
+      # checksums together, by hand. The release never uses this stage: it builds the prebuilt
+      # target.
       - dependency-name: "rust"
     groups:
-      docker-base-images:
+      docker:
         patterns:
           - "*"
 
@@ -68,19 +74,15 @@ updates:
       interval: "monthly"
     cooldown:
       default-days: 7
-    # fix, not chore: the release version is derived from commit types, so a
-    # crate bump (security fixes included) produces a patch release. The other
-    # ecosystems stay chore(deps) and bump nothing. That includes the docker
-    # one, whose base-image bumps do change the shipped image: when one carries
-    # a security fix that should ship, release with an explicit version.
-    # Dev-dependencies (test clients) never reach the binary, so their bumps
-    # are chore(deps) and in a group of their own: one grouped PR carries a
+    labels: ["dependencies", "ci"]
+    # fix, not chore: the release version is derived from commit types, so a crate bump (security
+    # fixes included) produces a patch release. Dev-dependencies (test clients) never reach the
+    # binary, so their bumps are chore(deps) and in a group of their own: one grouped PR carries a
     # single prefix, so mixing them would release a binary that did not change.
     commit-message:
       prefix: "fix(deps)"
       prefix-development: "chore(deps)"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "ci"]
     groups:
       cargo-crates:
         dependency-type: "production"
