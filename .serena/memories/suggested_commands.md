@@ -10,5 +10,7 @@
   `make test-integration UPDATE=1 RUN=TestSnapshot_`, cleanup `make sweep-test-leaks`.
 - `make check` (pre-commit, all files; the CI gate) / `make check-stage` (staged only).
 - `make audit-deps` (cargo-deny advisories, network), `make rust-deny` (every cargo-deny check).
+- `make dist-static` (static release binaries in `dist/`), `make image-build-prebuilt image-test`
+  (the prebuilt image from them and its tests; `IMAGE_PLATFORM`, `IMAGE_TEST_TIER`).
 - `make docker-build` / `make docker-run` (dhi.io login required).
 - Workflow lint: `pre-commit run actionlint --all-files`.
