@@ -7,6 +7,8 @@ Any HTML comment will be stripped when the markdown is rendered, so you don't ne
 
 <!-- Short description of what this PR does. -->
 
+---
+
 ## Pull request checklist
 
 - [ ] I am targeting the `master` branch
@@ -20,6 +22,9 @@ Any HTML comment will be stripped when the markdown is rendered, so you don't ne
   the version from them; see `AGENTS.md`)
 - [ ] I have performed a self-review of my own code
 - [ ] There are no `WIP` commits in this PR
+- [ ] I ran the validation commands for every area touched (see the AGENTS.md validation matrix)
+
+---
 
 ## Type of changes
 

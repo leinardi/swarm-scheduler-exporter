@@ -33,10 +33,10 @@ assignees: []
 <!-- Describe how you imagine this feature working. Be as specific as possible. -->
 
 * **High-level description:**
-    *
+  *
 
 * **Example usage / scenario:**
-    *
+  *
 
 ---
 
