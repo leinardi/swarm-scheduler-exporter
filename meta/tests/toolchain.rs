@@ -22,303 +22,336 @@
  * SOFTWARE.
  */
 
-//! The repository's tooling pins, each one value everywhere it is written: the Rust release across
-//! rust-toolchain.toml and the image (its `dhi.io/rust` tag and `RUST_VERSION`), with Cargo.toml's
-//! `rust-version` on its line; one zig and one cargo-zigbuild between the image and CI; one
-//! ShellCheck between the hook and CI; one Trivy between the release and the scheduled scan; and no
-//! flag that makes a gate pass on nothing. The pins are `repo_meta::toolchain::one_value`'s, over
-//! this repository's files; each has a negative control that alters one copy.
+//! The repository's tooling pins: every version written in more than one file is one value (the
+//! Rust line and the image's release, zig, cargo-zigbuild and `ShellCheck`), Trivy is never pinned,
+//! and no flag makes a gate pass on nothing. The checks are `repo_meta::toolchain::one_value` over
+//! this repository's pin sources and `repo_meta::vacuous`'s; the negative controls run them on
+//! altered copies of the real files and on samples.
 
-use repo_meta::report;
-use repo_meta::toolchain::{PinSource, PinValue, one_value};
+use repo_meta::toolchain::{PinSource, one_value, rust_release};
 use repo_meta::vacuous::{AllowedFragment, VacuousFlags};
+use repo_meta::{Problem, report};
 
-const TOOLCHAIN: &str = "rust-toolchain.toml";
-const CARGO: &str = "Cargo.toml";
 const DOCKERFILE: &str = "deployments/docker/Dockerfile";
-const SETUP_ZIGBUILD: &str = ".github/actions/setup-zigbuild/action.yaml";
-const SETUP_SHELLCHECK: &str = ".github/actions/setup-shellcheck/action.yaml";
+const RUST_TOOLCHAIN: &str = "rust-toolchain.toml";
 const PRE_COMMIT: &str = ".pre-commit-config.yaml";
-const RELEASE: &str = ".github/workflows/release.yaml";
+const CI_WORKFLOW: &str = ".github/workflows/ci.yaml";
+const RELEASE_WORKFLOW: &str = ".github/workflows/release.yaml";
 const SCHEDULED_SCAN: &str = ".github/workflows/scheduled-scan.yaml";
 
-/// The text of `file`.
-fn read(file: &str) -> String {
-    meta::repo().read(file)
-}
+/// The `X.Y` line of the release in the `dhi.io/rust` tag of a `FROM`.
+const IMAGE_TAG_LINE: &str = r"(?mi)^[ \t]*FROM[ \t]+(?:--\S+[ \t]+)*dhi\.io/rust:(\d+\.\d+)\.\d+-";
+const ZIG_DOCKERFILE: &str = r"(?m)^ARG ZIG_VERSION=(\S+)$";
+/// The `zig-version` input of gh-composite-actions' setup-zigbuild, in CI and the release.
+const ZIG_ACTION: &str = r#"(?m)^\s*zig-version:\s*"?([\d.]+)"#;
+const ZIGBUILD_DOCKERFILE: &str = r"(?m)^ARG CARGO_ZIGBUILD_VERSION=(\S+)$";
+const ZIGBUILD_ACTION: &str = r#"(?m)^\s*cargo-zigbuild-version:\s*"?([\d.]+)"#;
+/// shellcheck-py adds a fourth component of its own (v0.11.0.1), so only the first three count.
+const SHELLCHECK_HOOK: &str =
+    r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*v?(\d+\.\d+\.\d+)(?:\.\d+)?";
+/// The `version` input of every gh-composite-actions setup-shellcheck step in CI.
+const SHELLCHECK_ACTION: &str =
+    r"setup-shellcheck@[0-9a-f]{40}[^\n]*\n\s*with:\s*\n\s*version:\s*v?(\d+\.\d+\.\d+)";
+/// A Trivy version written down anywhere under .github: trivy-gate's `trivy-version` input, a
+/// `TRIVY_VERSION`, or a setup-trivy step of its own.
+const TRIVY_PIN: &str = r"(?m)trivy-version:|TRIVY_VERSION|aquasecurity/setup-trivy";
 
-/// The sources of one pin, read from the repository, `altered` swapping the text of one file for
-/// the negative controls.
-type Sources = fn(altered: Option<(&str, &str)>) -> Vec<PinSource>;
-
-/// The text of `file`, or the altered copy when `altered` names it.
-fn text(file: &str, altered: Option<(&str, &str)>) -> String {
-    match altered {
-        Some((name, content)) if name == file => content.to_owned(),
-        _ => read(file),
-    }
-}
-
-/// `one_value` over the real files: nothing is wrong.
-fn assert_one_value(what: &str, sources: Sources) {
-    let problems = one_value(what, &sources(None), &[]);
-    assert!(problems.is_empty(), "{}", report(&problems));
-}
-
-/// The negative control: `file` with its first `from` replaced by `to` is refused. `from` must be
-/// there, so an edit cannot silently change nothing.
-fn assert_refused(what: &str, sources: Sources, file: &str, from: &str, to: &str) {
-    let original = read(file);
-    assert!(original.contains(from), "{file}: {from:?} is gone");
-    let broken = original.replacen(from, to, 1);
-    let problems = one_value(what, &sources(Some((file, &broken))), &[]);
-    assert!(!problems.is_empty(), "{what}: {file} with {to:?} passes");
-}
-
-/// The exact Rust release, in rust-toolchain.toml, the image's `dhi.io/rust` tag and its
-/// `RUST_VERSION` argument, which names the musl standard libraries the build stage downloads.
-fn rust_release_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
-    let toolchain = text(TOOLCHAIN, altered);
-    let dockerfile = text(DOCKERFILE, altered);
-    vec![
-        PinSource::rust_channel(TOOLCHAIN, &toolchain),
-        PinSource::rust_image_tag(DOCKERFILE, &dockerfile),
-        PinSource::rust_version_arg(DOCKERFILE, &dockerfile),
-    ]
-}
-
-#[test]
-fn rust_release_is_one_value() {
-    assert_one_value("the Rust release", rust_release_sources);
-}
-
-#[test]
-fn rust_release_control_fails_on_another_release() {
-    let release = read(TOOLCHAIN);
-    let channel = release
-        .lines()
-        .find(|line| line.starts_with("channel"))
-        .expect("rust-toolchain.toml has a channel")
-        .to_owned();
-    assert_refused(
-        "the Rust release",
-        rust_release_sources,
-        TOOLCHAIN,
-        &channel,
-        "channel = \"1.0.0\"",
+/// Every YAML file under .github, with its text; none is a failure, since the scans would check
+/// nothing.
+fn github_yaml() -> Vec<(String, String)> {
+    let repo = meta::repo();
+    let files = repo.files_under(".github", &[".yaml", ".yml"]);
+    assert!(
+        !files.is_empty(),
+        "no YAML files under .github; the scan would check nothing"
     );
-    assert_refused(
-        "the Rust release",
-        rust_release_sources,
-        DOCKERFILE,
-        "dhi.io/rust:1.98.1-",
-        "dhi.io/rust:1.0.0-",
-    );
-    assert_refused(
-        "the Rust release",
-        rust_release_sources,
-        DOCKERFILE,
-        "ARG RUST_VERSION=1.98.1\n",
-        "ARG RUST_VERSION=1.0.0\n",
-    );
+    repo.read_all(&files)
 }
 
-/// The MSRV in Cargo.toml is the line (major.minor) of the release rust-toolchain.toml pins: it
-/// names no patch, so a consumer on an earlier patch release still builds.
-fn rust_line_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
-    vec![
-        PinSource::rust_channel_line(TOOLCHAIN, &text(TOOLCHAIN, altered)),
-        PinSource::rust_version_line(CARGO, &text(CARGO, altered)),
-    ]
+/// `content` with its first `from` replaced by `to`; `from` must be there, so an edit cannot
+/// silently change nothing.
+fn edited(content: &str, from: &str, to: &str) -> String {
+    assert!(content.contains(from), "{from:?} is gone");
+    content.replacen(from, to, 1)
 }
 
-#[test]
-fn rust_version_is_the_toolchain_line() {
-    assert_one_value("the Rust line", rust_line_sources);
+/// What the pin checks read of a file: `edit` applied to its path and its content.
+type Edit<'edit> = &'edit dyn Fn(&str, String) -> String;
+
+/// A source of `pattern` in `file`, whose content `edit` has applied.
+fn source(edit: Edit, file: &str, pattern: &str) -> PinSource {
+    PinSource::new(file, &edit(file, meta::repo().read(file)), pattern)
 }
 
-#[test]
-fn rust_version_control_fails_on_another_line() {
-    assert_refused(
+/// The same file for a preset source.
+fn read(edit: Edit, file: &str) -> String {
+    edit(file, meta::repo().read(file))
+}
+
+/// Every pin the repository writes in more than one file, each one value: the Rust line
+/// (rust-toolchain.toml, Cargo's `rust-version`, the image's tag), the exact Rust release
+/// (rust-toolchain.toml's channel, the image's tag and `ARG RUST_VERSION`, the release the musl
+/// standard libraries are downloaded for),
+/// zig, cargo-zigbuild and `ShellCheck`. `edit` is applied to the content of each file read.
+fn pin_problems(edit: Edit) -> Vec<Problem> {
+    let dockerfile = read(edit, DOCKERFILE);
+    let mut problems = one_value(
         "the Rust line",
-        rust_line_sources,
-        CARGO,
-        "rust-version = \"1.98\"",
-        "rust-version = \"1.97\"",
+        &[
+            PinSource::rust_channel_line(RUST_TOOLCHAIN, &read(edit, RUST_TOOLCHAIN)),
+            PinSource::rust_version_line("Cargo.toml", &read(edit, "Cargo.toml")),
+            PinSource::new(DOCKERFILE, &dockerfile, IMAGE_TAG_LINE),
+        ],
+        &[],
     );
-}
-
-/// The release binaries and the image are built with the same zig and the same cargo-zigbuild,
-/// from the same `x86_64` archives: both download those, so a bump that moves one copy fails here
-/// rather than in the first release that runs it.
-const ZIG_PINS: [(&str, &str, &str); 4] = [
-    (
+    problems.extend(one_value(
+        "the Rust release",
+        &[
+            PinSource::rust_channel(RUST_TOOLCHAIN, &read(edit, RUST_TOOLCHAIN)),
+            PinSource::rust_image_tag(DOCKERFILE, &dockerfile),
+            PinSource::rust_version_arg(DOCKERFILE, &dockerfile),
+        ],
+        &[],
+    ));
+    problems.extend(one_value(
         "zig",
-        r#"(?m)^\s*ZIG_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*(?:#.*)?$"#,
-        r"(?m)^ARG ZIG_VERSION=(\S+)\s*$",
-    ),
-    (
-        "zig x86_64 sha256",
-        r"(?m)^\s*ZIG_SHA256:\s*([0-9a-f]{64})\s*(?:#.*)?$",
-        r"amd64\) zig_arch=x86_64; zig_sha256=([0-9a-f]{64}) ;;",
-    ),
-    (
+        &[
+            source(edit, DOCKERFILE, ZIG_DOCKERFILE),
+            source(edit, CI_WORKFLOW, ZIG_ACTION),
+            source(edit, RELEASE_WORKFLOW, ZIG_ACTION),
+        ],
+        &[],
+    ));
+    problems.extend(one_value(
         "cargo-zigbuild",
-        r#"(?m)^\s*CARGO_ZIGBUILD_VERSION:\s*"?(\d+\.\d+\.\d+)"?\s*(?:#.*)?$"#,
-        r"(?m)^ARG CARGO_ZIGBUILD_VERSION=(\S+)\s*$",
-    ),
-    (
-        "cargo-zigbuild x86_64 sha256",
-        r"(?m)^\s*CARGO_ZIGBUILD_SHA256:\s*([0-9a-f]{64})\s*(?:#.*)?$",
-        r"amd64\) zigbuild_asset=x86_64-unknown-linux-musl; zigbuild_sha256=([0-9a-f]{64}) ;;",
-    ),
-];
-
-fn zig_sources(index: usize, altered: Option<(&str, &str)>) -> Vec<PinSource> {
-    let (_, action, dockerfile) = ZIG_PINS[index];
-    vec![
-        PinSource::new(SETUP_ZIGBUILD, &text(SETUP_ZIGBUILD, altered), action),
-        PinSource::new(DOCKERFILE, &text(DOCKERFILE, altered), dockerfile),
-    ]
-}
-
-#[test]
-fn zig_and_cargo_zigbuild_are_one_version() {
-    for (index, (what, _, _)) in ZIG_PINS.iter().enumerate() {
-        let problems = one_value(what, &zig_sources(index, None), &[]);
-        assert!(problems.is_empty(), "{}", report(&problems));
-    }
-}
-
-#[test]
-fn zig_control_fails_on_another_version() {
-    let action = read(SETUP_ZIGBUILD);
-    for (index, (what, _, _)) in ZIG_PINS.iter().enumerate() {
-        let changed = [
-            ("ZIG_VERSION: \"0.17.0\"", "ZIG_VERSION: \"0.16.0\""),
-            (
-                "CARGO_ZIGBUILD_VERSION: \"0.24.0\"",
-                "CARGO_ZIGBUILD_VERSION: \"0.23.0\"",
-            ),
-        ];
-        // Each version pin is refused when the action's copy moves; each digest when it changes.
-        let (from, to) = match index {
-            0 => changed[0],
-            2 => changed[1],
-            1 => ("ZIG_SHA256: 1cbe", "ZIG_SHA256: 0000"),
-            _ => ("CARGO_ZIGBUILD_SHA256: 52be", "CARGO_ZIGBUILD_SHA256: 0000"),
-        };
-        assert!(action.contains(from), "{from:?} is gone");
-        let broken = action.replacen(from, to, 1);
-        let sources = zig_sources(index, Some((SETUP_ZIGBUILD, &broken)));
-        assert!(
-            !one_value(what, &sources, &[]).is_empty(),
-            "{what}: {to:?} passes"
-        );
-    }
-}
-
-/// droast's ShellCheck bridge runs the `shellcheck` on `PATH`, which CI installs with
-/// setup-shellcheck; it must be the release the shellcheck-py hook wraps (its rev adds a fourth
-/// component for the wrapper), which Dependabot moves.
-fn shellcheck_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
-    vec![
-        PinSource::new(
-            PRE_COMMIT,
-            &text(PRE_COMMIT, altered),
-            r"repo: https://github\.com/shellcheck-py/shellcheck-py\s+rev:\s*(v\d+\.\d+\.\d+)",
-        ),
-        PinSource::new(
-            SETUP_SHELLCHECK,
-            &text(SETUP_SHELLCHECK, altered),
-            r#"SHELLCHECK_VERSION:\s*["']?(v[\d.]+)"#,
-        ),
-    ]
-}
-
-#[test]
-fn shellcheck_is_one_version() {
-    assert_one_value("ShellCheck", shellcheck_sources);
-}
-
-#[test]
-fn shellcheck_control_fails_on_another_version() {
-    assert_refused(
+        &[
+            source(edit, DOCKERFILE, ZIGBUILD_DOCKERFILE),
+            source(edit, CI_WORKFLOW, ZIGBUILD_ACTION),
+            source(edit, RELEASE_WORKFLOW, ZIGBUILD_ACTION),
+        ],
+        &[],
+    ));
+    problems.extend(one_value(
         "ShellCheck",
-        shellcheck_sources,
-        SETUP_SHELLCHECK,
-        "SHELLCHECK_VERSION: v0.11.0",
-        "SHELLCHECK_VERSION: v0.10.0",
-    );
+        &[
+            source(edit, PRE_COMMIT, SHELLCHECK_HOOK),
+            source(edit, CI_WORKFLOW, SHELLCHECK_ACTION),
+        ],
+        &[],
+    ));
+    problems
 }
 
-/// The release scan and the scheduled scan of the published image install one exact Trivy, so a
-/// finding means the same in both (docs/release.md).
-fn trivy_sources(altered: Option<(&str, &str)>) -> Vec<PinSource> {
-    [RELEASE, SCHEDULED_SCAN]
-        .into_iter()
-        .map(|file| {
-            PinSource::new(
+/// The pins hold: rust-toolchain.toml pins an exact release and the MSRV in Cargo.toml and the
+/// image's tag are its line; that release, the image's tag and `ARG RUST_VERSION` are one release;
+/// CI's and the release's binaries and the image's build stage are built with the same zig and
+/// cargo-zigbuild; and the `ShellCheck` CI installs is the release the shellcheck-py hook wraps.
+#[test]
+fn pins_are_one_value() {
+    let problems = pin_problems(&|_, content| content);
+    assert!(problems.is_empty(), "{}", report(&problems));
+    rust_release(RUST_TOOLCHAIN, &meta::repo().read(RUST_TOOLCHAIN))
+        .unwrap_or_else(|problem| panic!("{problem}"));
+}
+
+/// One negative control: `from` replaced by `to` in `file` breaks `want` problems.
+type Refusal = (&'static str, &'static str, String, String, usize);
+
+/// Each edit of the real files is refused with the problems it breaks.
+fn assert_refused(refusals: Vec<Refusal>) {
+    for (name, file, from, to, want) in refusals {
+        let problems = pin_problems(&|path, content| {
+            if path == file {
+                edited(&content, &from, &to)
+            } else {
+                content
+            }
+        });
+        assert_eq!(problems.len(), want, "{name}: {}", report(&problems));
+    }
+}
+
+/// The negative control of the Rust pins, on the real files: another line or release, or a source
+/// that no longer writes the pin.
+#[test]
+fn rust_pin_rules_refuse_each_edit() {
+    let release = rust_release(RUST_TOOLCHAIN, &meta::repo().read(RUST_TOOLCHAIN))
+        .unwrap_or_else(|problem| panic!("{problem}"));
+    let line = release
+        .rsplit_once('.')
+        .map_or(release.as_str(), |(line, _)| line);
+    let other_line = format!("{line}0");
+    let channel = format!("channel = \"{release}\"");
+    let msrv = format!("rust-version = \"{line}\"");
+    let image_tag = format!("dhi.io/rust:{release}-");
+    let argument = format!("ARG RUST_VERSION={release}");
+
+    assert_refused(vec![
+        (
+            "a toolchain of another line",
+            RUST_TOOLCHAIN,
+            channel.clone(),
+            format!("channel = \"{other_line}.1\""),
+            2,
+        ),
+        (
+            "a toolchain of another patch",
+            RUST_TOOLCHAIN,
+            channel.clone(),
+            format!("channel = \"{line}.99\""),
+            1,
+        ),
+        (
+            "a channel that is not a release",
+            RUST_TOOLCHAIN,
+            channel,
+            "channel = \"stable\"".to_owned(),
+            2,
+        ),
+        (
+            "an MSRV of another line",
+            "Cargo.toml",
+            msrv,
+            format!("rust-version = \"{other_line}\""),
+            1,
+        ),
+        (
+            "an image of another line",
+            DOCKERFILE,
+            image_tag,
+            format!("dhi.io/rust:{other_line}.1-"),
+            2,
+        ),
+        (
+            "standard libraries of another patch",
+            DOCKERFILE,
+            argument,
+            format!("ARG RUST_VERSION={line}.99"),
+            1,
+        ),
+    ]);
+}
+
+/// The negative control of the tool pins, on the real files: a second version, or a source that no
+/// longer writes the pin.
+#[test]
+fn tool_pin_rules_refuse_each_edit() {
+    assert_refused(vec![
+        (
+            "zig",
+            DOCKERFILE,
+            "ARG ZIG_VERSION=".to_owned(),
+            "ARG ZIG_VERSION=9".to_owned(),
+            1,
+        ),
+        (
+            "zig in CI",
+            CI_WORKFLOW,
+            "zig-version:".to_owned(),
+            "zig-version-gone:".to_owned(),
+            1,
+        ),
+        (
+            "zig in the release",
+            RELEASE_WORKFLOW,
+            "zig-version: ".to_owned(),
+            "zig-version: 9".to_owned(),
+            1,
+        ),
+        (
+            "cargo-zigbuild in CI",
+            CI_WORKFLOW,
+            "cargo-zigbuild-version: ".to_owned(),
+            "cargo-zigbuild-version: 9".to_owned(),
+            1,
+        ),
+        (
+            "cargo-zigbuild in the release",
+            RELEASE_WORKFLOW,
+            "cargo-zigbuild-version:".to_owned(),
+            "cargo-zigbuild-version-gone:".to_owned(),
+            1,
+        ),
+        (
+            "ShellCheck",
+            CI_WORKFLOW,
+            "version: v0.".to_owned(),
+            "version: v9.0.".to_owned(),
+            1,
+        ),
+    ]);
+}
+
+/// The Trivy pins under .github, one problem per file that writes one.
+fn trivy_pin_problems(files: &[(String, String)]) -> Vec<Problem> {
+    let pin = repo_meta::pattern(TRIVY_PIN);
+    files
+        .iter()
+        .filter(|(_, content)| pin.is_match(content))
+        .map(|(file, _)| {
+            Problem::at(
                 file,
-                &text(file, altered),
-                r"(?m)^\s*TRIVY_VERSION:\s*(v\d+\.\d+\.\d+)\s*$",
+                "pins Trivy: trivy-gate installs its latest release, so every scan runs the newest \
+                 checks",
             )
         })
         .collect()
 }
 
+/// Trivy is never pinned: every scan is trivy-gate's, at its default `latest`, and no workflow
+/// installs a Trivy of its own.
 #[test]
-fn trivy_is_one_version() {
-    assert_one_value("Trivy", trivy_sources);
+fn trivy_is_never_pinned() {
+    let problems = trivy_pin_problems(&github_yaml());
+    assert!(problems.is_empty(), "{}", report(&problems));
 }
 
+/// The negative control: each way of pinning Trivy is found, in the file that writes it.
 #[test]
-fn trivy_control_fails_on_another_version() {
-    assert_refused(
-        "Trivy",
-        trivy_sources,
-        SCHEDULED_SCAN,
-        "TRIVY_VERSION: v0.74.0",
-        "TRIVY_VERSION: v0.73.0",
-    );
-    // A source that writes no pin at all is refused as well, not read as agreeing.
-    assert!(
-        !one_value(
-            "Trivy",
-            &[],
-            &[PinValue::new("v1.0.0", "a"), PinValue::new("v2.0.0", "b")]
-        )
-        .is_empty()
-    );
+fn trivy_pins_are_recognized() {
+    for sample in [
+        "        with:\n          trivy-version: 0.76.2\n",
+        "env:\n  TRIVY_VERSION: v0.76.2\n",
+        "      - uses: aquasecurity/setup-trivy@0000000000000000000000000000000000000000 # v0.3.1\n",
+    ] {
+        let problems = trivy_pin_problems(&[(SCHEDULED_SCAN.to_owned(), sample.to_owned())]);
+        assert_eq!(problems.len(), 1, "{sample:?}: {}", report(&problems));
+    }
 }
 
-/// The flags none of the files that define gates may carry: the core set and the Rust set (a test
-/// run that only compiles, capped or allowed lints, tests skipped by name, a member excluded, a
-/// clippy run without `-D warnings`), outside [`ALLOWED_FRAGMENTS`].
+/// The flags no gate may carry: the core set, the Rust set with the rule that clippy denies
+/// warnings.
 fn vacuous_flags() -> VacuousFlags {
     VacuousFlags::core().with_rust()
 }
 
-/// The exact pieces of shell, each in one file, whose `|| true` is not a gate passing on nothing;
-/// the reason says why. A line is allowed only when the flag is gone once the fragment is
-/// removed, so a second `|| true` on the same line is still caught, and an entry that matches
-/// nothing is a problem.
-const ALLOWED_FRAGMENTS: [AllowedFragment<'static>; 2] = [
+/// The reviewed exceptions, each an exact fragment of one file. Each must still match at least
+/// one line, so an entry cannot outlive the code it excuses and quietly cover a new line later.
+const ALLOWED: &[AllowedFragment<'static>] = &[
+    // grep exits 1 when it selects nothing, and "no release tag yet" is an answer here, not a
+    // failure; the brace group confines the || true to that one grep under pipefail.
     AllowedFragment {
-        file: ".github/workflows/release.yaml",
+        file: RELEASE_WORKFLOW,
         fragment: r#"{ grep -E "$RELEASE_TAG_REGEX" || true; }"#,
-        reason: "a tag list with no release tag in it is an empty answer, not an error; grep \
-                 exits 1 on no match and pipefail would turn that into a failed lookup",
+        reason: "a tag filter that may select nothing",
     },
+    // pre-commit-all restores the rust job's Rust cache and never saves it, so one job writes it.
     AllowedFragment {
-        file: ".github/workflows/release.yaml",
-        fragment: r#"{ git tag --merged "HEAD^" 2>/dev/null || true; }"#,
-        reason: "HEAD^ does not exist on a root commit, which has no previous release",
+        file: CI_WORKFLOW,
+        fragment: "save-if: false",
+        reason: "a restore-only Rust cache",
+    },
+    // A recovery that reuses a published image scans it again, but cannot change it: its findings
+    // are reported as a warning by the step after, not a failure of the publish.
+    AllowedFragment {
+        file: RELEASE_WORKFLOW,
+        fragment: "continue-on-error: true # findings in an image already published are warnings",
+        reason: "the scan of a reused, already published image",
     },
 ];
 
-/// Go: `TestNoVacuousFlags`. Scans the files that define gates: the Makefile and the make
-/// fragments, the pre-commit configuration and every YAML file under .github, the workflows
+/// Go: `TestNoVacuousFlags`. Scans the files that define gates: the Makefile and every make
+/// fragment, the pre-commit configuration and every YAML file under .github, the workflows
 /// included.
 #[test]
 fn no_vacuous_flags() {
@@ -328,81 +361,80 @@ fn no_vacuous_flags() {
         !fragments.is_empty(),
         "no make fragments found under .mk/; the scan would check nothing"
     );
-    let workflows = repo.files_under(".github", &[".yaml", ".yml"]);
-    assert!(
-        !workflows.is_empty(),
-        "no YAML found under .github; the checks would see nothing"
-    );
-    let mut files = vec!["Makefile".to_owned(), PRE_COMMIT.to_owned()];
-    files.extend(fragments);
-    files.extend(workflows);
-
-    let problems = vacuous_flags().problems(&repo.read_all(&files), &ALLOWED_FRAGMENTS);
+    let mut files = repo.read_all(&["Makefile".to_owned(), PRE_COMMIT.to_owned()]);
+    files.extend(repo.read_all(&fragments));
+    files.extend(github_yaml());
+    let problems = vacuous_flags().problems(&files, ALLOWED);
     assert!(problems.is_empty(), "{}", report(&problems));
 }
 
 /// Go: `TestVacuousFlagsAreRecognized`, the negative control: each flag, written as a gate would
-/// carry it, is found, and the allowlist covers only its own fragment in its own file.
+/// carry it, is found, and an allowed fragment excuses only itself, in its own file.
 #[test]
 fn vacuous_flags_are_recognized() {
     let flags = vacuous_flags();
-    let mut used = [false; ALLOWED_FRAGMENTS.len()];
-    let mut hits = |file: &str, sample: &str| {
-        flags
-            .hits(file, sample, &ALLOWED_FRAGMENTS, &mut used)
-            .len()
+    let hits = |file: &str, line: &str| {
+        let mut used = vec![false; ALLOWED.len()];
+        flags.hits(file, line, ALLOWED, &mut used).len()
     };
     for sample in [
-        "\tcargo test --workspace || true",
-        "\tcargo test --workspace ||:",
-        "\tcargo test --workspace || exit 0",
-        "\t-cargo test --workspace",
-        "\t@-cargo test --workspace",
-        ".IGNORE: go-vet",
-        "\t$(MAKE) -i go-test",
-        "\t$(MAKE) --ignore-errors go-test",
+        "\tcargo clippy -- -D warnings || true",
+        "\tcargo clippy -- -D warnings ||:",
+        "\tcargo clippy -- -D warnings || exit 0",
+        "\t-cargo test",
+        "\t@-cargo test",
+        ".IGNORE: rust-clippy",
+        "\t$(MAKE) -i rust-test",
+        "\t$(MAKE) --ignore-errors rust-test",
         "        continue-on-error: true",
         "    if: false",
         "    if: ${{ false }}",
         "    if: 'false'",
         "    if: \"${{ false }}\"",
-        "\t$(CARGO) test --workspace --locked --no-run",
-        "        entry: cargo test --workspace --locked -- --skip slow",
-        "\t$(CARGO) clippy --workspace --all-targets --all-features --locked",
+        "\tcargo clippy --workspace",
+        "\tcargo test --no-run",
+        "\t$(CARGO) test -- --skip broker",
     ] {
-        assert!(
-            hits("Makefile", sample) > 0,
-            "no vacuous flag found in {sample:?}"
-        );
+        assert_eq!(hits("Makefile", sample), 1, "{sample:?}");
     }
 
-    let release = ".github/workflows/release.yaml";
-    let allowed = r#"  { grep -E "$RELEASE_TAG_REGEX" || true; } | sort -V"#;
+    let release_filter = r#"{ grep -E "$RELEASE_TAG_REGEX" || true; } | sort -V | tail -n1"#;
     assert_eq!(
-        hits(release, allowed),
+        hits(RELEASE_WORKFLOW, release_filter),
         0,
-        "the allowed fragment was flagged"
+        "the release tag filter is not allowed in release.yaml"
+    );
+    assert_eq!(
+        hits(CI_WORKFLOW, release_filter),
+        1,
+        "the release tag filter is allowed outside release.yaml"
+    );
+    assert_eq!(
+        hits(RELEASE_WORKFLOW, &format!("{release_filter} || true")),
+        1,
+        "a second || true beside the allowed one is allowed in release.yaml"
+    );
+    assert_eq!(
+        hits(RELEASE_WORKFLOW, "make rust-test || true"),
+        1,
+        "an unrelated || true is allowed in release.yaml"
     );
 
-    let extended = format!("{allowed} || true");
-    for (file, sample) in [
-        (".github/workflows/ci.yaml", allowed),
-        (release, extended.as_str()),
-        (
-            ".github/workflows/x.yaml",
-            r#"  { git tag --merged "HEAD^" 2>/dev/null || true; }"#,
-        ),
-    ] {
-        assert!(
-            hits(file, sample) > 0,
-            "{file}: {sample:?} passed through the allowlist"
-        );
-    }
-
-    // An entry that matches nothing is a problem, so it cannot outlive the code it excuses.
-    let problems = flags.problems(
-        &[(release.to_owned(), "jobs: {}\n".to_owned())],
-        &ALLOWED_FRAGMENTS,
+    let reuse_scan =
+        "        continue-on-error: true # findings in an image already published are warnings";
+    assert_eq!(
+        hits(RELEASE_WORKFLOW, reuse_scan),
+        0,
+        "the reused image's scan is not allowed in release.yaml"
     );
-    assert_eq!(problems.len(), ALLOWED_FRAGMENTS.len(), "{problems:?}");
+    assert_eq!(
+        hits(CI_WORKFLOW, reuse_scan),
+        1,
+        "the reused image's scan is allowed outside release.yaml"
+    );
+    assert_eq!(
+        hits(RELEASE_WORKFLOW, "        continue-on-error: true"),
+        1,
+        "another continue-on-error is allowed in release.yaml"
+    );
 }

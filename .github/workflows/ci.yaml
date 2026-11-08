@@ -1,7 +1,8 @@
 name: CI
 
 # The authoritative checks run on every pull request and every push to master; the reviewdog jobs
-# only annotate pull requests. ci-result is the one required check.
+# only annotate pull requests. ci-result is the one check the branch ruleset requires, and the one the
+# release gates on (require-ci-green), on the push of the exact commit it releases.
 on:
   pull_request:
   push:
@@ -10,8 +11,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
-  cancel-in-progress: true
+  # A pull request's runs share one group per branch, so a newer push cancels the older run. Every
+  # other run (a push to master, a dispatch) gets a group of its own: GitHub keeps only one pending
+  # run per group, so a shared group would let a newer push replace a queued run, and a release
+  # gate needs CI to have passed on that exact commit.
+  group: "${{ github.workflow }} @ ${{ github.event_name == 'pull_request' && github.event.pull_request.head.label || github.run_id }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Every job reads the repository and nothing else, unless it says otherwise below.
 permissions:
@@ -19,8 +24,8 @@ permissions:
 
 jobs:
   # The authoritative lint gate: every pre-commit hook over every file, with the versions pinned in
-  # .pre-commit-config.yaml. Skipped hooks, each run by the rust job below: cargo-test and
-  # cargo-deny (which needs the network).
+  # .pre-commit-config.yaml. Two hooks are skipped because the rust job below runs the same thing:
+  # cargo-test and cargo-deny.
   pre-commit-all:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -32,19 +37,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # For the cargo-fmt, cargo-clippy and cargo-machete hooks and the language: system hooks that
-      # run cargo. The Rust cache is saved only on a pull request: on a push it would
-      # write the master cache scope the release job restores (docs/release.md, "Workflow tokens").
+      # run cargo. rust-toolchain.toml names the release, the components and the targets.
       - name: Set up Rust
         run: rustup toolchain install --no-self-update
 
-      - name: Cache the Rust build
+      # The rust job's cache (shared-key ci), restored only: the rust job is its one writer, so two
+      # jobs never race to save the same key.
+      - name: Restore the Rust build cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'pull_request' }}
+          shared-key: ci
+          save-if: false
 
+      # The id gives the resolved Python version, which is part of the cache key.
       - name: Set up Python
+        id: python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.x"
@@ -52,16 +63,22 @@ jobs:
       - name: Install pre-commit
         run: pip install --no-cache-dir pre-commit==4.6.2
 
-      # droast's ShellCheck bridge runs the shellcheck on PATH: the pinned one, not the runner's.
+      # droast's ShellCheck bridge and actionlint run the shellcheck on PATH: the pinned one, not
+      # the runner's. The version is the shellcheck-py rev's in .pre-commit-config.yaml
+      # (meta/tests/toolchain.rs); the action's default sha256 is that release's.
       - name: Set up ShellCheck
-        uses: ./.github/actions/setup-shellcheck
+        uses: leinardi/gh-composite-actions/setup-shellcheck@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          version: v0.11.0
 
-      # Restore only: pre-commit-warmup.yaml saves the entry on master under the same key.
+      # Restore only: pre-commit-warmup.yaml saves the entry on master under the same key, with the
+      # same python_version and pre-commit version as above. The hook environments are bound to the
+      # interpreter that built them, so the resolved Python version is part of the key.
       - name: Restore the pre-commit cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit|${{ runner.os }}|${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit|${{ runner.os }}|${{ steps.python.outputs.python-version }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Run every pre-commit hook on every file
         env:
@@ -69,21 +86,21 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
 
       # pre-commit fails a hook that modifies a tracked file, which covers the auto-fixing hooks
-      # (markdownlint fix, prettier, dclint fix); this also fails on a file a hook
-      # creates, which its diff check does not see, so no fix can pass silently.
+      # (markdownlint fix, prettier, dclint fix); this also fails on a file a hook creates, which its
+      # diff check does not see, so no fix can pass silently.
       - name: Fail if a hook modified a file
         run: |
           git diff --exit-code
           test -z "$(git status --porcelain)"
 
+  # Reports inline PR review comments over a diff range; a push or a manual dispatch has neither a
+  # pull request to comment on nor a base ref to diff against. Annotation only: pre-commit-all is
+  # the gate, so none of these jobs is needed by ci-result.
   actionlint:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
+    timeout-minutes: 15
+    # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
       pull-requests: write
@@ -93,22 +110,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run actionlint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/actionlint@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   pre-commit-hooks:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
+    timeout-minutes: 15
+    # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
       pull-requests: write
@@ -118,13 +133,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # droast's ShellCheck bridge runs the shellcheck on PATH: the pinned one, not the runner's.
       - name: Set up ShellCheck
-        uses: ./.github/actions/setup-shellcheck
+        uses: leinardi/gh-composite-actions/setup-shellcheck@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          version: v0.11.0
 
       - name: Run pre-commit hooks + reviewdog diff
-        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/pre-commit-hooks@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -141,13 +159,10 @@ jobs:
             droast
 
   markdownlint:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
+    timeout-minutes: 15
+    # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
       pull-requests: write
@@ -157,22 +172,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run markdownlint-cli2 via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/markdownlint-cli2@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   shellcheck:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
+    timeout-minutes: 15
+    # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
       pull-requests: write
@@ -182,22 +195,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run shellcheck via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/shellcheck@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   yamllint:
-    # Reports inline PR review comments over a diff range; a manual dispatch has
-    # neither a pull request to comment on nor a base ref to diff against.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # reviewdog posts its findings as a pull request review (-reporter=github-pr-review in every
-    # action this workflow uses, at the pinned commit), which needs pull-requests: write. It
-    # creates no check runs, so checks: write is not needed.
+    timeout-minutes: 15
+    # reviewdog posts its findings as a pull request review, which needs pull-requests: write.
     permissions:
       contents: read
       pull-requests: write
@@ -207,9 +218,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run yamllint via pre-commit + reviewdog
-        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/yamllint@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
@@ -223,41 +235,29 @@ jobs:
     # conventional-pre-commit hook, so --force-scope applies here too, and it
     # skips merge commits. No pull-request title check: squash merging is
     # disabled, so a title never becomes a commit on master. Enabling squash
-    # merging would need one added here first. On a push the commits were already checked on their
-    # pull request.
+    # merging would need one added here first.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate the commit messages
-        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@007919a45a04b0c52dfbb46732019dc4831fc03c # v1.0.3
+        uses: leinardi/gha-pre-commit-reviewdog-actions/conventional-commits@77e6e852b85ad28aa05bba731fa11be3305a5dac # v2.0.0
         with:
           from-ref: ${{ github.event.pull_request.base.sha }}
           to-ref: ${{ github.event.pull_request.head.sha }}
 
-  # The release workflow's scripts, tested with a stub gh: no network, no token.
-  release-scripts:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Test binary-attestation-status.sh
-        run: bash .github/scripts/binary-attestation-status.test.sh
-
-  # The Rust workspace: the same workspace-wide commands as make verify and the pre-commit hooks,
+  # The Rust workspace: the same workspace-wide commands as make verify-rust and the pre-commit hooks,
   # plus cargo-deny (advisories, licences, bans and sources; the advisory database needs the
-  # network). The toolchain matches rust-toolchain.toml. The cache is saved only on a pull
-  # request, as in pre-commit-all.
+  # network), at the release the release's audit runs. The toolchain matches rust-toolchain.toml.
+  # The tests include the meta crate's. The cache is saved only on master, the one ref whose caches
+  # every pull request can restore, under shared-key ci, which pre-commit-all restores too.
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -269,6 +269,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
         run: rustup toolchain install --no-self-update
@@ -276,7 +278,8 @@ jobs:
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'pull_request' }}
+          shared-key: ci
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -291,25 +294,163 @@ jobs:
       - name: Check Rust documentation
         run: make rust-doc
 
-      - name: Check dependencies with cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          # The root is a package as well as the workspace, so without --workspace cargo-deny
-          # would check the exporter's graph only, not the meta and testenv crates.
-          arguments: --workspace
-          command: check
+      - name: Set up cargo-deny
+        uses: leinardi/gh-composite-actions/setup-cargo-deny@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
 
-  # The one required check that stands for the rest: GitHub counts a skipped required job as passing,
-  # so this job runs always and decides. On a pull request every needed job must succeed; on a push
-  # or a dispatch conventional-commits is skipped and the others must succeed. The reviewdog jobs
-  # only annotate, so they are not needed here.
+      # The root is a package as well as the workspace, so rust.mk passes --workspace: without it
+      # cargo-deny would check the exporter's graph only, not the meta and testenv crates.
+      - name: Check dependencies with cargo-deny
+        run: make rust-deny
+
+  # The release's packaging path, on every pull request and every push to master: the static release
+  # binaries built with the release's own make target (dist-static), then the image's prebuilt
+  # target, which COPYs those binaries, for both shipped platforms. linux/amd64 runs the full image
+  # suite natively; linux/arm64 runs the reduced suite under QEMU (the binary's ELF machine and
+  # static linking, its mode and owner, the image config, the container starting, logging its
+  # stamps and serving them on /metrics). Both check that the image binary is byte for byte the dist/ binary built here. The
+  # release builds the same target from the same make target on the same base tag, and runs only
+  # the short smoke tier of the same script (docs/release.md, "What CI proves").
+  #
+  # Never skipped on a push or a dispatch: release.yaml gates on ci-result of the exact commit it
+  # releases, and only this job on that commit proves its packaging. The prebuilt target never
+  # touches dhi.io/rust, but its base, dhi.io/static, needs a dhi.io login. A pull request from a
+  # fork gets no secret: there the job says so in a notice and checks nothing, and the push to master
+  # after the merge runs it in full. Anywhere else a missing secret fails the job.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HAS_DHI_TOKEN: ${{ secrets.DHI_TOKEN != '' }}
+      # What dtolnay/rust-toolchain exported to every later step of the job.
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every external image pinned and every download verified, before minutes of building: the
+      # dhi.io bases by an explicit tag (dhi.io rebuilds them too often to follow by digest),
+      # anything else by digest. The release runs the same check.
+      - name: Check the Dockerfile pins
+        uses: leinardi/gh-composite-actions/check-pinned-bases@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          dockerfiles: deployments/docker/Dockerfile
+          tag-only-images: dhi.io
+
+      - name: Check for the dhi.io credential
+        id: dhi
+        env:
+          EVENT: ${{ github.event_name }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [[ ${HAS_DHI_TOKEN} == true ]]; then
+            echo "available=true" >>"${GITHUB_OUTPUT}"
+          elif [[ ${EVENT} == pull_request && ${FORK} == true ]]; then
+            echo "::notice::A pull request from a fork gets no DHI_TOKEN, and the image's base (dhi.io/static) cannot be pulled without one: the packaging path is not tested here. The push to master after the merge tests it, and the release gates on that run."
+            echo "available=false" >>"${GITHUB_OUTPUT}"
+          else
+            echo "::error::DHI_TOKEN is not available to this ${EVENT} run, so the image's base (dhi.io/static) cannot be pulled. Add it as an Actions secret (and a Dependabot secret) - docs/release.md."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hardened Images (dhi.io)
+        if: steps.dhi.outputs.available == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: dhi.io
+          username: leinardi
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Set up Rust
+        if: steps.dhi.outputs.available == 'true'
+        run: rustup toolchain install --no-self-update
+
+      # Its own key: the musl targets and the remapped paths build other units than the rust job.
+      - name: Cache the Rust build
+        if: steps.dhi.outputs.available == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ci
+          key: static
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      # The versions the Dockerfile's build stage pins (meta/tests/toolchain.rs), as the release.
+      - name: Set up cargo-zigbuild
+        if: steps.dhi.outputs.available == 'true'
+        uses: leinardi/gh-composite-actions/setup-zigbuild@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          zig-version: 0.17.0
+          cargo-zigbuild-version: 0.24.0
+
+      # The release's stamps, in the release's format: a version, the commit's first seven
+      # characters and its commit date.
+      - name: Read the stamps
+        id: stamp
+        if: steps.dhi.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "version=v0.0.0-ci"
+            echo "commit=$(git rev-parse HEAD | cut -c1-7)"
+            echo "date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Build the static release binaries
+        if: steps.dhi.outputs.available == 'true'
+        env:
+          DIST_VERSION: ${{ steps.stamp.outputs.version }}
+          DIST_COMMIT: ${{ steps.stamp.outputs.commit }}
+          DIST_DATE: ${{ steps.stamp.outputs.date }}
+        run: make dist-static DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}"
+
+      # The arm64 image runs on the amd64 runner through binfmt emulation. The registered emulator
+      # image is pinned by index digest, because the action's default is the moving `latest` tag.
+      - name: Set up QEMU
+        if: steps.dhi.outputs.available == 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+
+      # No layer cache: the prebuilt target is the base plus one COPY.
+      - name: Build and test the linux/amd64 image (full suite)
+        if: steps.dhi.outputs.available == 'true'
+        env:
+          DIST_VERSION: ${{ steps.stamp.outputs.version }}
+          DIST_COMMIT: ${{ steps.stamp.outputs.commit }}
+          DIST_DATE: ${{ steps.stamp.outputs.date }}
+        run: |
+          set -euo pipefail
+          stamps=(DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}")
+          make image-build-prebuilt image-test "${stamps[@]}" IMAGE_PLATFORM=linux/amd64 IMAGE_TEST_TIER=full
+
+      - name: Build and test the linux/arm64 image (reduced suite, QEMU)
+        if: steps.dhi.outputs.available == 'true'
+        env:
+          DIST_VERSION: ${{ steps.stamp.outputs.version }}
+          DIST_COMMIT: ${{ steps.stamp.outputs.commit }}
+          DIST_DATE: ${{ steps.stamp.outputs.date }}
+        run: |
+          set -euo pipefail
+          stamps=(DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}")
+          make image-build-prebuilt image-test "${stamps[@]}" IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced
+
+  # The one check that stands for the rest, for the branch ruleset to require and for release.yaml
+  # to gate on: GitHub counts a skipped required job as passing, so this job runs always and decides. On a pull request every needed job must succeed; on a push
+  # or a dispatch the pull-request-only conventional-commits job is skipped and the others must
+  # succeed. The reviewdog jobs only annotate pull requests and are not needed: pre-commit-all is
+  # the gate they annotate for.
   ci-result:
     if: always()
     needs:
       - pre-commit-all
       - conventional-commits
-      - release-scripts
       - rust
+      - image
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

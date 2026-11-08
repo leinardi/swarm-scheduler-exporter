@@ -1,41 +1,40 @@
 name: Release swarm-scheduler-exporter
 
-# One dispatch resolves the version, verifies, decides the release mode, builds
-# the binaries and the image, scans the image, tags, publishes the image and the
-# GitHub release, and moves the `latest` pointers.
+# One dispatch resolves the version, checks that CI passed on the commit, audits the dependencies,
+# decides the release mode per binary and platform, builds the static binaries once and the image
+# from exactly those binaries (the Dockerfile's prebuilt target), smoke-tests and scans that image,
+# tags, publishes the image and the GitHub release with the binaries, and moves the `latest`
+# pointers.
 #
-# The order of the release job is deliberate: everything that can fail does so
-# before the tag exists, because tags in this repository are immutable ("Immutable
-# tags" ruleset: no update, no deletion, no bypass) and cannot be cleaned up after
-# a failure. The image is built once, into a job-local registry, and scanned
-# there; only that scanned digest is copied to GHCR, after the tag. Everything
-# after the tag push reuses what is already published only once it is proven to
-# be this run's, and never replaces it, so a re-run with the same explicit
-# version finishes a failed publish. docs/release.md is the prose version of
-# this, with the recovery procedure.
+# The order of the release job is deliberate: everything that can fail does so before the tag
+# exists, because tags in this repository are immutable ("Immutable tags" ruleset: no update, no
+# deletion, no bypass) and cannot be cleaned up after a failure. The image is built once, into a
+# job-local registry, and smoke-tested and scanned there; only that digest is copied to GHCR, after
+# the tag. Everything after the tag push reuses what is already published only once it is proven to
+# be this run's, and never replaces it, so a re-run with the same explicit version finishes a failed
+# publish. docs/release.md is the prose version of this, with the recovery procedure and why the
+# full image tests run in CI only.
 on:
   workflow_dispatch:
     inputs:
-      # Left empty, the version comes from the Conventional Commits since the last
-      # tag. An explicit one is checked for shape and for being higher than every
-      # released version, and is how a recovery re-run names the version it failed
-      # on.
+      # Left empty, the version comes from the Conventional Commits since the last tag. An explicit
+      # one is checked for shape and for being higher than every released version, and is how a
+      # recovery re-run names the version it failed on.
       version:
         description: "Version, e.g. 1.2.0 or v1.2.0 (empty: derive from the commits)"
         required: false
-      # Resolves the version, verifies, builds the binaries and the image, and
-      # stops there: no tag is pushed and nothing is published.
+      # Resolves the version, checks CI, builds the binaries and the image, smoke-tests and scans
+      # it, and stops there: no tag is pushed and nothing is published.
       dry_run:
-        description: "Dry run: build everything, stop before the tag is pushed"
+        description: "Dry run: build, test and scan, stop before the tag is pushed"
         type: boolean
         default: false
 
-# One release at a time, and never cancelled. Two dispatches in flight together
-# would each check "higher than every released version" against the same latest
-# tag, both pass, and then publish in whatever order they happened to finish - a
-# lower version landing last would take `latest` with it. A second dispatch waits
-# for the first instead of racing it, and a run that has started is never killed
-# part-way through publishing.
+# One release at a time, and never cancelled. Two dispatches in flight together would each check
+# "higher than every released version" against the same latest tag, both pass, and then publish in
+# whatever order they happened to finish - a lower version landing last would take `latest` with
+# it. A second dispatch waits for the first instead of racing it, and a run that has started is
+# never killed part-way through publishing.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -44,53 +43,52 @@ permissions:
   contents: read
 
 env:
-  # Pinned by hand: dependabot does not track a release asset. The digest is
-  # the linux_amd64 archive's line in the release's checksums.txt.
-  SVU_VERSION: v3.4.1
-  SVU_SHA256: 7ee8c91998c15109130638dc661a912d5f426e2f8642f6f6c04e6502be920770
-  # The one definition of a release tag: vMAJOR.MINOR.PATCH, strict SemVer core
-  # with no leading zeros, no pre-release and no build metadata. Every lookup
-  # below filters the full tag list through this with grep -E, never through a
-  # glob: `v[0-9]*.[0-9]*.[0-9]*` also matches v1.2.3-rc.1, v1.2.3+meta and
-  # v1foo.2bar.3baz, any of which could otherwise become the current version or
-  # break version resolution, and a leading-zero tag like v01.2.3 would be a
-  # permanent malformed release.
+  # The one definition of a release tag: vMAJOR.MINOR.PATCH, strict SemVer core with no leading
+  # zeros, no pre-release and no build metadata, the same regex release-version and release-mode
+  # use. The late checks below filter the full tag list through it with grep -E, never through a
+  # glob.
   RELEASE_TAG_REGEX: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
   APP_NAME: swarm-scheduler-exporter
   IMAGE_REPO: ghcr.io/leinardi/swarm-scheduler-exporter
-  # The workflow every published artifact must come from. The guard job makes
-  # every run of this file a run on refs/heads/master, so the keyless cosign
-  # identity a sign in this run produces is exactly SIGNER_IDENTITY, and a
-  # signature or an attestation from any other workflow or branch does not count.
+  # The workflow every published artifact must come from. The guard job makes every run of this
+  # file a run on refs/heads/master, so the keyless cosign identity a sign in this run produces is
+  # exactly the one release-mode checks a reused image for, and a signature or an attestation from
+  # any other workflow or branch does not count.
   SIGNER_WORKFLOW: leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml
-  SIGNER_IDENTITY: https://github.com/leinardi/swarm-scheduler-exporter/.github/workflows/release.yaml@refs/heads/master
-  SIGNER_ISSUER: https://token.actions.githubusercontent.com
   PLATFORMS: linux/amd64,linux/arm64
-  # The job-local registries the image is built into, and a dry run copies to.
-  # Pinned by index digest, like every image this workflow runs.
+  # The job-local registries the image is built into, and a dry run copies to. Pinned by index
+  # digest, like every image this workflow runs.
   REGISTRY_IMAGE: registry:3.1.2@sha256:c87f33837722a100572e95d7dc4bf539fc42cf68202b13c3bc03c0ff54c3a649
   LOCAL_IMAGE: localhost:5000/swarm-scheduler-exporter
   COPY_IMAGE: localhost:5001/swarm-scheduler-exporter
-  # Copies the scanned index to GHCR with its digest. skopeo v1.24.1 is
-  # released on GitHub but has no image on quay.io, so this is v1.22.3.
+  # Copies the scanned index to GHCR with its digest. skopeo v1.24.1 is released on GitHub but has
+  # no image on quay.io, so this is v1.22.3.
   SKOPEO_IMAGE: quay.io/skopeo/stable:v1.22.3-immutable@sha256:c0ee1f4edca5c01cb8d5611124f92f3cc47196ecab68aee5d0f90834e00574d5
-  # Pinned by hand, like SVU_VERSION: setup-trivy installs whatever it is given.
-  # scheduled-scan.yaml scans with the same version; bump both together.
-  TRIVY_VERSION: v0.74.0
 
 jobs:
-  # workflow_dispatch lets the caller pick any branch, and the release job holds
-  # contents: write, packages: write and an OIDC identity. Dispatched from a side
-  # branch it would tag that branch's tree and publish it as a release and as the
-  # image. This fails rather than skips, so such a run is red and not a green
-  # no-op, and every other job waits on it.
+  # workflow_dispatch lets the caller pick any branch, and the release job holds contents: write,
+  # packages: write and an OIDC identity. Dispatched from a side branch it would tag that branch's
+  # tree and publish it as a release and as the image. This fails rather than skips, so such a run
+  # is red and not a green no-op, and every other job but audit waits on it.
   #
-  # The ruleset cannot express this: tag protection stops a tag moving, not a tag
-  # being created from the wrong commit. The second line of defence is the
-  # `release` environment, whose deployment branch rule is configured by hand -
-  # docs/release.md.
+  # The ruleset cannot express this: tag protection stops a tag moving, not a tag being created
+  # from the wrong commit. The second line of defence is the `release` environment, whose
+  # deployment branch rule is configured by hand - docs/release.md.
+  #
+  # Then the version: explicit, or derived by svu from the commits, and in both cases higher than
+  # every release, unless it is the recovery of this exact tag on this commit (release-version).
   guard:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      previous: ${{ steps.version.outputs.previous }}
+      explicit: ${{ steps.version.outputs.explicit }}
+      recovery: ${{ steps.version.outputs.recovery }}
+      major: ${{ steps.stamp.outputs.major }}
+      short_sha: ${{ steps.stamp.outputs.short_sha }}
+      build_date: ${{ steps.stamp.outputs.build_date }}
+      source_date_epoch: ${{ steps.stamp.outputs.source_date_epoch }}
 
     steps:
       - name: Refuse to release anything but master
@@ -103,274 +101,160 @@ jobs:
             exit 1
           fi
 
-  # The verify jobs are repeated from ci.yaml rather than referenced, so that a
-  # release never depends on which pull request last ran CI. All of them take
-  # Rust from the same pinned toolchain the release job builds with, so the
-  # checks and the tests describe the binary that ships.
-  test:
-    needs: guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      # What dtolnay/rust-toolchain exported to every later step of the job.
-      CARGO_INCREMENTAL: "0"
-      CARGO_TERM_COLOR: always
-
-    steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # release-version reads every tag and the commits since the last one.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
-      - name: Set up Rust
-        run: rustup toolchain install --no-self-update
+      # Only to derive a version: a version typed by hand releases even while GitHub's release
+      # downloads fail.
+      - name: Install svu
+        if: inputs.version == ''
+        uses: leinardi/gh-composite-actions/setup-svu@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
 
-      - name: Cache the Rust build
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Resolve the version to release
+        id: version
+        uses: leinardi/gh-composite-actions/release-version@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          version: ${{ inputs.version }}
 
-      - name: Lint with clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # Everything stamped into an artifact comes from the commit, never from the clock or the
+      # clone, so a recovery re-run rebuilds the same bytes: a fixed seven-character commit prefix
+      # (`git rev-parse --short` grows with the repository), the commit date and time. The image's
+      # moving major tag is the bare number (:2), as it has always been; release-version's `major`
+      # output is the git form (v2).
+      - name: Read the stamps
+        id: stamp
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "major=${VERSION%%.*}"
+            echo "short_sha=$(git rev-parse HEAD | cut -c1-7)"
+            echo "build_date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
+            echo "source_date_epoch=$(git log -1 --format=%ct)"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Run the test suite
-        run: cargo test --workspace --locked
-
-  audit:
+  # The release-time clippy, test and integration suites are replaced by this gate: CI (ci.yaml)
+  # and the integration suite (integration.yaml) must have passed on this exact commit, on its push
+  # to master. Its ci-result needs the rust job (fmt, clippy, the
+  # tests, the docs, cargo-deny) and the image job, which on a push to master always builds the
+  # release binaries with this workflow's make target and the image's prebuilt target from them,
+  # and runs the full image suite on amd64 and the reduced one on arm64 (docs/release.md, "What CI
+  # proves").
+  ci-green:
     needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      actions: read
+
+    steps:
+      - name: Require CI green on this commit
+        uses: leinardi/gh-composite-actions/require-ci-green@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          accepted-events: push
+
+      # The integration suite (integration.yaml) runs the release binary against a real multi-node
+      # Swarm, which ci.yaml cannot: it must have passed on the same push to master too.
+      - name: Require the integration suite green on this commit
+        uses: leinardi/gh-composite-actions/require-ci-green@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          workflow: .github/workflows/integration.yaml
+          job: integration
+          accepted-events: push
+
+  # The time-sensitive check: advisories are published every day, so the dependency graph CI passed
+  # is checked again now (advisories, licences, bans and sources). It needs nothing and starts with
+  # guard, so it runs alongside guard, ci-green and the release job's build rather than before them;
+  # the release job waits for it to pass before its first step that publishes anything. Pinning
+  # cargo-deny does not pin what it knows: the advisory database is fetched at run time.
+  audit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Advisories, licences, bans and sources. Pinning cargo-deny does not pin
-      # what it knows: the advisory database is fetched at run time.
-      - name: Check the Rust dependencies with cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          # The root is a package as well as the workspace, so without
-          # --workspace cargo-deny would check the exporter's graph only.
-          arguments: --workspace
-          command: check
+          persist-credentials: false
+
+      # cargo-deny reads the graph through cargo metadata, with the pinned toolchain.
+      - name: Set up Rust
+        run: rustup toolchain install --no-self-update
+
+      - name: Set up cargo-deny
+        uses: leinardi/gh-composite-actions/setup-cargo-deny@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+
+      - name: Check the Rust dependencies with cargo-deny
+        run: make rust-deny
 
   release:
     needs:
       - guard
-      - test
-      - audit
+      - ci-green
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       # What dtolnay/rust-toolchain exported to every later step of the job.
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-    # Created on first run with no protection rules, which changes nothing by
-    # itself. Add a deployment branch rule limiting it to `master`, and required
-    # reviewers if a release should need a second pair of eyes - docs/release.md.
+    # Created on first run with no protection rules, which changes nothing by itself. Add a
+    # deployment branch rule limiting it to `master`, and required reviewers if a release should need
+    # a second pair of eyes - docs/release.md.
     environment: release
     permissions:
       contents: write # push the tag, create the release, upload assets
       packages: write # push the image to GHCR
       id-token: write # cosign keyless signing and provenance via GitHub OIDC
       attestations: write # provenance attestation upload
+      actions: read # require-job-success reads the audit job of this run
 
     steps:
+      # No persisted credentials: the one step that writes to the repository, the tag push, passes
+      # the token to that one git command.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # svu reads the tags and the commits since the last one.
+          # release-mode and toolchain-recover read the tag and its annotation from the clone.
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
 
-      # The pinned toolchain, not a floating "stable": the shipped binary is
-      # built with the toolchain the test job ran, and a recovery re-run
-      # rebuilds with the same one, which is what makes its binaries
-      # byte-identical.
-      - name: Set up Rust
-        run: rustup toolchain install --no-self-update
+      # Every external image pinned and every download verified (the same check CI runs): the
+      # dhi.io bases by an explicit tag, deliberately not by digest (dhi.io rebuilds them too often
+      # to follow by digest), anything else by digest.
+      - name: Check the Dockerfile pins
+        uses: leinardi/gh-composite-actions/check-pinned-bases@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          dockerfiles: deployments/docker/Dockerfile
+          tag-only-images: dhi.io
 
-      - name: Set up cargo-zigbuild
-        uses: ./.github/actions/setup-zigbuild
-
-      - name: Install svu
+      # The base both shipped targets run on, by tag, and the BuildKit frontend's digest pin. The
+      # build stage's dhi.io/rust is not read: the prebuilt target never uses it.
+      - name: Read the base and the frontend pin
+        id: base
         run: |
           set -euo pipefail
-          archive="${RUNNER_TEMP}/svu.tar.gz"
-          curl -fsSL -o "${archive}" \
-            "https://github.com/caarlos0/svu/releases/download/${SVU_VERSION}/svu_${SVU_VERSION#v}_linux_amd64.tar.gz"
-          echo "${SVU_SHA256}  ${archive}" | sha256sum --check --strict -
-          tar -xzf "${archive}" -C "${RUNNER_TEMP}" svu
-          sudo install -m 0755 "${RUNNER_TEMP}/svu" /usr/local/bin/svu
-          svu --version
-
-      - name: Resolve the version to release
-        id: version
-        env:
-          RAW: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-
-          # Only strict vX.Y.Z tags are releases (RELEASE_TAG_REGEX). `latest`,
-          # `v1`, pre-releases and malformed tags are not, so every lookup below
-          # filters the full tag list through the regex rather than taking "the
-          # nearest tag". Prints the highest release tag in its input, or nothing.
-          highest_release() {
-            { grep -E "$RELEASE_TAG_REGEX" || true; } | sort -V | tail -n1
-          }
-          # Whether the release tag $1 sits on HEAD.
-          on_head() {
-            git tag --points-at HEAD | { grep -E "$RELEASE_TAG_REGEX" || true; } | grep -qxF "$1"
-          }
-
-          if [ -n "$RAW" ]; then
-            VERSION="v${RAW#v}"
-            if ! [[ "$VERSION" =~ $RELEASE_TAG_REGEX ]]; then
-              echo "Version must be X.Y.Z or vX.Y.Z with no leading zeros, no pre-release and no build metadata (got '$RAW')" >&2
-              exit 1
-            fi
-            EXPLICIT=true
-          else
-            # svu is given the exact tag to count from, never a glob. It matches
-            # --tag.pattern with a glob library against every tag, so a pattern
-            # would let a stray tag like v1.9.0-rc.1 become the current version.
-            # A strict tag holds only `v`, digits and dots, so as a glob it
-            # matches that one tag literally, and svu counts the commits since
-            # exactly that tag.
-            CURRENT=$(git tag --merged HEAD | highest_release)
-            if [ -z "$CURRENT" ]; then
-              echo "No vX.Y.Z release tag is reachable from this commit, so there is nothing to derive a version from. Re-run with an explicit version." >&2
-              exit 1
-            fi
-            VERSION=$(svu next --tag.pattern "$CURRENT")
-            if ! [[ "$VERSION" =~ $RELEASE_TAG_REGEX ]]; then
-              echo "svu derived '$VERSION' from $CURRENT, which is not a vX.Y.Z release tag." >&2
-              exit 1
-            fi
-            # svu prints the current version unchanged, and exits 0, when no
-            # feat/fix/breaking commit exists since the last tag. That is not a
-            # release: say so rather than tagging the same tree twice - unless
-            # that tag is on HEAD itself. Then this is "Re-run failed jobs" on a
-            # run that derived its version and pushed the tag before failing, and
-            # it must be able to finish what that run started.
-            if [ "$VERSION" = "$CURRENT" ] && ! on_head "$VERSION"; then
-              echo "No feat/fix or breaking-change commit since ${CURRENT}, so there is nothing to bump. Re-run with an explicit version to force one." >&2
-              exit 1
-            fi
-            EXPLICIT=false
+          BASES=$(sed -nE 's/^FROM[[:space:]]+([^[:space:]-][^[:space:]]*)[[:space:]]+AS[[:space:]]+base[[:space:]]*$/\1/Ip' deployments/docker/Dockerfile)
+          if [ "$(grep -c . <<<"$BASES")" -ne 1 ]; then
+            echo "The Dockerfile must have exactly one 'FROM <image>:<tag> AS base' line (found: ${BASES:-none})." >&2
+            exit 1
           fi
-
-          # A recovery re-run is this exact version already sitting on HEAD -
-          # nothing wider. Treating "HEAD carries some tag" as recovery would
-          # misread a release cut from a commit that is already tagged with the
-          # previous version.
-          RECOVERY=false
-          if on_head "$VERSION"; then
-            RECOVERY=true
+          FRONTEND=$(sed -nE '1s/^#[[:space:]]*syntax=[^[:space:]]+@(sha256:[0-9a-f]{64}).*/\1/p' deployments/docker/Dockerfile)
+          if [ -z "$FRONTEND" ]; then
+            echo "The Dockerfile's first line must pin the frontend: '# syntax=<image>@sha256:<digest>'." >&2
+            exit 1
           fi
-
-          # The previous release, for the summary. On a recovery the tag being
-          # released is on HEAD already, so looking from HEAD would answer with
-          # that tag. HEAD^ does not exist on a root commit, hence the fallback.
-          if [ "$RECOVERY" = "true" ]; then
-            PREVIOUS=$({ git tag --merged "HEAD^" 2>/dev/null || true; } | highest_release)
-          else
-            PREVIOUS=$(git tag --merged HEAD | highest_release)
-          fi
-
-          # A version must be higher than every version already released.
-          # Without this, an explicit v0.9.9 typed after v0.10.0 would create a
-          # lower immutable tag. The one exception is the recovery re-run, which
-          # reuses the version it failed on.
-          LATEST=$(git tag --list | highest_release)
-          # A derived version counts from the highest release reachable from
-          # this commit. When the highest release overall is tagged on a commit
-          # outside this branch, that base is older: name it, so the failure
-          # explains itself.
-          off_branch_hint() {
-            if [ "$EXPLICIT" != "true" ] && ! git merge-base --is-ancestor "$LATEST" HEAD; then
-              echo "$LATEST is tagged on a commit that is not in this branch's history, so the version was derived from $CURRENT instead. Re-run with an explicit version higher than $LATEST." >&2
-            fi
-          }
-          if [ -n "$LATEST" ]; then
-            if [ "$VERSION" = "$LATEST" ]; then
-              if [ "$RECOVERY" != "true" ]; then
-                echo "$VERSION is already released and does not point at this commit. Release a higher version." >&2
-                off_branch_hint
-                exit 1
-              fi
-              echo "Re-running the release of $VERSION, which already points at this commit."
-            elif [ "$RECOVERY" != "true" ]; then
-              HIGHEST=$(printf '%s\n%s\n' "$VERSION" "$LATEST" | sort -V | tail -n1)
-              if [ "$HIGHEST" != "$VERSION" ]; then
-                echo "$VERSION is lower than the latest release $LATEST. Tags here are immutable, so only a higher version may be published." >&2
-                off_branch_hint
-                exit 1
-              fi
-            else
-              echo "Re-running the release of $VERSION, which already points at this commit; $LATEST has been released since, so $VERSION will not become latest."
-            fi
-          fi
-
-          MAJOR="${VERSION#v}"
-          MAJOR="${MAJOR%%.*}"
-          # Everything stamped into an artifact comes from the commit, never from
-          # the clock or the clone, so a recovery re-run rebuilds the same bytes.
-          # A fixed-length prefix rather than `git rev-parse --short`, whose
-          # length grows with the repository.
-          SHORT_SHA=$(git rev-parse HEAD | cut -c1-7)
-          BUILD_DATE=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-
-          echo "Resolved $VERSION (previous: ${PREVIOUS:-none}, explicit: $EXPLICIT, recovery: $RECOVERY)"
-          # Outputs, not exports: an exported variable does not survive into the
-          # next step.
+          echo "Base: $BASES"
           {
-            echo "version=$VERSION"
-            echo "previous=$PREVIOUS"
-            echo "explicit=$EXPLICIT"
-            echo "recovery=$RECOVERY"
-            echo "major=$MAJOR"
-            echo "short_sha=$SHORT_SHA"
-            echo "build_date=$BUILD_DATE"
-            echo "source_date_epoch=$SOURCE_DATE_EPOCH"
+            echo "image=$BASES"
+            echo "frontend=$FRONTEND"
           } >> "$GITHUB_OUTPUT"
-
-      # A tag that already exists is either a re-run recovering a failed publish
-      # - it points at this commit, and the run continues without pushing it
-      # again - or a different commit, which nothing here may overwrite: tags in
-      # this repository are immutable, on purpose.
-      - name: Check the tag
-        id: tag
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          HEAD_SHA=$(git rev-parse HEAD)
-          REMOTE=$(git ls-remote origin "refs/tags/$VERSION^{}" "refs/tags/$VERSION" | head -n1 | awk '{print $1}')
-
-          if [ -n "$REMOTE" ]; then
-            PEELED=$(git ls-remote origin "refs/tags/$VERSION^{}" | awk '{print $1}')
-            POINTS_AT="${PEELED:-$REMOTE}"
-            if [ "$POINTS_AT" != "$HEAD_SHA" ]; then
-              echo "$VERSION already exists and points at $POINTS_AT, not at $HEAD_SHA. Tags here are immutable: release a new version instead." >&2
-              exit 1
-            fi
-            echo "$VERSION already exists on this commit: recovering a failed publish."
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-            LOCAL=$(git rev-list -n1 "$VERSION")
-            if [ "$LOCAL" != "$HEAD_SHA" ]; then
-              echo "The local tag $VERSION points at $LOCAL, not at $HEAD_SHA." >&2
-              exit 1
-            fi
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$VERSION" -m "swarm-scheduler-exporter $VERSION"
-          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -379,113 +263,169 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Installs cosign v3, which stores the signature as a Sigstore bundle in an
-      # OCI 1.1 referring artifact rather than a `.sig` tag. Signing and the
-      # recovery check below both use this same cosign, so they agree; a
-      # consumer needs cosign v3, or v2.6+ with --new-bundle-format, to verify.
-      - name: Install cosign
-        if: ${{ !inputs.dry_run }}
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # The pinned toolchain, not a floating "stable": rust-toolchain.toml names the release, the
+      # components and the musl targets.
+      - name: Set up Rust
+        run: rustup toolchain install --no-self-update
 
-      # The mode is decided here, before anything is built or pushed, from two
-      # lookups: the Git tag (the step above) and the image :<version> on GHCR.
-      # Only "not found" counts as absent: an authentication or network error
-      # stops the run, because reading it as "absent" would let a run push a tag
-      # or an image over something it could not see.
+      # A recovery rebuilds with the toolchain the tag records, and fails closed when it cannot
+      # switch to it, so a rebuilt binary is byte-identical to one the first attempt published. A
+      # fresh release has no tag yet, and this is a no-op.
+      - name: Recover the recorded toolchain
+        uses: leinardi/gh-composite-actions/toolchain-recover@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          toolchains: rust
+          rust-targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          tag: ${{ needs.guard.outputs.recovery == 'true' && needs.guard.outputs.tag || '' }}
+
+      # The toolchain this run builds with, as the tag annotation records it. release-mode checks
+      # that an existing tag records exactly this.
+      - name: Record the toolchain
+        id: toolchains
+        uses: leinardi/gh-composite-actions/toolchain-record@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          toolchains: rust
+
+      # The mode is decided here, before anything is built or pushed, per binary and platform, from
+      # the Git tag, the image :<tag> on GHCR, the GitHub release and its assets. Only "not found"
+      # counts as absent: any other lookup error stops the run. Every published artifact must be
+      # attested by this workflow for this commit, and a published image signed by it too. It also
+      # installs cosign v3, which signs below.
       #
-      #   Git tag         image :<version>                     mode
-      #   absent          absent                               fresh
-      #   absent          present                              stop before tagging
-      #   on this commit  present, attested for this commit    reuse
-      #   on this commit  present, not attested                stop: needs a human
-      #   on this commit  absent                               publish
+      #   Git tag         published                                     mode
+      #   absent          nothing                                       fresh
+      #   absent          an image, or a release                        stop
+      #   on another commit                                             stop
+      #   on this commit  the image, attested and signed                reuse (the assets from it)
+      #   on this commit  no image, or not every asset                  publish
+      #   on this commit  anything unattested, unsigned or differing    stop: needs a human
       #
-      # A tag on another commit already failed the step above. docs/release.md
-      # describes each mode.
+      # Per platform: image and asset published, they must be the same bytes; image only, the asset
+      # is extracted from it; asset only, the image is built with it; neither, the binary is
+      # rebuilt. docs/release.md describes each mode.
       - name: Decide the release mode
         id: mode
+        uses: leinardi/gh-composite-actions/release-mode@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          tag: ${{ needs.guard.outputs.tag }}
+          image: ${{ env.IMAGE_REPO }}
+          binaries: ${{ env.APP_NAME }}
+          platforms: ${{ env.PLATFORMS }}
+          signer-workflow: ${{ env.SIGNER_WORKFLOW }}
+          expected-toolchains: ${{ steps.toolchains.outputs.lines }}
+          dry-run: ${{ inputs.dry_run }}
+
+      # The published digest a reuse continues with, from the plan.
+      - name: Read the reused digest
+        id: reused
+        if: steps.mode.outputs.mode == 'reuse'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG_EXISTS: ${{ steps.tag.outputs.exists }}
-          DRY_RUN: ${{ inputs.dry_run }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PLAN: ${{ steps.mode.outputs.plan-file }}
         run: |
           set -euo pipefail
-
-          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" --format '{{json .Manifest}}' 2>&1); then
-            IMAGE_DIGEST=$(jq -r '.digest' <<<"$OUT")
-          elif grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
-            IMAGE_DIGEST=""
-          else
-            echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
+          DIGEST=$(jq -r '.images[0].digest // empty' "$PLAN")
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "The plan names no published digest to reuse (got '$DIGEST')." >&2
             exit 1
           fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
-          if [ "$TAG_EXISTS" != "true" ]; then
-            if [ -n "$IMAGE_DIGEST" ]; then
-              echo "$IMAGE_REPO:$VERSION already exists ($IMAGE_DIGEST), but the tag $VERSION does not. The version is held by an image, so it cannot be tagged: nothing was pushed. Release a higher version - docs/release.md." >&2
+      # The annotated tag, in the clone only, until the point of no return below, recording the
+      # toolchain. On a recovery it is already here: release-mode checked it is on this commit and
+      # records this toolchain.
+      - name: Create the tag locally
+        if: steps.mode.outputs.tag-exists != 'true'
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
+          TOOLCHAINS: ${{ steps.toolchains.outputs.lines }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '%s %s\n\n%s\n' "$APP_NAME" "$TAG" "$TOOLCHAINS" > "$RUNNER_TEMP/tag-message.txt"
+          git tag -a "$TAG" -F "$RUNNER_TEMP/tag-message.txt"
+
+      # The release's own cache, under its own prefix: written only by this workflow, which runs on
+      # master only, and never CI's. It speeds the build, and changes nothing in what it produces.
+      - name: Cache the Rust build
+        if: steps.mode.outputs.rebuild != ''
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: release
+
+      # The versions the Dockerfile's build stage pins (meta/tests/toolchain.rs), as CI.
+      - name: Set up cargo-zigbuild
+        if: steps.mode.outputs.rebuild != ''
+        uses: leinardi/gh-composite-actions/setup-zigbuild@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          zig-version: 0.17.0
+          cargo-zigbuild-version: 0.24.0
+
+      # The platforms nothing is published for, built with CI's make target (dist-static): static
+      # musl binaries, cross-compiled by cargo-zigbuild, the build paths remapped, the stamps from
+      # the commit. Then the published binaries release-mode verified and fetched are laid over
+      # them, so the published bytes win, and checksums.txt is written over the final set.
+      - name: Build and assemble the release binaries
+        env:
+          REBUILD: ${{ steps.mode.outputs.rebuild }}
+          PLAN: ${{ steps.mode.outputs.plan-file }}
+          CHECKSUMS: ${{ steps.mode.outputs.checksums }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          SHORT_SHA: ${{ needs.guard.outputs.short_sha }}
+          BUILD_DATE: ${{ needs.guard.outputs.build_date }}
+        run: |
+          set -euo pipefail
+          PLATFORMS_TO_BUILD=()
+          for entry in $REBUILD; do
+            if [[ "$entry" != "$APP_NAME@"* ]]; then
+              echo "release-mode asks to rebuild '$entry', which is not $APP_NAME." >&2
               exit 1
             fi
-            MODE=fresh
-          elif [ -z "$IMAGE_DIGEST" ]; then
-            MODE=publish
-          # Verified by digest, not by tag, so what is checked is what is reused.
-          elif gh attestation verify "oci://$IMAGE_REPO@$IMAGE_DIGEST" \
-            --repo leinardi/swarm-scheduler-exporter \
-            --signer-workflow "$SIGNER_WORKFLOW" \
-            --source-ref refs/heads/master \
-            --source-digest "$GITHUB_SHA"; then
-            MODE=reuse
-          else
-            echo "$IMAGE_REPO:$VERSION ($IMAGE_DIGEST) exists but carries no provenance from $SIGNER_WORKFLOW for commit $GITHUB_SHA. A tag this workflow did not produce is holding the version. Nothing was published and the tag was not touched: the version needs a human - docs/release.md." >&2
-            exit 1
-          fi
-
-          # A dry run rehearses a fresh release whatever the mode: it builds,
-          # scans and copies, and stops at the absence check if the image exists.
-          BUILD=true
-          if [ "$MODE" = "reuse" ] && [ "$DRY_RUN" != "true" ]; then
-            BUILD=false
-          fi
-
-          echo "Tag on this commit: $TAG_EXISTS. Image: ${IMAGE_DIGEST:-absent}. Mode: $MODE."
-          {
-            echo "mode=$MODE"
-            echo "build=$BUILD"
-            echo "image_digest=$IMAGE_DIGEST"
-          } >> "$GITHUB_OUTPUT"
-
-      # Static musl binaries, cross-compiled by cargo-zigbuild with zig as the C
-      # compiler and linker. The paths of the checkout and of the cargo
-      # registry are remapped, so nothing in the binaries depends on where the
-      # runner put them.
-      - name: Build static binaries (linux/amd64, linux/arm64)
-        env:
-          SWARM_SCHEDULER_EXPORTER_VERSION: ${{ steps.version.outputs.version }}
-          SWARM_SCHEDULER_EXPORTER_COMMIT: ${{ steps.version.outputs.short_sha }}
-          SWARM_SCHEDULER_EXPORTER_DATE: ${{ steps.version.outputs.build_date }}
-        run: |
-          set -euo pipefail
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=/src --remap-path-prefix=${CARGO_HOME:-${HOME}/.cargo}=/cargo"
-          mkdir -p dist
-          for platform in amd64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl; do
-            arch="${platform%%:*}"
-            triple="${platform#*:}"
-            cargo zigbuild --release --locked --target "${triple}" --bin "${APP_NAME}"
-            cp "target/${triple}/release/${APP_NAME}" "dist/${APP_NAME}-linux-${arch}"
+            PLATFORMS_TO_BUILD+=("${entry#"$APP_NAME@"}")
           done
+          mkdir -p dist
+          if [ "${#PLATFORMS_TO_BUILD[@]}" -gt 0 ]; then
+            make dist-static DIST_PLATFORMS="${PLATFORMS_TO_BUILD[*]}" \
+              DIST_VERSION="$TAG" DIST_COMMIT="$SHORT_SHA" DIST_DATE="$BUILD_DATE"
+          fi
+          # Read into a variable first: a failure inside a process substitution would be
+          # swallowed, and an empty list would read as "nothing published".
+          FETCHED=$(jq -r '.binaries[] | select(.source != "rebuild") | "\(.asset) \(.file)"' "$PLAN")
+          while read -r asset file; do
+            [ -n "$asset" ] || continue
+            cp "$file" "dist/$asset"
+            echo "$asset: the published binary ($(sha256sum < "dist/$asset" | cut -d' ' -f1))"
+          done <<<"$FETCHED"
+          for platform in ${PLATFORMS//,/ }; do
+            asset="$APP_NAME-${platform//\//-}"
+            if [ ! -f "dist/$asset" ]; then
+              echo "dist/$asset was neither rebuilt nor fetched." >&2
+              exit 1
+            fi
+          done
+          make dist-checksums
+          if [ "$CHECKSUMS" = "verify" ]; then
+            PUBLISHED="$(dirname "$PLAN")/published-checksums.txt"
+            if ! cmp -s "$PUBLISHED" dist/checksums.txt; then
+              echo "The published checksums.txt differs from the one over the final binaries. Nothing was published; it needs a human." >&2
+              # diff exits 1 on the difference it prints, which ends the step under set -e.
+              diff "$PUBLISHED" dist/checksums.txt >&2
+              exit 1
+            fi
+          fi
+          cat dist/checksums.txt
 
-          (cd dist && sha256sum "${APP_NAME}"-* > checksums.txt)
-
-      # The run attempt is part of the name: "Re-run failed jobs" re-runs this
-      # job inside the same workflow run, and upload-artifact refuses to
-      # overwrite an artifact the first attempt already uploaded, which would
-      # fail the re-run before its recovery publishing starts.
+      # The run attempt is part of the name: "Re-run failed jobs" re-runs this job inside the same
+      # workflow run, and upload-artifact refuses to overwrite an artifact the first attempt already
+      # uploaded, which would fail the re-run before its recovery publishing starts.
       - name: Upload build artifacts (for debugging)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: binaries-${{ steps.version.outputs.version }}-${{ github.run_attempt }}
+          name: binaries-${{ needs.guard.outputs.tag }}-${{ github.run_attempt }}
           path: |
             dist/${{ env.APP_NAME }}-linux-amd64
             dist/${{ env.APP_NAME }}-linux-arm64
@@ -493,22 +433,23 @@ jobs:
 
       # Host network, so the builder reaches the job-local registry on localhost.
       - name: Set up Buildx
+        if: steps.mode.outputs.build == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver-opts: network=host
 
-      # The build stage pulls dhi.io/rust, and the runtime stage dhi.io/static.
+      # The base, dhi.io/static, needs a login; the prebuilt target pulls nothing else from dhi.io.
       - name: Log in to Docker Hardened Images (dhi.io)
         if: steps.mode.outputs.build == 'true'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: dhi.io
-          username: ${{ vars.DHI_USERNAME }}
+          username: leinardi
           password: ${{ secrets.DHI_TOKEN }}
 
-      # The image is built once, into a registry that lives and dies with this
-      # job, and only the digest that was scanned is copied to GHCR. A dry run
-      # starts a second one to exercise that copy.
+      # The image is built once, into a registry that lives and dies with this job, and only the
+      # digest that was tested and scanned is copied to GHCR. A dry run starts a second one to
+      # exercise that copy.
       - name: Start the job-local registries
         if: steps.mode.outputs.build == 'true'
         env:
@@ -532,11 +473,13 @@ jobs:
             exit 1
           done
 
-      # The only image build. Pushed by digest with no tag, with the SBOM and
-      # mode=max provenance in the index. Every layer is recompressed as gzip:
-      # the dhi.io base layers are zstd, and for a zstd image skopeo rewrites the
-      # index entries with a compression annotation, which --preserve-digests
-      # then refuses, so the copy below could not keep the scanned digest.
+      # The only image build: the Dockerfile's prebuilt target, as CI builds it, from the dist/
+      # binaries above (the `dist` build context), so each platform's image binary is that
+      # platform's release asset byte for byte. Pushed by digest with no tag, with the SBOM and
+      # mode=max provenance in the index. Every layer is recompressed as gzip: the dhi.io base ships
+      # zstd layers, and for a zstd image skopeo rewrites the index entries with a compression
+      # annotation, which --preserve-digests then refuses, so the copy below could not keep the
+      # tested digest. No layer cache: the target is the base plus one COPY.
       - name: Build the image into the job-local registry
         id: build
         if: steps.mode.outputs.build == 'true'
@@ -544,38 +487,79 @@ jobs:
         with:
           context: .
           file: deployments/docker/Dockerfile
-          # push=true inside `outputs` instead of the `push` input: `push` adds a
-          # second, tagged registry exporter.
+          target: prebuilt
+          build-contexts: |
+            dist=dist
+          # push=true inside `outputs` instead of the `push` input: `push` adds a second, tagged
+          # registry exporter.
           outputs: type=image,name=${{ env.LOCAL_IMAGE }},push-by-digest=true,name-canonical=true,push=true,compression=gzip,force-compression=true
           platforms: ${{ env.PLATFORMS }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            COMMIT=${{ steps.version.outputs.short_sha }}
-            DATE=${{ steps.version.outputs.build_date }}
-            SOURCE_DATE_EPOCH=${{ steps.version.outputs.source_date_epoch }}
+            VERSION=${{ needs.guard.outputs.tag }}
+            COMMIT=${{ needs.guard.outputs.short_sha }}
+            DATE=${{ needs.guard.outputs.build_date }}
+            SOURCE_DATE_EPOCH=${{ needs.guard.outputs.source_date_epoch }}
 
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: ${{ env.TRIVY_VERSION }}
+      # The base is pinned by tag, so the digest it resolved to is read from the provenance of the
+      # index the build pushed, per platform: the exact base the release ships, which the release
+      # notes and the summary record. It may be a newer dhi.io rebuild of the tag than CI built on;
+      # the smoke test and the scan below run on this exact image. The frontend, pinned by digest,
+      # must be the one the build used. Anything else the build pulled fails the run (BuildKit's
+      # SBOM scanner, docker/buildkit-syft-scanner, generates the SBOM and is not part of the
+      # image).
+      #
+      # A reused image was not built here: its provenance is read from GHCR, for the release notes
+      # of a release that does not exist yet.
+      - name: Read the base digests the build used
+        id: resolved
+        if: steps.mode.outputs.build == 'true' || steps.mode.outputs.mode == 'reuse'
+        env:
+          IMAGE: ${{ steps.mode.outputs.build == 'true' && format('{0}@{1}', env.LOCAL_IMAGE, steps.build.outputs.digest) || format('{0}@{1}', env.IMAGE_REPO, steps.reused.outputs.digest) }}
+          BASE: ${{ steps.base.outputs.image }}
+          FRONTEND: ${{ steps.base.outputs.frontend }}
+        run: |
+          set -euo pipefail
+          PROVENANCE=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Provenance}}')
+          BASE_PURL="pkg:docker/${BASE%:*}@${BASE##*:}?"
+          LINES=()
+          for platform in ${PLATFORMS//,/ }; do
+            USED=$(jq -r --arg platform "$platform" '
+              .[$platform].SLSA
+              | (.materials // .buildDefinition.resolvedDependencies // [])[]
+              | select(.uri | startswith("pkg:docker/"))
+              | select(.uri | startswith("pkg:docker/docker/buildkit-syft-scanner@") | not)
+              | "\(.uri) sha256:\(.digest.sha256)"
+            ' <<<"$PROVENANCE" | sort -u)
+            BASE_DIGESTS=$(awk -v purl="$BASE_PURL" 'index($1, purl) == 1 {print $2}' <<<"$USED" | sort -u)
+            OTHERS=$(awk -v purl="$BASE_PURL" 'index($1, purl) != 1 && index($1, "pkg:docker/docker/dockerfile@") != 1' <<<"$USED")
+            FRONTENDS=$(awk 'index($1, "pkg:docker/docker/dockerfile@") == 1 {print $2}' <<<"$USED" | sort -u)
+            if [ "$(grep -c . <<<"$BASE_DIGESTS")" -ne 1 ] || [ -n "$OTHERS" ] || [ "$FRONTENDS" != "$FRONTEND" ]; then
+              echo "The $platform build did not pull exactly one $BASE and the pinned frontend $FRONTEND." >&2
+              echo "Pulled (provenance):" >&2
+              echo "${USED:-nothing}" >&2
+              exit 1
+            fi
+            echo "$platform: $BASE@$BASE_DIGESTS"
+            LINES+=("$platform \`$BASE@$BASE_DIGESTS\`")
+          done
+          {
+            echo "lines<<EOF"
+            printf -- '- %s\n' "${LINES[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-      # Both platform images of the index, each by its own digest. A HIGH or
-      # CRITICAL finding, fixed upstream or not, fails the run here, before any
-      # tag exists. The only exceptions are the ones committed in .trivyignore,
-      # each with a reason and an expiry date.
-      - name: Scan both platform images
-        id: scan
+      # Each platform image of the index, by its own digest: what is tested and scanned below is
+      # exactly what is copied to GHCR.
+      - name: Resolve the platform images
+        id: platform
         if: steps.mode.outputs.build == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           INDEX=$(docker buildx imagetools inspect "$LOCAL_IMAGE@$DIGEST" --format '{{json .Manifest}}')
-          SCANNED=()
           for platform in ${PLATFORMS//,/ }; do
             PLATFORM_DIGEST=$(jq -r --arg os "${platform%%/*}" --arg arch "${platform#*/}" \
               '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch) | .digest] | if length == 1 then .[0] else empty end' \
@@ -584,82 +568,74 @@ jobs:
               echo "The index $DIGEST has no single $platform image." >&2
               exit 1
             fi
-            echo "Scanning $platform: $PLATFORM_DIGEST"
-            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --platform "$platform" "$LOCAL_IMAGE@$PLATFORM_DIGEST"
-            SCANNED+=("$platform=$PLATFORM_DIGEST")
+            echo "$platform: $PLATFORM_DIGEST"
+            echo "${platform#*/}=$PLATFORM_DIGEST" >> "$GITHUB_OUTPUT"
           done
-          echo "platforms=${SCANNED[*]}" >> "$GITHUB_OUTPUT"
 
-      # Running the arm64 image on the amd64 runner needs binfmt emulation. The binfmt image is
-      # pinned by digest, like every image this workflow runs; the build itself is cross-compiled
-      # and needs none.
+      # The arm64 image runs on the amd64 runner through binfmt emulation. The registered emulator
+      # image is pinned by index digest, because the action's default is the moving `latest` tag.
       - name: Set up QEMU
         if: steps.mode.outputs.build == 'true'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
-          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          image: tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
           platforms: arm64
 
-      # What the built image reports as its version and commit is the release's own: a build that
-      # lost a build argument ships an image that says dev or unknown, and the scan cannot see it.
-      # The binary has no --version, so each platform image is started and its startup line is
-      # read. Runs against the digests that were just scanned in the job-local registry, before the
-      # tag is pushed, so a failure leaves no tag and nothing published. No Docker socket is
-      # mounted: the exporter logs the line, then retries until it is stopped.
-      - name: Smoke-test the version stamps of both platform images
+      # The short smoke test of each platform image, pulled back from the job-local registry by its
+      # digest rather than built again: the image binary is the platform's release asset (sha256),
+      # and the container starts, logs this release's stamps in its startup line and serves them as
+      # swarm_exporter_build_info on /metrics (arm64 under QEMU). The binary has no --version, and
+      # no Docker socket is mounted: the exporter serves while its workers retry. The full and
+      # reduced suites ran in CI on the same target (the ci-green job); this proves the image the
+      # release built starts.
+      - name: Smoke-test both platform images
         if: steps.mode.outputs.build == 'true'
         env:
-          SCANNED: ${{ steps.scan.outputs.platforms }}
-          VERSION: ${{ steps.version.outputs.version }}
-          COMMIT: ${{ steps.version.outputs.short_sha }}
+          AMD64: ${{ steps.platform.outputs.amd64 }}
+          ARM64: ${{ steps.platform.outputs.arm64 }}
+          EXPECT: ${{ needs.guard.outputs.tag }} ${{ needs.guard.outputs.short_sha }} ${{ needs.guard.outputs.build_date }}
         run: |
           set -euo pipefail
-          if [ -z "$SCANNED" ]; then
-            echo "The scan step recorded no platform image to test." >&2
-            exit 1
-          fi
-          CID=""
-          cleanup() {
-            if [ -n "$CID" ]; then
-              docker rm -f "$CID" >/dev/null 2>&1 || echo "Could not remove the container $CID." >&2
-            fi
-          }
-          trap cleanup EXIT
-          for entry in $SCANNED; do
-            platform="${entry%%=*}"
-            ref="$LOCAL_IMAGE@${entry#*=}"
-            CID=$(docker run -d --platform "$platform" "$ref")
-            LINE=""
-            for _ in $(seq 1 30); do
-              LOGS=$(docker logs "$CID" 2>&1)
-              if LINE=$(grep -m1 -F ' starting version=' <<<"$LOGS"); then
-                break
-              fi
-              sleep 1
-            done
-            if [ -z "$LINE" ]; then
-              echo "$platform ($ref) logged no startup line within 30 seconds." >&2
-              docker logs "$CID" >&2
-              exit 1
-            fi
-            echo "$platform: $LINE"
-            if ! grep -qF "version=\"$VERSION\"" <<<"$LINE" || ! grep -qF "commit=\"$COMMIT\"" <<<"$LINE"; then
-              echo "$platform ($ref) does not report version $VERSION and commit $COMMIT." >&2
-              exit 1
-            fi
-            cleanup
-            CID=""
+          for platform in ${PLATFORMS//,/ }; do
+            arch="${platform#*/}"
+            case "$arch" in
+              amd64) PLATFORM_DIGEST="$AMD64" ;;
+              arm64) PLATFORM_DIGEST="$ARM64" ;;
+              *) echo "No platform digest for $platform." >&2; exit 1 ;;
+            esac
+            docker pull "$LOCAL_IMAGE@$PLATFORM_DIGEST"
+            docker tag "$LOCAL_IMAGE@$PLATFORM_DIGEST" "$APP_NAME:release-$arch"
+            scripts/image-test.sh --tier smoke --image "$APP_NAME:release-$arch" --platform "$platform" \
+              --binary "dist/$APP_NAME-${platform//\//-}" --expect-version "$EXPECT"
+            docker image rm "$APP_NAME:release-$arch" "$LOCAL_IMAGE@$PLATFORM_DIGEST" >/dev/null
           done
 
-      # The last look at the tags before the point of no return. Concurrency
-      # serializes the workflow, but a tag can also arrive from outside it, and
-      # the check in the version step ran before several minutes of building.
-      # This asks the remote, not the local clone, and it asks now.
+      # A HIGH or CRITICAL finding with a fix upstream fails the run here, before any tag exists, the
+      # base's own included. Unfixed findings do not. The only exceptions are the ones committed in
+      # .trivyignore.yaml, each with a statement and an expiry. Trivy is its latest release, never
+      # pinned.
+      - name: Scan the linux/amd64 image
+        if: steps.mode.outputs.build == 'true'
+        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          image: ${{ env.LOCAL_IMAGE }}@${{ steps.platform.outputs.amd64 }}
+          platform: linux/amd64
+
+      - name: Scan the linux/arm64 image
+        if: steps.mode.outputs.build == 'true'
+        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          image: ${{ env.LOCAL_IMAGE }}@${{ steps.platform.outputs.arm64 }}
+          platform: linux/arm64
+
+      # The last look at the tags before the point of no return. Concurrency serializes the
+      # workflow, but a tag can also arrive from outside it, and the version was resolved before
+      # several minutes of building. This asks the remote, not the local clone, and it asks now.
       - name: Gate the tag
         if: steps.mode.outputs.mode == 'fresh' || inputs.dry_run
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          EXISTS: ${{ steps.tag.outputs.exists }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          EXISTS: ${{ steps.mode.outputs.tag-exists }}
         run: |
           set -euo pipefail
 
@@ -672,44 +648,43 @@ jobs:
             | sort -V \
             | tail -n1)
 
-          if [ -z "$HIGHEST_REMOTE" ] || [ "$HIGHEST_REMOTE" = "$VERSION" ]; then
+          if [ -z "$HIGHEST_REMOTE" ] || [ "$HIGHEST_REMOTE" = "$TAG" ]; then
             exit 0
           fi
-          HIGHEST=$(printf '%s\n%s\n' "$VERSION" "$HIGHEST_REMOTE" | sort -V | tail -n1)
-          if [ "$HIGHEST" = "$VERSION" ]; then
+          HIGHEST=$(printf '%s\n%s\n' "$TAG" "$HIGHEST_REMOTE" | sort -V | tail -n1)
+          if [ "$HIGHEST" = "$TAG" ]; then
             exit 0
           fi
 
           # A recovery's tag is already on this commit and its artifacts are
           # legitimate; it finishes, and simply does not become latest.
           if [ "$EXISTS" = "true" ]; then
-            echo "::notice::$HIGHEST_REMOTE is higher than $VERSION. Finishing the recovery of $VERSION, which will not become latest."
+            echo "::notice::$HIGHEST_REMOTE is higher than $TAG. Finishing the recovery of $TAG, which will not become latest."
             exit 0
           fi
 
-          echo "$HIGHEST_REMOTE was published while this run was building, so $VERSION would be a lower immutable tag. Nothing was pushed; release a higher version." >&2
+          echo "$HIGHEST_REMOTE was published while this run was building, so $TAG would be a lower immutable tag. Nothing was pushed; release a higher version." >&2
           exit 1
 
-      # The image ownership check, right before the tag is pushed: the version
-      # must not be held by an image, or the tag would point at a version this
-      # run can never publish. Same fail-closed lookup as the mode step.
+      # The image ownership check, right before the tag is pushed: the version must not be held by
+      # an image, or the tag would point at a version this run can never publish. Fail-closed: only
+      # "not found" reads as absent.
       - name: Check the version image is absent
         if: steps.mode.outputs.mode == 'fresh' || inputs.dry_run
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.guard.outputs.tag }}
         run: |
           set -euo pipefail
-          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" 2>&1); then
-            echo "$IMAGE_REPO:$VERSION appeared while this run was building. Nothing was pushed; release a higher version - docs/release.md." >&2
+          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$TAG" 2>&1); then
+            echo "$IMAGE_REPO:$TAG appeared while this run was building. Nothing was pushed; release a higher version - docs/release.md." >&2
             exit 1
           elif ! grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
-            echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
+            echo "Could not tell whether $IMAGE_REPO:$TAG exists: $OUT" >&2
             exit 1
           fi
 
-      # The copy step below, against the second job-local registry instead of
-      # GHCR, with the same checks: the digest survives, and so do the SBOM and
-      # provenance manifests of both platforms.
+      # The copy step below, against the second job-local registry instead of GHCR, with the same
+      # checks: the digest survives, and so do the SBOM and provenance manifests of both platforms.
       - name: Rehearse the copy on a second local registry
         if: inputs.dry_run
         env:
@@ -725,7 +700,7 @@ jobs:
             "docker://$COPY_IMAGE@$DIGEST" > "$RAW"
           COPIED="sha256:$(sha256sum < "$RAW" | cut -d' ' -f1)"
           if [ "$COPIED" != "$DIGEST" ]; then
-            echo "The copied index is $COPIED, not the scanned $DIGEST." >&2
+            echo "The copied index is $COPIED, not the tested $DIGEST." >&2
             exit 1
           fi
 
@@ -737,54 +712,80 @@ jobs:
           fi
           echo "Copied $DIGEST with its digest and $ATTESTATIONS attestation manifests intact."
 
+      # The audit runs alongside this job rather than before it, so the build does not wait for
+      # the advisories; nothing is published until it has passed in this run attempt (an earlier
+      # attempt's pass never counts, so a recovery uses "Re-run all jobs" - docs/release.md). A dry
+      # run waits for it too, so it reports the audit a real run would face.
+      - name: Require the audit to have passed
+        uses: leinardi/gh-composite-actions/require-job-success@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          job: audit
+
       - name: Report what a real run would publish
         if: inputs.dry_run
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          PREVIOUS: ${{ steps.version.outputs.previous }}
-          EXPLICIT: ${{ steps.version.outputs.explicit }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          PREVIOUS: ${{ needs.guard.outputs.previous }}
+          EXPLICIT: ${{ needs.guard.outputs.explicit }}
           MODE: ${{ steps.mode.outputs.mode }}
+          REBUILD: ${{ steps.mode.outputs.rebuild }}
           DIGEST: ${{ steps.build.outputs.digest }}
-          SCANNED: ${{ steps.scan.outputs.platforms }}
+          AMD64: ${{ steps.platform.outputs.amd64 }}
+          ARM64: ${{ steps.platform.outputs.arm64 }}
+          BASE: ${{ steps.base.outputs.image }}
+          BASE_DIGESTS: ${{ steps.resolved.outputs.lines }}
+          TOOLCHAINS: ${{ steps.toolchains.outputs.lines }}
         run: |
           set -euo pipefail
           {
-            echo "# Dry run: $VERSION"
+            echo "# Dry run: $TAG"
             echo
-            echo "Previous tag: ${PREVIOUS:-none}. Explicit version: $EXPLICIT. A real run would take the $MODE mode."
+            echo "Previous tag: ${PREVIOUS:-none}. Explicit version: $EXPLICIT. A real run would take the $MODE mode, rebuilding: ${REBUILD:-nothing}."
             echo
-            echo "No tag was created and nothing was published. The image index $DIGEST was built into a job-local registry,"
-            echo "its platform images were scanned ($SCANNED), and it was copied to a second local registry with its digest and"
-            echo "attestation manifests intact."
+            echo "No tag was created and nothing was published. The binaries were built with $TOOLCHAINS, and the image index"
+            echo "$DIGEST was built from them on \`$BASE\` into a job-local registry. Its platform images (amd64 $AMD64,"
+            echo "arm64 $ARM64) were smoke-tested and scanned, and the index was copied to a second local registry with its"
+            echo "digest and attestation manifests intact."
+            echo
+            echo "## The base each platform was built on"
+            echo
+            echo "$BASE_DIGESTS"
             echo
             echo '## Artifacts'
             echo
             echo '```text'
-            ls -1 dist
+            cat dist/checksums.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Per attempt, like the binaries above, so a re-run dry run does not
-      # collide with the first attempt's upload.
+      # Per attempt, like the binaries above, so a re-run dry run does not collide with the first
+      # attempt's upload.
       - name: Upload the unpublished artifacts for inspection
         if: inputs.dry_run
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dry-run-${{ steps.version.outputs.version }}-${{ github.run_attempt }}
+          name: dry-run-${{ needs.guard.outputs.tag }}-${{ github.run_attempt }}
           path: dist
 
-      # The point of no return. Everything after it reuses a published artifact
-      # only once it is proven to be this run's and never replaces one, so a
-      # re-run with the same explicit version finishes a failed publish.
+      # The point of no return. Everything after it reuses a published artifact only once it is
+      # proven to be this run's and never replaces one, so a re-run with the same explicit version
+      # finishes a failed publish. The token reaches this one git command as a header, never the
+      # clone's config.
       - name: Push the tag
         if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'fresh' }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: git push origin "$VERSION"
+          TAG: ${{ needs.guard.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            push origin "refs/tags/$TAG"
 
-      # The scanned index, byte for byte, with no tag at all: a version tag is
-      # only ever added once the digest has been attested and signed, so an
-      # untagged digest left by a failed run is inert.
+      # The tested index, byte for byte, with no tag at all: a version tag is only ever added once
+      # the digest has been attested and signed, so an untagged digest left by a failed run is
+      # inert.
       - name: Copy the image to GHCR by digest
         if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
         env:
@@ -795,10 +796,9 @@ jobs:
             copy --all --preserve-digests --src-tls-verify=false --dest-authfile /auth.json \
             "docker://$LOCAL_IMAGE@$DIGEST" "docker://$IMAGE_REPO@$DIGEST"
 
-      # What GHCR now serves under the digest is hashed here, not taken from a
-      # tool's report, so the digest attested and signed below is the one that
-      # was scanned.
-      - name: Check GHCR serves the scanned index
+      # What GHCR now serves under the digest is hashed here, not taken from a tool's report, so the
+      # digest attested and signed below is the one that was tested and scanned.
+      - name: Check GHCR serves the tested index
         if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -809,7 +809,7 @@ jobs:
             inspect --raw --authfile /auth.json "docker://$IMAGE_REPO@$DIGEST" > "$RAW"
           SERVED="sha256:$(sha256sum < "$RAW" | cut -d' ' -f1)"
           if [ "$SERVED" != "$DIGEST" ]; then
-            echo "GHCR serves $SERVED for $IMAGE_REPO@$DIGEST, not the scanned index. Nothing was tagged." >&2
+            echo "GHCR serves $SERVED for $IMAGE_REPO@$DIGEST, not the tested index. Nothing was tagged." >&2
             exit 1
           fi
 
@@ -821,92 +821,85 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      # A new digest is signed. A reused one must already carry this workflow's
-      # own keyless signature, since the version tag is only ever added after
-      # signing; any other signature, from another workflow or a laptop, does
-      # not count, and a reused image without one needs a human.
+      # A new digest is signed with this workflow's keyless identity. A reused one already carries
+      # that signature: release-mode verified it, with its attestation, before deciding to reuse it.
       - name: Sign the image with cosign (keyless via GitHub OIDC)
         id: sign
         if: ${{ !inputs.dry_run }}
         env:
           MODE: ${{ steps.mode.outputs.mode }}
-          DIGEST: ${{ steps.mode.outputs.image_digest || steps.build.outputs.digest }}
+          DIGEST: ${{ steps.reused.outputs.digest || steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           if [ "$MODE" = "reuse" ]; then
-            if ! cosign verify \
-              --certificate-identity "$SIGNER_IDENTITY" \
-              --certificate-oidc-issuer "$SIGNER_ISSUER" \
-              "$IMAGE_REPO@$DIGEST" >/dev/null; then
-              echo "$IMAGE_REPO@$DIGEST is attested by this workflow but carries no signature from it. Nothing more was published: it needs a human - docs/release.md." >&2
-              exit 1
-            fi
-            echo "$IMAGE_REPO@$DIGEST carries this workflow's signature: reusing it."
+            echo "$IMAGE_REPO@$DIGEST carries this workflow's attestation and signature: reusing it."
           else
             cosign sign --yes "$IMAGE_REPO@$DIGEST"
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
-      # The reused image is already immutable and published, so its scan cannot
-      # stop anything: findings are reported as warnings, for a human to judge
-      # whether the next version should follow sooner.
-      - name: Scan the reused image
+      # The reused image is already immutable and published, so its scan cannot stop anything:
+      # findings are reported as warnings, for a human to judge whether the next version should
+      # follow sooner.
+      - name: Scan the reused linux/amd64 image
+        id: reuse-scan-amd64
         if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'reuse' }}
+        continue-on-error: true # findings in an image already published are warnings
+        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          image: ${{ env.IMAGE_REPO }}@${{ steps.sign.outputs.digest }}
+          platform: linux/amd64
+
+      - name: Scan the reused linux/arm64 image
+        id: reuse-scan-arm64
+        if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'reuse' }}
+        continue-on-error: true # findings in an image already published are warnings
+        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          image: ${{ env.IMAGE_REPO }}@${{ steps.sign.outputs.digest }}
+          platform: linux/arm64
+
+      - name: Warn about the reused image's findings
+        if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'reuse' && (steps.reuse-scan-amd64.outcome != 'success' || steps.reuse-scan-arm64.outcome != 'success') }}
         env:
           DIGEST: ${{ steps.sign.outputs.digest }}
+          AMD64: ${{ steps.reuse-scan-amd64.outcome }}
+          ARM64: ${{ steps.reuse-scan-arm64.outcome }}
         run: |
-          set -euo pipefail
-          for platform in ${PLATFORMS//,/ }; do
-            if ! trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --platform "$platform" "$IMAGE_REPO@$DIGEST"; then
-              echo "::warning::The reused $IMAGE_REPO@$DIGEST ($platform) has HIGH or CRITICAL findings, or could not be scanned. It is already published and was not changed; consider releasing a new version."
-            fi
-          done
+          echo "::warning::The reused $IMAGE_REPO@$DIGEST has fixable HIGH or CRITICAL findings, or could not be scanned (amd64: $AMD64, arm64: $ARM64). It is already published and was not changed; consider releasing a new version."
 
       - name: Tag the image with the version
         if: ${{ !inputs.dry_run && steps.mode.outputs.build == 'true' }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.guard.outputs.tag }}
           DIGEST: ${{ steps.sign.outputs.digest }}
         run: |
           set -euo pipefail
           # Checked again right before tagging: a version tag that appeared since
           # the checks above is never overwritten.
-          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$VERSION" 2>&1); then
-            echo "$IMAGE_REPO:$VERSION appeared while this run was publishing. It was not overwritten: re-run to verify it, or hand it to a human - docs/release.md." >&2
+          if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$TAG" 2>&1); then
+            echo "$IMAGE_REPO:$TAG appeared while this run was publishing. It was not overwritten: re-run to verify it, or hand it to a human - docs/release.md." >&2
             exit 1
           elif ! grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
-            echo "Could not tell whether $IMAGE_REPO:$VERSION exists: $OUT" >&2
+            echo "Could not tell whether $IMAGE_REPO:$TAG exists: $OUT" >&2
             exit 1
           fi
-          docker buildx imagetools create -t "$IMAGE_REPO:$VERSION" "$IMAGE_REPO@$DIGEST"
+          docker buildx imagetools create -t "$IMAGE_REPO:$TAG" "$IMAGE_REPO@$DIGEST"
 
-      # The binaries are rebuilt byte-identically on every run, a recovery included, so a
-      # binary an earlier run of this commit attested keeps that attestation: only the ones
-      # still missing one are attested, and a partial recovery never duplicates one. The
-      # script decides per binary and fails closed: an answer it cannot classify, or an
-      # attestation this workflow did not produce, stops the run before anything is drafted.
-      # A dry run runs it too, as a rehearsal; only the attestation itself is skipped.
+      # The binaries are the same bytes on every run, a recovery included (rebuilt reproducibly, or
+      # the published ones release-mode fetched), so a binary an earlier run of this commit attested
+      # keeps that attestation: only the ones still missing one are attested, and a partial recovery
+      # never duplicates one. The action decides per binary and fails closed: an answer it cannot
+      # classify, or an attestation this workflow did not produce, stops the run before anything is
+      # drafted. A dry run runs it too, as a rehearsal; only the attestation itself is skipped.
       - name: Check which binaries need an attestation
         id: binattest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          MISSING=$(.github/scripts/binary-attestation-status.sh \
-            leinardi/swarm-scheduler-exporter \
-            "$SIGNER_WORKFLOW" \
-            refs/heads/master \
-            "$GITHUB_SHA" \
-            "dist/$APP_NAME-linux-amd64" \
-            "dist/$APP_NAME-linux-arm64")
-          echo "Binaries without an attestation: ${MISSING:-none}"
-          {
-            echo "missing<<EOF"
-            if [ -n "$MISSING" ]; then
-              echo "$MISSING"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+        uses: leinardi/gh-composite-actions/binary-attestation-status@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          files: |
+            dist/${{ env.APP_NAME }}-linux-amd64
+            dist/${{ env.APP_NAME }}-linux-arm64
+          signer-workflow: ${{ env.SIGNER_WORKFLOW }}
 
       - name: Attest the release binaries
         if: ${{ !inputs.dry_run && steps.binattest.outputs.missing != '' }}
@@ -914,34 +907,38 @@ jobs:
         with:
           subject-path: ${{ steps.binattest.outputs.missing }}
 
-      # Every expected asset is rebuilt locally above, reproducibly (remapped
-      # paths, the pinned toolchain, zig and Cargo.lock, a commit-derived date),
-      # so a published one can be checked byte for byte. Present and matching:
-      # kept. Present and different: the run fails. Missing: uploaded, never
-      # with --clobber. An asset nobody expects fails the run too. The release
-      # stays a draft until the latest checks below.
+      # Every expected asset is in dist/: rebuilt reproducibly, or the published bytes release-mode
+      # verified, so a published one can be checked byte for byte. Present and matching: kept.
+      # Present and different: the run fails. Missing: uploaded, never with --clobber. An asset
+      # nobody expects fails the run too. The release is created as a draft, with the base and the
+      # toolchain above the generated notes, and stays one until the latest checks below.
       - name: Draft the GitHub release and reconcile its assets
         id: assets
         if: ${{ !inputs.dry_run }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          BASE: ${{ steps.base.outputs.image }}
+          BASE_DIGESTS: ${{ steps.resolved.outputs.lines }}
+          TOOLCHAINS: ${{ steps.toolchains.outputs.lines }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
           EXPECTED=("${APP_NAME}-linux-amd64" "${APP_NAME}-linux-arm64" "checksums.txt")
 
-          if ! OUT=$(gh release view "$VERSION" --json isDraft 2>&1); then
+          if ! OUT=$(gh release view "$TAG" --json isDraft 2>&1); then
             if ! grep -qi 'release not found' <<<"$OUT"; then
-              echo "Could not tell whether the release $VERSION exists: $OUT" >&2
+              echo "Could not tell whether the release $TAG exists: $OUT" >&2
               exit 1
             fi
-            gh release create "$VERSION" --verify-tag --draft --generate-notes --title "$VERSION"
+            NOTES=$(printf 'The binaries are built with %s, zig and cargo-zigbuild as the repository pins them. The image is built on `%s`, which resolved to:\n\n%s\n' \
+              "$TOOLCHAINS" "$BASE" "$BASE_DIGESTS")
+            gh release create "$TAG" --verify-tag --draft --generate-notes --title "$TAG" --notes "$NOTES"
           fi
 
           # Read into a variable first: a failure inside a process substitution
           # would be swallowed, and an empty list would read as "nothing published".
-          NAMES=$(gh release view "$VERSION" --json assets --jq '.assets[].name')
+          NAMES=$(gh release view "$TAG" --json assets --jq '.assets[].name')
           PUBLISHED=()
           if [ -n "$NAMES" ]; then
             mapfile -t PUBLISHED <<<"$NAMES"
@@ -949,7 +946,7 @@ jobs:
 
           for name in "${PUBLISHED[@]}"; do
             if ! printf '%s\n' "${EXPECTED[@]}" | grep -qxF "$name"; then
-              echo "The release $VERSION carries an unexpected asset '$name'. Nothing was changed; it needs a human." >&2
+              echo "The release $TAG carries an unexpected asset '$name'. Nothing was changed; it needs a human." >&2
               exit 1
             fi
           done
@@ -959,7 +956,7 @@ jobs:
 
           DOWNLOADS=$(mktemp -d)
           if published checksums.txt; then
-            gh release download "$VERSION" --pattern checksums.txt --dir "$DOWNLOADS"
+            gh release download "$TAG" --pattern checksums.txt --dir "$DOWNLOADS"
           fi
 
           VERIFIED=()
@@ -967,12 +964,12 @@ jobs:
           for name in "${EXPECTED[@]}"; do
             if published "$name"; then
               if [ "$name" != "checksums.txt" ]; then
-                gh release download "$VERSION" --pattern "$name" --dir "$DOWNLOADS"
+                gh release download "$TAG" --pattern "$name" --dir "$DOWNLOADS"
               fi
               REMOTE_SUM=$(local_sum "$DOWNLOADS/$name")
               LOCAL_SUM=$(local_sum "dist/$name")
               if [ "$REMOTE_SUM" != "$LOCAL_SUM" ]; then
-                echo "The published $name ($REMOTE_SUM) differs from this commit's build ($LOCAL_SUM). Nothing was replaced; it needs a human." >&2
+                echo "The published $name ($REMOTE_SUM) differs from this run's ($LOCAL_SUM). Nothing was replaced; it needs a human." >&2
                 exit 1
               fi
               if [ "$name" != "checksums.txt" ] && [ -f "$DOWNLOADS/checksums.txt" ]; then
@@ -984,7 +981,7 @@ jobs:
               fi
               VERIFIED+=("$name")
             else
-              gh release upload "$VERSION" "dist/$name"
+              gh release upload "$TAG" "dist/$name"
               UPLOADED+=("$name")
             fi
           done
@@ -994,15 +991,14 @@ jobs:
             echo "uploaded=${UPLOADED[*]}"
           } >> "$GITHUB_OUTPUT"
 
-      # The moving pointers go last, each after its own fresh look at the remote:
-      # a version that is no longer the highest does not take them. Best-effort,
-      # not atomic - docs/release.md.
+      # The moving pointers go last, each after its own fresh look at the remote: a version that is
+      # no longer the highest does not take them. Best-effort, not atomic - docs/release.md.
       - name: Move the image major and latest tags
         id: pointers
         if: ${{ !inputs.dry_run }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          MAJOR: ${{ steps.version.outputs.major }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          MAJOR: ${{ needs.guard.outputs.major }}
           DIGEST: ${{ steps.sign.outputs.digest }}
         run: |
           set -euo pipefail
@@ -1014,8 +1010,8 @@ jobs:
             | { grep -E "$RELEASE_TAG_REGEX" || true; } \
             | sort -V \
             | tail -n1)
-          if [ "$HIGHEST_REMOTE" != "$VERSION" ]; then
-            echo "::notice::$HIGHEST_REMOTE is higher than $VERSION, so :$MAJOR and :latest were left where they are."
+          if [ "$HIGHEST_REMOTE" != "$TAG" ]; then
+            echo "::notice::$HIGHEST_REMOTE is higher than $TAG, so :$MAJOR and :latest were left where they are."
             echo "moved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -1026,7 +1022,7 @@ jobs:
         id: publish
         if: ${{ !inputs.dry_run }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.guard.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -1039,21 +1035,21 @@ jobs:
             | sort -V \
             | tail -n1)
           LATEST=false
-          if [ "$HIGHEST_REMOTE" = "$VERSION" ]; then
+          if [ "$HIGHEST_REMOTE" = "$TAG" ]; then
             LATEST=true
           fi
-          gh release edit "$VERSION" --draft=false --latest="$LATEST"
+          gh release edit "$TAG" --draft=false --latest="$LATEST"
           echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
 
-      # GHCR tags and GitHub releases cannot be moved together atomically, so a
-      # tag created outside this workflow between the two moves above can leave
-      # them disagreeing. Nothing is moved back: this run cannot know that the
-      # other version's image exists or is trustworthy. It says so instead.
+      # GHCR tags and GitHub releases cannot be moved together atomically, so a tag created outside
+      # this workflow between the two moves above can leave them disagreeing. Nothing is moved
+      # back: this run cannot know that the other version's image exists or is trustworthy. It says
+      # so instead.
       - name: Check that the pointers agree
         if: ${{ !inputs.dry_run }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          MAJOR: ${{ steps.version.outputs.major }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          MAJOR: ${{ needs.guard.outputs.major }}
           MOVED: ${{ steps.pointers.outputs.moved }}
         run: |
           set -euo pipefail
@@ -1065,18 +1061,21 @@ jobs:
             | { grep -E "$RELEASE_TAG_REGEX" || true; } \
             | sort -V \
             | tail -n1)
-          if [ "$MOVED" = "true" ] && [ "$HIGHEST_REMOTE" != "$VERSION" ]; then
-            echo "::warning::$HIGHEST_REMOTE was tagged while $VERSION was publishing. The image :latest and :$MAJOR may point at $VERSION while GitHub marks another release Latest. Fix: re-dispatch $HIGHEST_REMOTE, whose own late checks repoint them; if that tag was created outside this workflow and has no image, retag by hand as docs/release.md describes."
+          if [ "$MOVED" = "true" ] && [ "$HIGHEST_REMOTE" != "$TAG" ]; then
+            echo "::warning::$HIGHEST_REMOTE was tagged while $TAG was publishing. The image :latest and :$MAJOR may point at $TAG while GitHub marks another release Latest. Fix: re-dispatch $HIGHEST_REMOTE, whose own late checks repoint them; if that tag was created outside this workflow and has no image, retag by hand as docs/release.md describes."
           fi
 
       - name: Summarize the release
         if: ${{ !inputs.dry_run }}
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          PREVIOUS: ${{ steps.version.outputs.previous }}
-          RECOVERY: ${{ steps.tag.outputs.exists }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          PREVIOUS: ${{ needs.guard.outputs.previous }}
+          RECOVERY: ${{ steps.mode.outputs.tag-exists }}
           MODE: ${{ steps.mode.outputs.mode }}
+          REBUILD: ${{ steps.mode.outputs.rebuild }}
           DIGEST: ${{ steps.sign.outputs.digest }}
+          BASE: ${{ steps.base.outputs.image }}
+          BASE_DIGESTS: ${{ steps.resolved.outputs.lines }}
           MOVED: ${{ steps.pointers.outputs.moved }}
           LATEST: ${{ steps.publish.outputs.latest }}
           VERIFIED: ${{ steps.assets.outputs.verified }}
@@ -1084,12 +1083,16 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "# Released $VERSION"
+            echo "# Released $TAG"
             echo
-            echo "Previous tag: ${PREVIOUS:-none}. Recovery: $RECOVERY. Mode: $MODE."
+            echo "Previous tag: ${PREVIOUS:-none}. Recovery: $RECOVERY. Mode: $MODE. Rebuilt: ${REBUILD:-nothing}. Base: \`$BASE\`."
             echo
-            echo "- [Release](https://github.com/leinardi/swarm-scheduler-exporter/releases/tag/$VERSION) - marked latest: $LATEST"
-            echo "- [Image](https://github.com/leinardi/swarm-scheduler-exporter/pkgs/container/swarm-scheduler-exporter): \`$IMAGE_REPO:$VERSION\` (\`$DIGEST\`) - :latest moved: $MOVED"
+            echo "- [Release](https://github.com/leinardi/swarm-scheduler-exporter/releases/tag/$TAG) - marked latest: $LATEST"
+            echo "- [Image](https://github.com/leinardi/swarm-scheduler-exporter/pkgs/container/swarm-scheduler-exporter): \`$IMAGE_REPO:$TAG\` (\`$DIGEST\`) - :latest moved: $MOVED"
             echo "- Assets uploaded: ${UPLOADED:-none}"
             echo "- Assets verified by sha256: ${VERIFIED:-none}"
+            echo
+            echo "## The base each platform was built on"
+            echo
+            echo "$BASE_DIGESTS"
           } >> "$GITHUB_STEP_SUMMARY"

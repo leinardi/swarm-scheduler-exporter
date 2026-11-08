@@ -7,8 +7,11 @@ on:
       - master
 
 concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
-  cancel-in-progress: true
+  # As in ci.yaml: a pull request's runs share one group per branch, so a newer push cancels the
+  # older run; every push to master gets a group of its own, so a newer push never replaces a
+  # queued run of an earlier commit.
+  group: "${{ github.workflow }} @ ${{ github.event_name == 'pull_request' && github.event.pull_request.head.label || github.run_id }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -29,14 +32,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Rust
         run: rustup toolchain install --no-self-update
 
+      # Its own key: the release profile and the integration feature build other units than CI's
+      # rust job. Saved only on master, the one ref whose caches every pull request can restore.
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.event_name == 'pull_request' }}
+          shared-key: ci
+          key: integration
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Run the integration suite
         run: make test-integration

@@ -1,9 +1,9 @@
 name: Scheduled scan
 
-# A release is scanned once, when it is built. Vulnerabilities are published
-# every day, so the image people pull and the dependencies on master are scanned
-# again every week, with the release's own scanner and settings. A failure
-# fails the run, which is what makes it visible: fix it with a new release.
+# A release is scanned once, when it is built. Vulnerabilities are published every day, so the image
+# people pull and the dependencies on master are scanned again every week, with the release's own
+# gates: trivy-gate (the latest Trivy, fixable HIGH and CRITICAL findings, .trivyignore.yaml) and
+# cargo-deny. A failure fails the run, which is what makes it visible: fix it with a new release.
 on:
   schedule:
     # Mondays, 06:17 UTC: off the hour, when scheduled runs pile up.
@@ -20,28 +20,24 @@ permissions:
 env:
   IMAGE_REPO: ghcr.io/leinardi/swarm-scheduler-exporter
   PLATFORMS: linux/amd64,linux/arm64
-  # Same pin as release.yaml, bumped by hand together with it.
-  TRIVY_VERSION: v0.74.0
 
 jobs:
   image:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
-      # For .trivyignore, the same exceptions the release scan accepts.
+      # For .trivyignore.yaml, the same exceptions the release scan accepts.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          version: ${{ env.TRIVY_VERSION }}
+          persist-credentials: false
 
-      # :latest is resolved once, to its index digest, and both platform images
-      # are scanned by their own digests: a :latest that moves during the run
-      # cannot mix two releases into one result.
-      - name: Scan both platform images of the latest release
+      # :latest is resolved once, to its index digest, and both platform images are scanned by
+      # their own digests: a :latest that moves during the run cannot mix two releases into one
+      # result.
+      - name: Resolve the latest release
+        id: latest
         run: |
           set -euo pipefail
           INDEX=$(docker buildx imagetools inspect "$IMAGE_REPO:latest" --format '{{json .Manifest}}')
@@ -55,8 +51,24 @@ jobs:
               exit 1
             fi
             echo "Scanning $platform: $PLATFORM_DIGEST"
-            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --platform "$platform" "$IMAGE_REPO@$PLATFORM_DIGEST"
+            echo "${platform#*/}=$PLATFORM_DIGEST" >> "$GITHUB_OUTPUT"
           done
+
+      # The release's gate: every fixable HIGH or CRITICAL finding fails, the base's included,
+      # since the fix for an inherited one is a release on the base's newer digest. Trivy is its
+      # latest release, never pinned, so every scan runs the newest checks.
+      - name: Scan the linux/amd64 image of the latest release
+        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          image: ${{ env.IMAGE_REPO }}@${{ steps.latest.outputs.amd64 }}
+          platform: linux/amd64
+
+      - name: Scan the linux/arm64 image of the latest release
+        if: success() || failure()
+        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        with:
+          image: ${{ env.IMAGE_REPO }}@${{ steps.latest.outputs.arm64 }}
+          platform: linux/arm64
 
   dependencies:
     runs-on: ubuntu-latest
@@ -65,11 +77,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # cargo-deny over master's dependencies, as the release's audit job runs it: a new
-      # advisory against a crate nobody touched shows up here.
-      - name: Check the Rust dependencies with cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          arguments: --workspace
-          command: check
+          persist-credentials: false
+
+      # cargo-deny reads the graph through cargo metadata, with the pinned toolchain.
+      - name: Set up Rust
+        run: rustup toolchain install --no-self-update
+
+      - name: Set up cargo-deny
+        uses: leinardi/gh-composite-actions/setup-cargo-deny@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+
+      # cargo-deny over master's dependencies, as the release's audit job runs it: a new advisory
+      # against a crate nobody touched shows up here. rust.mk passes --workspace.
+      - name: Check the Rust dependencies with cargo-deny
+        run: make rust-deny
