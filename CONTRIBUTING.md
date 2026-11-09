@@ -23,17 +23,17 @@
 ## Building and testing
 
 ```bash
-make rust-build      # cargo build of the whole workspace, every target and feature, unstamped
-make rust-test       # cargo test --workspace, the meta-tests in meta/ included
-make rust-fmt        # format the code (rust-fmt-check only checks)
-make rust-clippy     # clippy over the workspace, warnings as errors
-make verify          # rust-build, rust-fmt-check, rust-clippy and rust-test in one go
+make rust-build       # cargo build of the whole workspace, every target and feature, unstamped
+make rust-test        # cargo test --workspace, the meta-tests in meta/ included
+make rust-fmt         # format the code (rust-fmt-check only checks)
+make rust-clippy      # clippy over the workspace, warnings as errors
+make verify           # rust-build, rust-fmt-check, rust-clippy and rust-test in one go
 make rust-run ARGS="--containers --log-level debug"  # run against the local Docker daemon, version-stamped
-make audit-deps      # cargo-deny against the RustSec advisories (network required)
-make rust-deny       # every cargo-deny check: advisories, licences, bans, sources (network required)
-make dist-static     # the static release binaries in dist/, as the release builds them
-make image-build-prebuilt image-test   # the image from those binaries, and its full test suite
-make docker-build    # the container image's default target, which compiles the binary itself
+make audit-deps       # cargo-deny against the RustSec advisories (network required)
+make rust-deny        # every cargo-deny check: advisories, licences, bans, sources (network required)
+make dist-static      # the static release binaries in dist/, as the release builds them
+make image-build-test # the image from those binaries, then its full test suite
+make docker-build     # the container image's default target, which compiles the binary itself
 ```
 
 The Dockerfile hook, [droast](https://github.com/immanuwell/dockerfile-roast), is built by
