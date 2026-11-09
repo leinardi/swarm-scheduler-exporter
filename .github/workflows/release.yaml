@@ -29,14 +29,32 @@ on:
         description: "Dry run: build, test and scan, stop before the tag is pushed"
         type: boolean
         default: false
+  # A push that merges a Dependabot pull request, and leaves only Dependabot's work unreleased with
+  # at least one fix(deps) (a new runtime base image or crate), releases the next patch on its own
+  # (the dependabot job). Every other push stops at that job: the release stays a human's dispatch.
+  push:
+    branches:
+      - master
 
 # One release at a time, and never cancelled. Two dispatches in flight together would each check
 # "higher than every released version" against the same latest tag, both pass, and then publish in
-# whatever order they happened to finish - a lower version landing last would take `latest` with
-# it. A second dispatch waits for the first instead of racing it, and a run that has started is
-# never killed part-way through publishing.
+# whatever order they happened to finish - a lower version landing last would take `latest` with it.
+# A second dispatch waits for the first instead of racing it, and a run that has started is never
+# killed part-way through publishing. A push that merges a Dependabot pull request is the one push
+# that may release (the dependabot job below), so it takes the same group: a Dependabot release and
+# a dispatch never publish at once, and a lower version can never move `latest` after a higher one.
+# Every other push only runs the skipped dependabot job, in a group of its own, so it never queues
+# behind a release or replaces a waiting dispatch. GitHub keeps one pending run per group: a
+# Dependabot merge arriving while a release runs and a dispatch waits replaces that dispatch
+# (cancelled, dispatch it again), which is rare.
 concurrency:
-  group: release
+  group: >-
+    ${{
+      (github.event_name == 'workflow_dispatch'
+        || (startsWith(github.event.head_commit.message, 'Merge pull request #')
+          && contains(github.event.head_commit.message, '/dependabot/')))
+      && 'release' || github.run_id
+    }}
   cancel-in-progress: false
 
 permissions:
@@ -77,7 +95,27 @@ jobs:
   #
   # Then the version: explicit, or derived by svu from the commits, and in both cases higher than
   # every release, unless it is the recovery of this exact tag on this commit (release-version).
+  #
+  # On a push, the dependabot job decides: it releases only when everything since the last release
+  # is Dependabot's, changes only action pins and the docker cargo updates' files, holds a
+  # fix(deps), and CI passed on the push (gh-reusable-workflows' dependabot-release.md). Its version
+  # is explicit here.
+  dependabot:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    uses: leinardi/gh-reusable-workflows/.github/workflows/dependabot-release.yaml@de01bef0599aae3ab1d10e74c51b0031788b6d11 # v1.7.0
+    with:
+      ecosystems: docker cargo
+
   guard:
+    needs: dependabot
+    # A dispatch skips the dependabot job; always() keeps this job from being skipped with it.
+    if: >-
+      always()
+      && (github.event_name == 'workflow_dispatch' || needs.dependabot.outputs.release == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -112,14 +150,14 @@ jobs:
       # Only to derive a version: a version typed by hand releases even while GitHub's release
       # downloads fail.
       - name: Install svu
-        if: inputs.version == ''
+        if: github.event_name == 'workflow_dispatch' && inputs.version == ''
         uses: leinardi/gh-composite-actions/setup-svu@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
 
       - name: Resolve the version to release
         id: version
         uses: leinardi/gh-composite-actions/release-version@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
-          version: ${{ inputs.version }}
+          version: ${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.dependabot.outputs.version }}
 
       # Everything stamped into an artifact comes from the commit, never from the clock or the
       # clone, so a recovery re-run rebuilds the same bytes: a fixed seven-character commit prefix
@@ -148,6 +186,10 @@ jobs:
   # proves").
   ci-green:
     needs: guard
+    # On a dispatch the dependabot job is skipped, and a skipped job anywhere up the chain skips
+    # this one under the implicit success(), even though guard passed. So the condition is explicit:
+    # guard passed, and the run is not cancelled.
+    if: ${{ !cancelled() && needs.guard.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -174,6 +216,11 @@ jobs:
   # the release job waits for it to pass before its first step that publishes anything. Pinning
   # cargo-deny does not pin what it knows: the advisory database is fetched at run time.
   audit:
+    needs: dependabot
+    # A dispatch skips the dependabot job; always() keeps this job from being skipped with it.
+    if: >-
+      always()
+      && (github.event_name == 'workflow_dispatch' || needs.dependabot.outputs.release == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -197,6 +244,8 @@ jobs:
     needs:
       - guard
       - ci-green
+    # Explicit for the same reason as ci-green's.
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.ci-green.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -313,7 +362,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           signer-workflow: ${{ env.SIGNER_WORKFLOW }}
           expected-toolchains: ${{ steps.toolchains.outputs.lines }}
-          dry-run: ${{ inputs.dry_run }}
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 
       # The published digest a reuse continues with, from the plan.
       - name: Read the reused digest
@@ -453,7 +502,7 @@ jobs:
       - name: Start the job-local registries
         if: steps.mode.outputs.build == 'true'
         env:
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
           set -euo pipefail
           docker run -d --name local-registry -p 5000:5000 "$REGISTRY_IMAGE"

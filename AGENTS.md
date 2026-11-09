@@ -270,7 +270,10 @@ Shared by every `leinardi/*` repository.
   `binary-attestation-status`, `setup-zigbuild`, `setup-cargo-deny`). svu derives the version from
   the commits only when none is given, and is installed only then, so a version entered by hand
   releases even when GitHub's release downloads fail. Trivy is never pinned: `trivy-gate` installs
-  its latest release.
+  its latest release. A push to `master` that merges a Dependabot pull request releases a patch on
+  its own when only Dependabot's work is unreleased and one commit is a `fix(deps)`
+  (gh-reusable-workflows' `dependabot-release` with `ecosystems: docker cargo`); every other push
+  stops at that job.
 - **Dependabot:** monthly, `cooldown: default-days: 7`, labels `dependencies` and `ci`, one group
   per ecosystem. The shipped ecosystems use `fix(deps)`: `cargo` (with `prefix-development:
   chore(deps)` and separate production and development groups) and `docker` (the runtime base's
