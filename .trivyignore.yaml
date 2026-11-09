@@ -1,0 +1,16 @@
+# Trivy findings the release and scheduled scans accept. Both scans run trivy-gate with
+# --ignore-unfixed, so only a HIGH or CRITICAL vulnerability that has a fix somewhere upstream can
+# fail them, the base image's own included. An entry here is the only other exception, and every
+# entry must say, in its statement, why the finding does not apply or cannot be fixed here yet, and
+# carry an expiry date that Trivy enforces, after which the finding fails the scans again. Scope
+# each entry to the paths or purls it was found in, so the same CVE elsewhere still fails:
+#
+#   vulnerabilities:
+#     - id: CVE-2026-00000
+#       purls:
+#         - pkg:deb/debian/example@1.0?arch=amd64&distro=debian-13.7
+#       statement: Only reachable through <feature>, which the exporter never calls.
+#       expired_at: 2026-12-31
+#
+# There are no entries.
+vulnerabilities: []

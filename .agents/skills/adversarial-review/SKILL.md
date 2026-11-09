@@ -236,11 +236,11 @@ string that no longer matches the code is a finding.
 - `/metrics` and `/healthz` take no input that becomes work: no query parameter, header or
   body may trigger a Docker call, widen a scrape, or allocate per request beyond the
   exposition itself.
-- The image runs the static runtime base as an explicit non-root `USER`, with every base
-  pinned by tag; the release job publishes only the digest it scanned. If the diff
-  touches the Dockerfile, the compose files, `.trivyignore`, a workflow or `docs/release.md`,
-  read [references/release-and-image.md](references/release-and-image.md) and walk its
-  items: they are part of this section.
+- The image runs the static base as an explicit non-root `USER`, with every dhi.io base pinned by
+  tag; the release job publishes only the digest it smoke-tested and scanned. If the diff touches
+  the Dockerfile, the compose files, `.trivyignore.yaml`, a workflow, `scripts/image-test.sh` or
+  `docs/release.md`, read [references/release-and-image.md](references/release-and-image.md) and
+  walk its items: they are part of this section.
 
 ### Meta-tests must not pass on nothing
 
@@ -348,7 +348,8 @@ treat a failure it caused as a confirmed finding with the output attached:
 | `src/collector/**`, `src/docker/**`, `testenv/**` | also `make test-integration` (a DinD Swarm; needs Docker with privileged containers) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny` (cargo-deny; network required) |
 | `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
-| `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, plus `make docker-build` |
+| `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, `cargo test --locked -p meta --test dockerfiles --test toolchain`, plus `make docker-build` |
+| `scripts/image-test.sh`, `.mk/dist.mk`, `.mk/image.mk` | `make dist-static image-build-prebuilt image-test` (a `dhi.io` login) |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 

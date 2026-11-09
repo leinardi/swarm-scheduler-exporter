@@ -42,12 +42,16 @@ assignees: []
 ## 4. Environment (if relevant)
 
 <!-- Fill in what makes sense for your question, or remove fields that don't apply. -->
+<!-- The version is in the exporter's startup line (`swarm-scheduler-exporter starting
+version=... commit=...`) and in the swarm_exporter_build_info metric; the binary has no
+--version. -->
 
-* Project version / commit SHA: `?`
-* Operating system and version: `?`
-* Docker Engine version (`docker version`): `?`
-* Platform (CPU architecture; image or binary): `?`
-* Any relevant tooling / dependencies and versions: `?`
+* swarm-scheduler-exporter version and commit (startup line or `swarm_exporter_build_info`): `?`
+* How it runs (release binary, image tag and digest, own build) and where (Docker Swarm service,
+  Docker Compose, other), and how it reaches the Docker API (socket bind mount, socket proxy,
+  `DOCKER_HOST`): `?`
+* Docker Engine version (`docker version`) and Swarm size (managers and workers): `?`
+* Host operating system and architecture: `?`
 
 ---
 

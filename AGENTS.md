@@ -27,14 +27,17 @@ make rust-deny            # cargo-deny: advisories, licences, bans and sources (
 make audit-deps           # cargo-deny advisories only (network required); CI and the cargo-deny hook (on Cargo.toml/Cargo.lock/deny.toml changes) run every check
 make check                # pre-commit on all files: the authoritative local gate, the same as CI's pre-commit-all
 make check-stage          # pre-commit on the staging area only
-make docker-build
+make dist-static          # the static release binaries, dist/swarm-scheduler-exporter-linux-{amd64,arm64} (zig, cargo-zigbuild)
+make image-build-prebuilt # the image's prebuilt target from dist/, for IMAGE_PLATFORM (default: the host's; needs a dhi.io login)
+make image-test           # scripts/image-test.sh on that image, IMAGE_TEST_TIER full (default), reduced or smoke
+make docker-build         # the image's default target, which compiles the binary itself
 make docker-run           # runs the image locally (read-only, no capabilities), binding the Docker socket and the metrics port
 ```
 
-The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the
-exporter, and need no Docker: the toolchain pins (`toolchain.rs`), the Dockerfile's frontend and
-base images (`dockerfiles.rs`), the Docker SDK boundary (`docker_boundary.rs`), and the workspace
-lints (`workspace_lints.rs`).
+The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the exporter,
+and need no Docker: the toolchain pins and Trivy never pinned (`toolchain.rs`), the Dockerfile's
+frontend, its five stages and their tag-pinned bases (`dockerfiles.rs`), the Docker SDK boundary
+(`docker_boundary.rs`), and the workspace lints (`workspace_lints.rs`).
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -56,7 +59,8 @@ cargo test --test engine_wire
 The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on first run,
 `rust.mk` (the `rust-*` targets and `verify-rust`) among them; the Makefile sets its knobs
 (`RUST_STAMP_PREFIX`, `RUST_RUN_BIN`). To refresh: `make mk-common-update`. Project targets live
-in the local `.mk/*.mk` files listed in `MK_LOCAL_FILES`, never as recipes in the Makefile.
+in the local `.mk/*.mk` files listed in `MK_LOCAL_FILES` (`docker-socket-run.mk`, `audit-deps.mk`,
+`integration-test.mk`, `verify.mk`, `dist.mk`, `image.mk`), never as recipes in the Makefile.
 
 ## Layout
 
@@ -95,10 +99,20 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   and the integration suite's runner and tests under `testenv/tests/integration`.
 - `meta/` — the meta-tests, which check the repository rather than the exporter by running
   repo-meta's checks with this repository's parameters.
-- `deployments/docker/` — the Dockerfile (DHI bases, pinned by tag), compose examples and the
-  socket-proxy allowlist.
-- `docs/release.md` — how a release is cut and recovered.
-- `scripts/` — the licence-header check, the make-common bootstrap and the
+- `deployments/docker/` — the Dockerfile (`dhi.io` bases pinned by tag, deliberately not by
+  digest: dhi.io rebuilds its tags too often; the `# syntax` frontend by digest; two targets on one
+  `base` stage: `runtime`, the default, whose build stage cross-compiles a static musl binary with
+  cargo-zigbuild, and `prebuilt`, which COPYs the release binary from the `dist` build context),
+  compose examples and the socket-proxy allowlist.
+- `.github/workflows/` — `ci.yaml` (`pre-commit-all`, `rust`, `image`, `conventional-commits` and
+  the `ci-result` aggregator; the reviewdog jobs on pull requests), `integration.yaml` (the DinD
+  Swarm suite, required by name), `release.yaml` (`guard`, `ci-green`, `audit`, `release`;
+  [`docs/release.md`](docs/release.md)), `scheduled-scan.yaml` and `pre-commit-warmup.yaml`. Shared
+  steps come from [gh-composite-actions](https://github.com/leinardi/gh-composite-actions), pinned
+  by SHA. `.trivyignore.yaml` holds the scans' accepted findings.
+- `docs/release.md` — how a release is cut and recovered, and what CI proves for it.
+- `scripts/` — the licence-header check, `image-test.sh` (the image tests in three tiers: CI's full
+  amd64 and reduced arm64 suites, and the release's smoke test), the make-common bootstrap and the
   Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`).
 
 ### Shared code: rust-common
@@ -181,9 +195,13 @@ The ones to keep in mind while writing code:
 ## Conventions worth knowing
 
 - The version strings come from `SWARM_SCHEDULER_EXPORTER_VERSION`, `_COMMIT` and `_DATE` at
-  compile time (`src/version.rs`, `service_kit::buildinfo!`), set by the make targets, the
-  Dockerfile and the release workflow; unset, they read `dev`, `none` and `unknown`, and an empty
-  one stays empty.
+  compile time (`src/version.rs`, `service_kit::buildinfo!`); unset, they read `dev`, `none` and
+  `unknown`, and an empty one stays empty. `make rust-dist` and `make rust-run` set them from git;
+  `make dist-static` from `DIST_VERSION`, `DIST_COMMIT` and `DIST_DATE`, which the release sets to
+  the tag, the commit's first seven characters and its commit date; and the Dockerfile's build
+  stage from its `VERSION`, `COMMIT` and `DATE` arguments, which also fill the image labels. The
+  binary has no `--version`: it logs them in its startup line and exports them as
+  `swarm_exporter_build_info`.
 - Lints are silenced only with `#[expect(lint, reason = "...")]`: `allow_attributes` is denied,
   the reason is mandatory, and an `#[expect]` that stops firing fails the build.
 - Fixtures under `testdata/` are captures (Engine API objects, golden files); the whitespace
@@ -207,9 +225,10 @@ Run before considering an edit done. `make check` applies to every row.
 | --- | --- |
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
-| `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain`, `make docker-build` |
-| `.github/workflows/**`, `.github/actions/**` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain` |
-| `.github/scripts/**` | `bash .github/scripts/binary-attestation-status.test.sh` |
+| `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain` (droast runs in `make check`); gh-composite-actions' `check-pinned-bases/check-pinned-bases.sh --tag-only dhi.io deployments/docker/Dockerfile`; `make dist-static image-build-prebuilt image-test`, and with QEMU `make image-build-prebuilt image-test IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced`; `make docker-build` (all need a `dhi.io` login) |
+| `scripts/image-test.sh`, `.mk/dist.mk`, `.mk/image.mk` | `make dist-static image-build-prebuilt image-test` (and the arm64 run above); keep `docs/release.md#what-ci-proves` true |
+| `.trivyignore.yaml` | every entry scoped to paths or purls, with a statement and an `expired_at`; scan the prebuilt image with the latest Trivy as `trivy-gate` runs it (`--ignore-unfixed --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml`) |
+| `.github/workflows/**`, `.github/dependabot.yml` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles`; reason through each trigger the workflow has (pull request, fork pull request, push, dispatch, schedule); for `release.yaml`, keep `docs/release.md` in step and dispatch a dry run once CI passed on the commit; for `ci.yaml`'s `image` job, keep `docs/release.md#what-ci-proves` true |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
 | `scripts/check-license-headers.sh` | `pre-commit run check-license-headers --all-files` |
 | `meta/**` | `cargo test -p meta` |
@@ -219,6 +238,47 @@ To work on a shared crate from here, add an uncommitted
 `[patch."https://github.com/leinardi/rust-common"]` table to the root `Cargo.toml`, one
 `<name> = { path = "../rust-common/crates/<name>" }` line per rust-common crate the workspace uses
 (Cargo resolves two copies otherwise), and remove it before committing: CI cannot see the path.
+
+## GitHub conventions
+
+Shared by every `leinardi/*` repository.
+
+- **Jobs:** every job sets `timeout-minutes` (a composite action cannot time out its own steps).
+  Every checkout that pushes nothing sets `persist-credentials: false`; the release's checkout
+  sets it too, and its tag push passes the token to that one `git push`. Every job that holds a
+  write permission or `id-token` runs in the `release` environment.
+- **Concurrency:** CI (and `integration.yaml`) groups a pull request's runs by
+  `${{ github.workflow }} @ <head label>` and cancels the older one; every other run (a push to
+  the default branch, a dispatch) gets its own group, `${{ github.run_id }}`, because GitHub keeps
+  one pending run per group and the release gate needs CI on the exact commit (see `ci.yaml`). A
+  warm-up uses `<name>-${{ github.ref }}`, never a static group. The release uses the one
+  `release` group and is never cancelled.
+- **Caches:** the default branch is the only writer, because every pull request can restore its
+  caches and the default branch cannot restore a pull request's. The pre-commit cache is saved
+  only by `pre-commit-warmup.yaml`; CI restores it with `actions/cache/restore` under the same key,
+  `pre-commit|<OS>|<resolved Python version>|<hash of .pre-commit-config.yaml>`, so CI sets up the
+  warm-up's `python_version` and installs its pre-commit version. The Rust cache is
+  `Swatinem/rust-cache` with `shared-key: ci`, saved on `master` only (the `image` job under its
+  own `key: static`, `integration.yaml` under `key: integration`); the release writes its own,
+  `prefix-key: release`. No image build uses a layer cache: the prebuilt target is the base plus
+  one COPY.
+- **pre-commit** is pinned to the same version in CI, the warm-up and the
+  `gha-pre-commit-reviewdog-actions` jobs (their `pre-commit-version` input).
+- **Release:** `release.yaml` is a `workflow_dispatch` with an optional `version` and a `dry_run`,
+  built from gh-composite-actions (`release-version`, `require-ci-green`, `release-mode`,
+  `toolchain-record`, `toolchain-recover`, `check-pinned-bases`, `trivy-gate`,
+  `binary-attestation-status`, `setup-zigbuild`, `setup-cargo-deny`). svu derives the version from
+  the commits only when none is given, and is installed only then, so a version entered by hand
+  releases even when GitHub's release downloads fail. Trivy is never pinned: `trivy-gate` installs
+  its latest release.
+- **Dependabot:** monthly, `cooldown: default-days: 7`, labels `dependencies` and `ci`, one group
+  per ecosystem. The shipped ecosystems use `fix(deps)`: `cargo` (with `prefix-development:
+  chore(deps)` and separate production and development groups) and `docker` (the runtime base's
+  tag); GitHub Actions and pre-commit use `chore(deps)`.
+- **Issue and pull request templates:** keep the Step 1/2/3 structure of template-default, with
+  this repository's project name, version command, environment block, snippet language and extra
+  checkboxes. The pull request checklist always keeps the Conventional Commits and
+  validation-matrix items.
 
 ## Project skills
 

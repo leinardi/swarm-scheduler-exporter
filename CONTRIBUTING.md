@@ -7,11 +7,15 @@
 - [cargo-deny](https://github.com/EmbarkStudios/cargo-deny), for `make audit-deps` and
   `make rust-deny` (`cargo install --locked cargo-deny`)
 - [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and [zig](https://ziglang.org/),
-  only to build the static musl binaries the releases ship outside Docker (the versions
-  `.github/actions/setup-zigbuild` pins; `rust-toolchain.toml` adds both musl targets)
-- Docker, for building the container image and running the integration tests
-- [ShellCheck](https://github.com/koalaman/shellcheck) on `PATH`, at the release
-  `.github/actions/setup-shellcheck` pins, for the Dockerfile hook below
+  only to build the static musl binaries the releases ship outside Docker (`make dist-static`, at
+  the versions the Dockerfile's build stage and the workflows' `setup-zigbuild` steps pin;
+  `rust-toolchain.toml` adds both musl targets)
+- Docker, for building the container image and running the integration tests, with a `dhi.io`
+  login (`docker login dhi.io`) for the image's bases; QEMU (binfmt) to run the arm64 image tests on
+  another architecture
+- [ShellCheck](https://github.com/koalaman/shellcheck) on `PATH`, at the `shellcheck-py` rev's
+  release in `.pre-commit-config.yaml` (CI installs it with gh-composite-actions'
+  `setup-shellcheck`), for the Dockerfile hook below
 - [`pre-commit`](https://pre-commit.com/): install the hooks once with `make pre-commit-install`. It
   installs both the `pre-commit` and the `commit-msg` hooks, so commit messages are checked when you
   commit, not when the release runs.
@@ -27,13 +31,15 @@ make verify          # rust-build, rust-fmt-check, rust-clippy and rust-test in 
 make rust-run ARGS="--containers --log-level debug"  # run against the local Docker daemon, version-stamped
 make audit-deps      # cargo-deny against the RustSec advisories (network required)
 make rust-deny       # every cargo-deny check: advisories, licences, bans, sources (network required)
-make docker-build    # the container image, for the host's architecture
+make dist-static     # the static release binaries in dist/, as the release builds them
+make image-build-prebuilt image-test   # the image from those binaries, and its full test suite
+make docker-build    # the container image's default target, which compiles the binary itself
 ```
 
 The Dockerfile hook, [droast](https://github.com/immanuwell/dockerfile-roast), is built by
 pre-commit from source at its pinned rev with the Rust toolchain above. Its required
-ShellCheck bridge runs the `shellcheck` on `PATH`: install ShellCheck at the release
-`.github/actions/setup-shellcheck` pins (CI installs it with that action).
+ShellCheck bridge runs the `shellcheck` on `PATH`: install ShellCheck at the release the
+`shellcheck-py` hook wraps (CI installs it with gh-composite-actions' `setup-shellcheck`).
 
 `make check` runs the full pre-commit suite on every file, and `make check-stage` runs it on the
 staged files only.

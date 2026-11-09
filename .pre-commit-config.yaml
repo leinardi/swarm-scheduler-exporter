@@ -167,7 +167,7 @@ repos:
         args: [--fix]
   # Dockerfile Roast, built from source at this rev (language: rust), so every machine runs the
   # same release. Policy in droast.toml; its ShellCheck bridge is required and runs the
-  # `shellcheck` on PATH, which CI pins with .github/actions/setup-shellcheck.
+  # `shellcheck` on PATH, which CI pins with gh-composite-actions' setup-shellcheck.
   - repo: https://github.com/immanuwell/dockerfile-roast
     rev: 1.7.0
     hooks:
