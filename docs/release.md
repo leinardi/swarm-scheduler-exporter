@@ -67,6 +67,25 @@ Dispatch it once CI and the integration suite have run on the commit's push to `
 runs in flight together would each check their version against the same latest tag, both pass, and
 then publish in whatever order they finished.
 
+### Dependabot releases
+
+A merge of a Dependabot pull request releases the next patch on its own, with no dispatch, when
+everything since the last release is Dependabot's and at least one of its commits is a `fix(deps)`
+(a new runtime base image or a crate update). The workflow also runs on every push to `master`: its
+`dependabot` job calls gh-reusable-workflows' `dependabot-release` with `ecosystems: docker cargo`,
+which checks from the API alone that every unreleased commit is Dependabot's own (committed by
+GitHub) or the merge of its pull request, that the change only moves action pins and the versions of
+those ecosystems' files, and that CI passed on the push. Then the release runs as a dispatch would,
+with that patch as an explicit version. Anything else is a green no-op with a notice: a
+`chore(deps)` merge (actions, pre-commit, development dependencies) ships nothing, and a human
+commit waiting to be released leaves the release to a dispatch.
+
+A push that merges a Dependabot pull request takes the same `release` group as a dispatch, so the
+two never publish at once and a lower version never moves `latest` after a higher one. Every other
+push runs in a group of its own and only skips the `dependabot` job. GitHub keeps one pending run
+per group: a Dependabot merge that arrives while a release runs and a dispatch waits replaces that
+dispatch, which shows as cancelled; dispatch it again.
+
 ## Versioning
 
 Semantic versioning, derived from
