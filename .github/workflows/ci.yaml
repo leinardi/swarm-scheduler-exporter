@@ -426,7 +426,7 @@ jobs:
         run: |
           set -euo pipefail
           stamps=(DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}")
-          make image-build-prebuilt image-test "${stamps[@]}" IMAGE_PLATFORM=linux/amd64 IMAGE_TEST_TIER=full
+          make image-build-test "${stamps[@]}" IMAGE_PLATFORM=linux/amd64 IMAGE_TEST_TIER=full
 
       - name: Build and test the linux/arm64 image (reduced suite, QEMU)
         if: steps.dhi.outputs.available == 'true'
@@ -437,7 +437,7 @@ jobs:
         run: |
           set -euo pipefail
           stamps=(DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}")
-          make image-build-prebuilt image-test "${stamps[@]}" IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced
+          make image-build-test "${stamps[@]}" IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced
 
   # The one check that stands for the rest, for the branch ruleset to require and for release.yaml
   # to gate on: GitHub counts a skipped required job as passing, so this job runs always and decides. On a pull request every needed job must succeed; on a push

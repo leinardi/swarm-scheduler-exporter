@@ -53,4 +53,13 @@ image-test: ## Test the prebuilt image against its release binary (IMAGE_TEST_TI
 	  --platform "$(IMAGE_PLATFORM)" --binary "$(call dist_asset,$(IMAGE_PLATFORM))" \
 	  --expect-version "$(DIST_VERSION) $(DIST_COMMIT) $(DIST_DATE)"
 
+# The two above in order. Goals on one command line are not ordered under make -j, so
+# `make image-build-prebuilt image-test` could test a missing or previous image before the build
+# has loaded the new one; each step here is its own make run, the second started only after the
+# first succeeded. Both stay on their own: image-test reruns the suite on an image already built.
+.PHONY: image-build-test
+image-build-test: ## Build the prebuilt image for IMAGE_PLATFORM, then test it (ordered, safe under make -j)
+	$(MAKE) --no-print-directory image-build-prebuilt
+	$(MAKE) --no-print-directory image-test
+
 endif  # MK_LOCAL_IMAGE_INCLUDED
