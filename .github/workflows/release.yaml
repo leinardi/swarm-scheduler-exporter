@@ -113,11 +113,11 @@ jobs:
       # downloads fail.
       - name: Install svu
         if: inputs.version == ''
-        uses: leinardi/gh-composite-actions/setup-svu@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/setup-svu@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
 
       - name: Resolve the version to release
         id: version
-        uses: leinardi/gh-composite-actions/release-version@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/release-version@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           version: ${{ inputs.version }}
 
@@ -155,14 +155,14 @@ jobs:
 
     steps:
       - name: Require CI green on this commit
-        uses: leinardi/gh-composite-actions/require-ci-green@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/require-ci-green@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           accepted-events: push
 
       # The integration suite (integration.yaml) runs the release binary against a real multi-node
       # Swarm, which ci.yaml cannot: it must have passed on the same push to master too.
       - name: Require the integration suite green on this commit
-        uses: leinardi/gh-composite-actions/require-ci-green@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/require-ci-green@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           workflow: .github/workflows/integration.yaml
           job: integration
@@ -188,7 +188,7 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - name: Set up cargo-deny
-        uses: leinardi/gh-composite-actions/setup-cargo-deny@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/setup-cargo-deny@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
 
       - name: Check the Rust dependencies with cargo-deny
         run: make rust-deny
@@ -229,7 +229,7 @@ jobs:
       # dhi.io bases by an explicit tag, deliberately not by digest (dhi.io rebuilds them too often
       # to follow by digest), anything else by digest.
       - name: Check the Dockerfile pins
-        uses: leinardi/gh-composite-actions/check-pinned-bases@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/check-pinned-bases@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           dockerfiles: deployments/docker/Dockerfile
           tag-only-images: dhi.io
@@ -272,7 +272,7 @@ jobs:
       # switch to it, so a rebuilt binary is byte-identical to one the first attempt published. A
       # fresh release has no tag yet, and this is a no-op.
       - name: Recover the recorded toolchain
-        uses: leinardi/gh-composite-actions/toolchain-recover@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/toolchain-recover@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           toolchains: rust
           rust-targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
@@ -282,7 +282,7 @@ jobs:
       # that an existing tag records exactly this.
       - name: Record the toolchain
         id: toolchains
-        uses: leinardi/gh-composite-actions/toolchain-record@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/toolchain-record@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           toolchains: rust
 
@@ -305,7 +305,7 @@ jobs:
       # rebuilt. docs/release.md describes each mode.
       - name: Decide the release mode
         id: mode
-        uses: leinardi/gh-composite-actions/release-mode@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/release-mode@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           tag: ${{ needs.guard.outputs.tag }}
           image: ${{ env.IMAGE_REPO }}
@@ -359,7 +359,7 @@ jobs:
       # The versions the Dockerfile's build stage pins (meta/tests/toolchain.rs), as CI.
       - name: Set up cargo-zigbuild
         if: steps.mode.outputs.rebuild != ''
-        uses: leinardi/gh-composite-actions/setup-zigbuild@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/setup-zigbuild@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           zig-version: 0.17.0
           cargo-zigbuild-version: 0.24.0
@@ -616,14 +616,14 @@ jobs:
       # pinned.
       - name: Scan the linux/amd64 image
         if: steps.mode.outputs.build == 'true'
-        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/trivy-gate@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           image: ${{ env.LOCAL_IMAGE }}@${{ steps.platform.outputs.amd64 }}
           platform: linux/amd64
 
       - name: Scan the linux/arm64 image
         if: steps.mode.outputs.build == 'true'
-        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/trivy-gate@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           image: ${{ env.LOCAL_IMAGE }}@${{ steps.platform.outputs.arm64 }}
           platform: linux/arm64
@@ -717,7 +717,7 @@ jobs:
       # attempt's pass never counts, so a recovery uses "Re-run all jobs" - docs/release.md). A dry
       # run waits for it too, so it reports the audit a real run would face.
       - name: Require the audit to have passed
-        uses: leinardi/gh-composite-actions/require-job-success@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/require-job-success@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           job: audit
 
@@ -845,7 +845,7 @@ jobs:
         id: reuse-scan-amd64
         if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'reuse' }}
         continue-on-error: true # findings in an image already published are warnings
-        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/trivy-gate@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           image: ${{ env.IMAGE_REPO }}@${{ steps.sign.outputs.digest }}
           platform: linux/amd64
@@ -854,7 +854,7 @@ jobs:
         id: reuse-scan-arm64
         if: ${{ !inputs.dry_run && steps.mode.outputs.mode == 'reuse' }}
         continue-on-error: true # findings in an image already published are warnings
-        uses: leinardi/gh-composite-actions/trivy-gate@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/trivy-gate@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           image: ${{ env.IMAGE_REPO }}@${{ steps.sign.outputs.digest }}
           platform: linux/arm64
@@ -894,7 +894,7 @@ jobs:
       # drafted. A dry run runs it too, as a rehearsal; only the attestation itself is skipped.
       - name: Check which binaries need an attestation
         id: binattest
-        uses: leinardi/gh-composite-actions/binary-attestation-status@2115c9766c690e2e98afdeb64425c761aa86b072 # v1.4.0
+        uses: leinardi/gh-composite-actions/binary-attestation-status@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
         with:
           files: |
             dist/${{ env.APP_NAME }}-linux-amd64
