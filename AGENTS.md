@@ -37,7 +37,8 @@ make docker-run           # runs the image locally (read-only, no capabilities),
 The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the exporter,
 and need no Docker: the toolchain pins and Trivy never pinned (`toolchain.rs`), the Dockerfile's
 frontend, its five stages and their tag-pinned bases (`dockerfiles.rs`), the Docker SDK boundary
-(`docker_boundary.rs`), and the workspace lints (`workspace_lints.rs`).
+(`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), and the rust-common pins
+(`rust_common_pins.rs`).
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -118,7 +119,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v1.0.0"`, with `version = "1.0"`) in
+dependency pinned by the release tag (`tag = "v1.1.0"`, with `version = "1.1"`) in
 `[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
