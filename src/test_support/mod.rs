@@ -196,6 +196,7 @@ pub(crate) fn schedulable_node(id: &str, hostname: &str) -> Node {
             availability: "active".to_owned(),
             ..NodeSpec::default()
         },
+        manager_status: None,
     }
 }
 

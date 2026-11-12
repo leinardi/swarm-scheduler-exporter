@@ -1,6 +1,34 @@
 # Rewrite with: make test-integration UPDATE=1 RUN=TestSnapshot_
 swarm_cluster_nodes_by_state{availability="active",role="manager",status="ready"} 1
 swarm_cluster_nodes_by_state{availability="active",role="worker",status="ready"} 2
+swarm_node_availability{availability="active",node="manager-0",node_id="<manager-0>"} 1
+swarm_node_availability{availability="active",node="worker-0",node_id="<worker-0>"} 1
+swarm_node_availability{availability="active",node="worker-1",node_id="<worker-1>"} 1
+swarm_node_availability{availability="drain",node="manager-0",node_id="<manager-0>"} 0
+swarm_node_availability{availability="drain",node="worker-0",node_id="<worker-0>"} 0
+swarm_node_availability{availability="drain",node="worker-1",node_id="<worker-1>"} 0
+swarm_node_availability{availability="pause",node="manager-0",node_id="<manager-0>"} 0
+swarm_node_availability{availability="pause",node="worker-0",node_id="<worker-0>"} 0
+swarm_node_availability{availability="pause",node="worker-1",node_id="<worker-1>"} 0
+swarm_node_info{node="manager-0",node_id="<manager-0>",role="manager"} 1
+swarm_node_info{node="worker-0",node_id="<worker-0>",role="worker"} 1
+swarm_node_info{node="worker-1",node_id="<worker-1>",role="worker"} 1
+swarm_node_manager_leader{node="manager-0",node_id="<manager-0>"} 1
+swarm_node_manager_reachability{node="manager-0",node_id="<manager-0>",reachability="reachable"} 1
+swarm_node_manager_reachability{node="manager-0",node_id="<manager-0>",reachability="unknown"} 0
+swarm_node_manager_reachability{node="manager-0",node_id="<manager-0>",reachability="unreachable"} 0
+swarm_node_status{node="manager-0",node_id="<manager-0>",status="disconnected"} 0
+swarm_node_status{node="manager-0",node_id="<manager-0>",status="down"} 0
+swarm_node_status{node="manager-0",node_id="<manager-0>",status="ready"} 1
+swarm_node_status{node="manager-0",node_id="<manager-0>",status="unknown"} 0
+swarm_node_status{node="worker-0",node_id="<worker-0>",status="disconnected"} 0
+swarm_node_status{node="worker-0",node_id="<worker-0>",status="down"} 0
+swarm_node_status{node="worker-0",node_id="<worker-0>",status="ready"} 1
+swarm_node_status{node="worker-0",node_id="<worker-0>",status="unknown"} 0
+swarm_node_status{node="worker-1",node_id="<worker-1>",status="disconnected"} 0
+swarm_node_status{node="worker-1",node_id="<worker-1>",status="down"} 0
+swarm_node_status{node="worker-1",node_id="<worker-1>",status="ready"} 1
+swarm_node_status{node="worker-1",node_id="<worker-1>",status="unknown"} 0
 swarm_service_at_desired{display_name="it-snapshot agent",service="agent",service_mode="global",stack="it-snapshot",team=""} 1
 swarm_service_at_desired{display_name="it-snapshot custom",service="custom",service_mode="replicated",stack="it-snapshot",team="platform"} 1
 swarm_service_at_desired{display_name="it-snapshot idle",service="idle",service_mode="replicated",stack="it-snapshot",team=""} 1
@@ -13,6 +41,24 @@ swarm_service_desired_replicas{display_name="it-snapshot idle",service="idle",se
 swarm_service_desired_replicas{display_name="it-snapshot nowhere",service="nowhere",service_mode="global",stack="it-snapshot",team=""} 0
 swarm_service_desired_replicas{display_name="it-snapshot oneshot",service="oneshot",service_mode="replicated",stack="it-snapshot",team=""} 1
 swarm_service_desired_replicas{display_name="it-snapshot web",service="web",service_mode="replicated",stack="it-snapshot",team=""} 2
+swarm_service_restart_policy{display_name="it-snapshot agent",restart_condition="any",service="agent",service_mode="global",stack="it-snapshot"} 1
+swarm_service_restart_policy{display_name="it-snapshot agent",restart_condition="none",service="agent",service_mode="global",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot agent",restart_condition="on-failure",service="agent",service_mode="global",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot custom",restart_condition="any",service="custom",service_mode="replicated",stack="it-snapshot"} 1
+swarm_service_restart_policy{display_name="it-snapshot custom",restart_condition="none",service="custom",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot custom",restart_condition="on-failure",service="custom",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot idle",restart_condition="any",service="idle",service_mode="replicated",stack="it-snapshot"} 1
+swarm_service_restart_policy{display_name="it-snapshot idle",restart_condition="none",service="idle",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot idle",restart_condition="on-failure",service="idle",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot nowhere",restart_condition="any",service="nowhere",service_mode="global",stack="it-snapshot"} 1
+swarm_service_restart_policy{display_name="it-snapshot nowhere",restart_condition="none",service="nowhere",service_mode="global",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot nowhere",restart_condition="on-failure",service="nowhere",service_mode="global",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot oneshot",restart_condition="any",service="oneshot",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot oneshot",restart_condition="none",service="oneshot",service_mode="replicated",stack="it-snapshot"} 1
+swarm_service_restart_policy{display_name="it-snapshot oneshot",restart_condition="on-failure",service="oneshot",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot web",restart_condition="any",service="web",service_mode="replicated",stack="it-snapshot"} 1
+swarm_service_restart_policy{display_name="it-snapshot web",restart_condition="none",service="web",service_mode="replicated",stack="it-snapshot"} 0
+swarm_service_restart_policy{display_name="it-snapshot web",restart_condition="on-failure",service="web",service_mode="replicated",stack="it-snapshot"} 0
 swarm_service_running_replicas{display_name="it-snapshot agent",service="agent",service_mode="global",stack="it-snapshot",team=""} 3
 swarm_service_running_replicas{display_name="it-snapshot custom",service="custom",service_mode="replicated",stack="it-snapshot",team="platform"} 1
 swarm_service_running_replicas{display_name="it-snapshot idle",service="idle",service_mode="replicated",stack="it-snapshot",team=""} 0

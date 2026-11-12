@@ -149,7 +149,9 @@ impl ReplicaGauges {
         metadata: &ServiceMetadata,
         value: f64,
     ) -> Result<(), LabelsMismatch> {
-        let value = if metadata.restart_condition_none || is_job_mode(&metadata.service_mode) {
+        let value = if metadata.restart_condition == super::types::RestartCondition::None
+            || is_job_mode(&metadata.service_mode)
+        {
             0.0
         } else {
             value

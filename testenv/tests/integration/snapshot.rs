@@ -36,7 +36,7 @@ use crate::cluster_smoke::node_count;
 use crate::http::scrape_metrics;
 use crate::launcher::Launch;
 use crate::swarm::{Mode, ServiceKey, ServiceOpts, deploy_service};
-use crate::testing::{TestHandle, TestResult};
+use crate::testing::{TestHandle, TestResult, cluster};
 use crate::wait::{
     LABEL_SERVICE, LABEL_STACK, METRIC_DESIRED, METRIC_NODES_BY_STATE, METRIC_REPLICAS_STATE,
     METRIC_RUNNING, eventually, metrics_match, want, want_service,
@@ -196,16 +196,28 @@ async fn steady_state_snapshot(ctx: &Context, base_url: &str) -> Result<Vec<Stri
                 sample.labels.get(LABEL_STACK).map(String::as_str) == Some(SNAPSHOT_STACK);
             let service_family =
                 sample.name.starts_with("swarm_service_") || sample.name == METRIC_REPLICAS_STATE;
-            (in_stack && service_family) || sample.name == METRIC_NODES_BY_STATE
+            (in_stack && service_family)
+                || sample.name == METRIC_NODES_BY_STATE
+                || sample.name.starts_with("swarm_node_")
         })
         .map(|sample| {
+            // Swarm IDs vary between runs; preserve each node's stable harness identity.
+            let mut sample = sample.clone();
+            if let Some(id) = sample.labels.get_mut("node_id")
+                && let Some(node) = cluster()
+                    .nodes
+                    .iter()
+                    .find(|node| node.swarm_node_id == *id)
+            {
+                *id = format!("<{}>", node.hostname);
+            }
             if sample.name.ends_with("_timestamp_seconds") && sample.value != 0.0 {
                 format!(
                     "{} {TIMESTAMP_MASK}",
                     format_series(&sample.name, &sample.labels)
                 )
             } else {
-                format_sample(sample)
+                format_sample(&sample)
             }
         })
         .collect();

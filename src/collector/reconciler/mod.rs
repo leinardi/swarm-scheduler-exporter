@@ -56,8 +56,9 @@ use tracing::{debug, error, warn};
 use super::desired::{ReplicaGauges, labels_for_metadata, replica_counts};
 use super::error::CallError;
 use super::exporter_metrics::{ExporterMetrics, ResyncResult};
-use super::nodes::NodesByState;
+use super::nodes::{NodeMetrics, NodesByState};
 use super::replicas_state::{ReplicasState, ServiceCounter};
+use super::service_restart::ServiceRestartPolicy;
 use super::service_update::ServiceUpdateMetrics;
 use super::types::{CustomLabels, MetadataCache, NodeCache, ServiceMetadata, build_metadata};
 use crate::metrics::must;
@@ -83,6 +84,8 @@ pub const SERVICE_KEYS_PER_CYCLE: usize = 32;
 /// stream cannot: a silent stream, clock skew between the exporter and the daemon, and events
 /// the daemon no longer has when the stream reconnects.
 pub const PERIODIC_RESYNC_INTERVAL: Duration = Duration::from_mins(5);
+/// Node-only refresh, including raft state changes that may emit no event.
+pub const NODE_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
 /// The waits before retrying a service whose inspect failed with an error other than not-found.
 /// A failure with no delay left drops the key and requests a resync, which picks the service up
@@ -119,6 +122,8 @@ pub struct ReconcilerPolicy {
     pub backoff_max: Duration,
     /// The periodic resync interval.
     pub resync_interval: Duration,
+    /// The node-only refresh interval.
+    pub node_refresh_interval: Duration,
 }
 
 impl Default for ReconcilerPolicy {
@@ -129,6 +134,7 @@ impl Default for ReconcilerPolicy {
             backoff_initial: BACKOFF_INITIAL_DELAY,
             backoff_max: BACKOFF_MAX_DELAY,
             resync_interval: PERIODIC_RESYNC_INTERVAL,
+            node_refresh_interval: NODE_REFRESH_INTERVAL,
         }
     }
 }
@@ -136,7 +142,7 @@ impl Default for ReconcilerPolicy {
 /// The families the reconciler writes, shared with the registry and the poller.
 #[derive(Debug, Clone)]
 pub struct Collectors {
-    /// The custom labels every per-service family carries.
+    /// The custom labels, excluding the fixed-label restart-policy family.
     pub custom_labels: CustomLabels,
     /// `swarm_service_desired_replicas` and `swarm_service_schedulable_replicas`.
     pub replica_gauges: Arc<ReplicaGauges>,
@@ -144,6 +150,10 @@ pub struct Collectors {
     pub service_update: Arc<ServiceUpdateMetrics>,
     /// `swarm_cluster_nodes_by_state`.
     pub nodes_by_state: Arc<NodesByState>,
+    /// The atomic per-node view.
+    pub node_metrics: Arc<NodeMetrics>,
+    /// The fixed-label restart-policy snapshot.
+    pub restart_policy: Arc<ServiceRestartPolicy>,
     /// The replicas-state families, whose mismatch log forgets a removed service.
     pub replicas_state: Arc<ReplicasState>,
     /// The self-observability families.
@@ -408,10 +418,12 @@ pub struct Reconciler<D> {
     backoff_initial: Duration,
     backoff_max: Duration,
     resync_interval: Duration,
+    node_refresh_interval: Duration,
 
     // Owned by the reconciler alone: no lock.
     metadata: MetadataCache,
     nodes: NodeCache,
+    restart_policy_dirty: bool,
 
     // Scheduling, read and written by the reconciler alone. None is Go's zero time: due at once.
     resync_not_before: Option<Instant>,
@@ -419,6 +431,7 @@ pub struct Reconciler<D> {
     next_periodic_resync: Option<Instant>,
     nodes_not_before: Option<Instant>,
     nodes_backoff: Duration,
+    next_node_refresh: Option<Instant>,
 
     // The reconciler's ends of the poll protocol, and the state of the polls it published: what
     // the last poll published per service, and how many polls in a row each service was
@@ -486,13 +499,16 @@ impl<D: DockerApi> Reconciler<D> {
             backoff_initial: policy.backoff_initial,
             backoff_max: policy.backoff_max,
             resync_interval: policy.resync_interval,
+            node_refresh_interval: policy.node_refresh_interval,
             metadata: MetadataCache::new(),
             nodes: NodeCache::new(),
+            restart_policy_dirty: false,
             resync_not_before: None,
             resync_backoff: policy.backoff_initial,
             next_periodic_resync: None,
             nodes_not_before: None,
             nodes_backoff: policy.backoff_initial,
+            next_node_refresh: None,
             poll_receivers,
             last_published: ServiceCounter::new(),
             poll_rejections: HashMap::new(),
@@ -566,11 +582,27 @@ impl<D: DockerApi> Reconciler<D> {
         }
         for key in self.take_due_keys(now) {
             if cancel.is_cancelled() {
+                self.publish_restart_policy().await;
                 return;
             }
             let step = format!("service {}", key.service_id);
             let outcome = recover(self.reconcile_service(cancel, key)).await;
             self.after_step(&step, outcome);
+        }
+        self.publish_restart_policy().await;
+    }
+
+    async fn publish_restart_policy(&mut self) {
+        if self.restart_policy_dirty {
+            let outcome = recover(async {
+                let snapshot = self.metadata.all();
+                self.collectors
+                    .restart_policy
+                    .publish_from(snapshot.values());
+                self.restart_policy_dirty = false;
+            })
+            .await;
+            self.after_step("restart policy", outcome);
         }
     }
 
@@ -589,6 +621,9 @@ impl<D: DockerApi> Reconciler<D> {
         // A resync cut short by a panic neither completed nor went through its failure path.
         if step == RESYNC_STEP {
             self.collectors.metrics.inc_resync(ResyncResult::Failure);
+        }
+        if step == "nodes" {
+            self.schedule_node_retry();
         }
         self.request_resync_after_panic();
     }
@@ -645,8 +680,18 @@ impl<D: DockerApi> Reconciler<D> {
     fn nodes_due(&self, now: Instant) -> bool {
         let state = self.shared.lock();
         state.resync_completed > 0
-            && state.nodes_dirty
-            && self.nodes_not_before.is_none_or(|at| at <= now)
+            && self
+                .node_deadline(state.nodes_dirty)
+                .is_none_or(|at| at <= now)
+    }
+
+    // The due check and wake timer must honor the same backoff, including periodic failures.
+    fn node_deadline(&self, dirty: bool) -> Option<Instant> {
+        if dirty {
+            self.nodes_not_before
+        } else {
+            self.next_node_refresh.max(self.nodes_not_before)
+        }
     }
 
     fn resync_due(&self, now: Instant) -> bool {
@@ -685,9 +730,7 @@ impl<D: DockerApi> Reconciler<D> {
             if state.resync_requested == state.resync_completed {
                 consider(self.next_periodic_resync);
             }
-            if state.nodes_dirty {
-                consider(self.nodes_not_before);
-            }
+            consider(self.node_deadline(state.nodes_dirty));
             for pending in state.pending_set.values() {
                 consider(Some(pending.not_before));
             }
@@ -766,6 +809,7 @@ impl<D: DockerApi> Reconciler<D> {
     /// stack, a changed custom label value), the series under the old identity are deleted
     /// first: they would otherwise stay forever.
     fn apply_service(&mut self, service: &Service, nodes: &[Node]) {
+        self.restart_policy_dirty = true;
         let mut metadata = build_metadata(service, &self.collectors.custom_labels);
         if let Some(previous) = self.metadata.get(&service.id)
             && labels_for_metadata(previous) != labels_for_metadata(&metadata)
@@ -791,6 +835,7 @@ impl<D: DockerApi> Reconciler<D> {
 
     /// Deletes the series and the cache entry of a service Docker no longer has.
     fn remove_service(&mut self, service_id: &str) {
+        self.restart_policy_dirty = true;
         if let Some(metadata) = self.metadata.get(service_id).cloned() {
             self.delete_service_series(&metadata);
             self.metadata.delete(service_id);
@@ -816,34 +861,47 @@ impl<D: DockerApi> Reconciler<D> {
         self.collectors.service_update.clear(metadata);
     }
 
-    /// Refreshes the node snapshot and recomputes every service's counts from it and the
-    /// cached placement. On failure nothing changes, the flag stays set, and the next attempt
-    /// waits for a growing backoff.
+    /// Refreshes nodes, applying changed data only. Failures back off; only an event-driven
+    /// refresh keeps nodes dirty and invalidates global polls while waiting for a retry.
     async fn reconcile_nodes(&mut self, cancel: &CancellationToken) {
         // Cleared before the call: a node event that arrives during it sets the flag again.
-        self.shared.lock().nodes_dirty = false;
+        let was_dirty = std::mem::replace(&mut self.shared.lock().nodes_dirty, false);
         let Some(listed) = cancel.run_until_cancelled(list_nodes(&*self.docker)).await else {
             return;
         };
         match listed {
             Ok(nodes) => {
-                self.apply_nodes(&nodes);
-                self.nodes_backoff = self.backoff_initial;
+                if !self.nodes.matches(&nodes) {
+                    self.apply_nodes(&nodes);
+                }
+                self.node_list_succeeded();
             }
             Err(error) => {
-                self.shared.lock().nodes_dirty = true;
-                self.nodes_not_before = Some(Instant::now() + self.nodes_backoff);
+                if was_dirty {
+                    self.shared.lock().nodes_dirty = true;
+                }
                 warn!(
                     error = %error,
                     backoff = ?self.nodes_backoff,
                     "node refresh failed; will retry"
                 );
-                self.nodes_backoff = self
-                    .nodes_backoff
-                    .saturating_mul(BACKOFF_MULTIPLIER)
-                    .min(self.backoff_max);
+                self.schedule_node_retry();
             }
         }
+    }
+
+    fn node_list_succeeded(&mut self) {
+        self.nodes_backoff = self.backoff_initial;
+        self.nodes_not_before = None;
+        self.next_node_refresh = Some(Instant::now() + self.node_refresh_interval);
+    }
+
+    fn schedule_node_retry(&mut self) {
+        self.nodes_not_before = Some(Instant::now() + self.nodes_backoff);
+        self.nodes_backoff = self
+            .nodes_backoff
+            .saturating_mul(BACKOFF_MULTIPLIER)
+            .min(self.backoff_max);
     }
 
     /// Replaces the node snapshot, recomputes every cached service's counts from it and bumps
@@ -851,6 +909,7 @@ impl<D: DockerApi> Reconciler<D> {
     fn apply_nodes(&mut self, nodes: &[Node]) {
         self.nodes.set(nodes);
         self.collectors.nodes_by_state.update_from_slice(nodes);
+        self.collectors.node_metrics.update_from_slice(nodes);
         for (service_id, metadata) in self.metadata.all() {
             let (desired, schedulable) = replica_counts(&metadata, nodes);
             self.metadata.set_desired_replicas(&service_id, desired);
@@ -890,6 +949,7 @@ impl<D: DockerApi> Reconciler<D> {
             }
         };
         self.apply_nodes(&nodes);
+        self.node_list_succeeded();
         let mut listed_ids = HashSet::with_capacity(services.len());
         for service in &services {
             listed_ids.insert(service.id.as_str());

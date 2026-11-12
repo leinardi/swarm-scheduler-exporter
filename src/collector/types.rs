@@ -39,8 +39,32 @@ use super::metrics_ids::{
 /// The service label holding the stack a service was deployed with.
 pub const STACK_NAMESPACE_LABEL: &str = "com.docker.stack.namespace";
 
-/// The restart condition of a one-shot service.
-const RESTART_CONDITION_NONE: &str = "none";
+/// The service's restart condition, independent of its metric labels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RestartCondition {
+    /// One-shot service.
+    None,
+    /// Restart only failed tasks.
+    OnFailure,
+    /// Swarm's default when the policy or condition is absent.
+    #[default]
+    Any,
+    /// Defensive fallback for a non-wire value.
+    Unrecognized,
+}
+
+impl RestartCondition {
+    /// The effective condition; the Docker SDK rejects unknown wire enums before this mapping.
+    #[must_use]
+    pub fn from_swarm(value: &str) -> Self {
+        match value {
+            "none" => Self::None,
+            "on-failure" => Self::OnFailure,
+            "" | "any" => Self::Any,
+            _ => Self::Unrecognized,
+        }
+    }
+}
 
 /// A user-requested custom label: the service label key as it appears in Swarm, and the
 /// Prometheus label name it is exported as.
@@ -105,8 +129,8 @@ pub struct ServiceMetadata {
     pub constraints: Vec<String>,
     /// The placement platform requirements.
     pub platforms: Vec<Platform>,
-    /// Whether `RestartPolicy.Condition` is `none` (one-shot and cron-like services).
-    pub restart_condition_none: bool,
+    /// The effective `RestartPolicy.Condition`.
+    pub restart_condition: RestartCondition,
 }
 
 /// Builds the metadata of `service`, with a value (or `""`) for every custom label.
@@ -144,11 +168,12 @@ pub fn build_metadata(service: &Service, custom_labels: &CustomLabels) -> Servic
         metadata.constraints.clone_from(&placement.constraints);
         metadata.platforms.clone_from(&placement.platforms);
     }
-    metadata.restart_condition_none = spec
-        .task_template
-        .restart_policy
-        .as_ref()
-        .is_some_and(|policy| policy.condition == RESTART_CONDITION_NONE);
+    metadata.restart_condition = RestartCondition::from_swarm(
+        spec.task_template
+            .restart_policy
+            .as_ref()
+            .map_or("", |policy| policy.condition.as_str()),
+    );
     for label in &custom_labels.labels {
         // Every custom label exists, empty when the service lacks it (exhaustive emission).
         let value = spec.labels.get(&label.raw).cloned().unwrap_or_default();
@@ -295,7 +320,17 @@ impl NodeCache {
 
     /// Replaces the snapshot with a copy of `nodes`.
     pub fn set(&mut self, nodes: &[Node]) {
+        let mut nodes = nodes.to_vec();
+        nodes.sort_by(|left, right| left.id.cmp(&right.id));
         self.nodes = nodes.into();
+    }
+
+    /// Whether a list has the same node data, regardless of Docker's list order.
+    #[must_use]
+    pub fn matches(&self, nodes: &[Node]) -> bool {
+        let mut nodes = nodes.to_vec();
+        nodes.sort_by(|left, right| left.id.cmp(&right.id));
+        self.nodes.as_ref() == nodes
     }
 
     /// The snapshot.

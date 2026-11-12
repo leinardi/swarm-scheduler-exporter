@@ -1,7 +1,5 @@
-# The metric families of the Go 1.x exporter (the go-v1.3.2 capture of /metrics) that 2.0 keeps:
-# name, type, label names (a histogram without `le`). The Go runtime (go_*) and the scrape
-# handler (promhttp_*) families are dropped (README, Q1 and Q15). A counter is listed under its
-# sample name, with `_total`; OpenMetrics names the family without it.
+# Public metric inventory: name, type, sorted label names (histograms omit le).
+# Regenerate: UPDATE_METRICS_INVENTORY=1 cargo test --test metrics the_inventory_matches_the_public_contract
 
 process_cpu_seconds_total counter
 process_max_fds gauge
@@ -25,8 +23,14 @@ swarm_exporter_poll_errors_total counter
 swarm_exporter_poll_rejections_total counter
 swarm_exporter_polls_total counter
 swarm_exporter_resyncs_total counter result
+swarm_node_availability gauge availability,node,node_id
+swarm_node_info gauge node,node_id,role
+swarm_node_manager_leader gauge node,node_id
+swarm_node_manager_reachability gauge node,node_id,reachability
+swarm_node_status gauge node,node_id,status
 swarm_service_at_desired gauge display_name,service,service_mode,stack
 swarm_service_desired_replicas gauge display_name,service,service_mode,stack
+swarm_service_restart_policy gauge display_name,restart_condition,service,service_mode,stack
 swarm_service_running_replicas gauge display_name,service,service_mode,stack
 swarm_service_schedulable_replicas gauge display_name,service,service_mode,stack
 swarm_service_update_completed_timestamp_seconds gauge display_name,service,service_mode,stack

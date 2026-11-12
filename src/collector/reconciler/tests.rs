@@ -202,6 +202,7 @@ struct DockerState {
     inspect_err: HashMap<String, Error>,
     // Runs after the service list built its result, before it returns.
     after_service_list: Option<Hook>,
+    after_node_list: Option<Hook>,
     blocked: HashSet<Call>,
     panic_on_inspect: bool,
     panic_on_service_list: bool,
@@ -396,15 +397,19 @@ impl DockerApi for TestDocker {
 
     fn node_list(&self) -> impl Future<Output = Result<Vec<Node>, Error>> + Send {
         self.node_list_calls.fetch_add(1, Ordering::SeqCst);
-        let state = self.lock();
+        let mut state = self.lock();
         let result = state
             .node_list_err
             .clone()
             .map_or_else(|| Ok(state.nodes.clone()), Err);
         let blocked = state.blocked.contains(&Call::NodeList);
+        let hook = state.after_node_list.take();
         drop(state);
         async move {
             hold_if(blocked).await;
+            if let Some(hook) = hook {
+                hook();
+            }
             result
         }
     }
@@ -635,6 +640,8 @@ fn fixture_with(docker: TestDocker, policy: &ReconcilerPolicy) -> Fixture {
         replica_gauges: Arc::new(ReplicaGauges::new(&custom)),
         service_update: Arc::new(ServiceUpdateMetrics::new(&custom)),
         nodes_by_state: Arc::new(NodesByState::new()),
+        node_metrics: Arc::new(NodeMetrics::new()),
+        restart_policy: Arc::new(ServiceRestartPolicy::new()),
         replicas_state: Arc::new(ReplicasState::new(&custom)),
         metrics: Arc::new(ExporterMetrics::new(Arc::new(Timestamps::default()))),
     };
@@ -1620,6 +1627,191 @@ async fn the_last_resync_success_is_the_completion_time() {
 
 // ---- Scheduling ----
 
+#[tokio::test]
+async fn restart_policy_publishes_at_cycle_boundaries_and_removes_old_identities() {
+    use crate::docker::types::RestartPolicy;
+    use crate::test_support::gather_registered;
+    let mut fixture = fixture(TestDocker::default());
+    fixture.complete_first_resync().await;
+    let metrics = Arc::clone(&fixture.collectors.restart_policy);
+    let view = || gather_registered(|registry| metrics.register(registry));
+    let mut service = replicated_service("svc1", "stack", "web", 1);
+    fixture.reconciler.apply_service(&service, &[]);
+    assert!(view().is_empty(), "no per-service publication");
+    fixture.cycle().await;
+    let initial = view();
+    assert_eq!(initial.len(), 3);
+    assert!(
+        initial
+            .iter()
+            .any(|(key, value)| key.contains("restart_condition=\"any\"")
+                && Some(*value) == Some(1.0))
+    );
+    for (name, mode) in [
+        ("stack_renamed", false),
+        ("other_renamed", false),
+        ("other_renamed", true),
+    ] {
+        service.spec.name = name.to_owned();
+        service.spec.labels.insert(
+            STACK_NAMESPACE_LABEL.to_owned(),
+            name.split('_').next().unwrap().to_owned(),
+        );
+        if mode {
+            service.spec.mode = ServiceMode::default();
+        }
+        service.spec.task_template.restart_policy = Some(RestartPolicy {
+            condition: "none".to_owned(),
+        });
+        let before = view();
+        fixture.reconciler.apply_service(&service, &[]);
+        fixture.reconciler.apply_service(&service, &[]);
+        assert_eq!(view(), before);
+        fixture.cycle().await;
+        assert_eq!(view().len(), 3, "old identity must disappear");
+        assert_ne!(view(), before);
+        assert!(
+            view()
+                .iter()
+                .any(|(key, value)| key.contains("restart_condition=\"none\"")
+                    && Some(*value) == Some(1.0))
+        );
+    }
+    fixture.reconciler.remove_service("svc1");
+    fixture
+        .handle
+        .mark_service_dirty("cancelled", Instant::now());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    fixture.reconciler.cycle(&cancel).await;
+    assert!(view().is_empty(), "cancellation still publishes removals");
+}
+
+#[tokio::test(start_paused = true)]
+async fn periodic_nodes_refresh_only_changes_and_reschedule_after_each_success() {
+    let first = schedulable_node("a", "same");
+    let second = schedulable_node("b", "same");
+    let mut fixture = fixture_with(
+        TestDocker::new(vec![], vec![first.clone(), second.clone()]),
+        &ReconcilerPolicy {
+            resync_interval: Duration::from_mins(10),
+            ..test_policy()
+        },
+    );
+    fixture.complete_first_resync().await;
+    let generation = fixture.handle.shared.lock().node_generation;
+    let calls = || fixture.docker.node_list_calls.load(Ordering::SeqCst);
+    assert_eq!(calls(), 1);
+    fixture.docker.set_nodes(vec![second, first.clone()]);
+    let before = crate::test_support::gather_registered(|registry| {
+        fixture.collectors.node_metrics.register(registry);
+    });
+    tokio::time::advance(
+        NODE_REFRESH_INTERVAL
+            .checked_sub(Duration::from_secs(1))
+            .unwrap(),
+    )
+    .await;
+    fixture.cycle().await;
+    assert_eq!(fixture.docker.node_list_calls.load(Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    fixture.cycle().await;
+    assert_eq!(fixture.docker.node_list_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.docker.service_list_count(), 1);
+    assert_eq!(fixture.handle.shared.lock().node_generation, generation);
+    assert_eq!(
+        crate::test_support::gather_registered(|registry| fixture
+            .collectors
+            .node_metrics
+            .register(registry)),
+        before
+    );
+    assert_eq!(
+        fixture.reconciler.next_wake_delay(Instant::now()),
+        Some(NODE_REFRESH_INTERVAL)
+    );
+
+    let mut manager = first;
+    manager.spec.role = "manager".to_owned();
+    manager.manager_status = Some(crate::docker::types::ManagerStatus {
+        leader: true,
+        reachability: "reachable".to_owned(),
+    });
+    for changed in 0..4 {
+        match changed {
+            0 => manager.manager_status.as_mut().unwrap().leader = false,
+            1 => manager.manager_status.as_mut().unwrap().reachability = "unreachable".to_owned(),
+            2 => manager.status.state = "down".to_owned(),
+            _ => manager.spec.availability = "drain".to_owned(),
+        }
+        fixture.docker.set_nodes(vec![manager.clone()]);
+        tokio::time::advance(NODE_REFRESH_INTERVAL).await;
+        fixture.cycle().await;
+        assert_eq!(fixture.reconciler.nodes(), &[manager.clone()]);
+        assert_eq!(
+            fixture.handle.shared.lock().node_generation,
+            generation + changed + 1
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn periodic_failure_backs_off_without_dirtying_nodes_or_losing_events() {
+    let mut fixture = fixture(TestDocker::default());
+    fixture.complete_first_resync().await;
+    fixture.docker.set_list_errors(None, Some(unavailable()));
+    tokio::time::advance(NODE_REFRESH_INTERVAL).await;
+    fixture.cycle().await;
+    assert!(!fixture.handle.shared.lock().nodes_dirty);
+    assert!(!fixture.reconciler.nodes_due(Instant::now()));
+    assert_eq!(
+        fixture.reconciler.next_wake_delay(Instant::now()),
+        Some(test_policy().backoff_initial)
+    );
+
+    let handle = fixture.handle.clone();
+    fixture.docker.lock().after_node_list = Some(Box::new(move || handle.mark_nodes_dirty()));
+    tokio::time::advance(test_policy().backoff_initial).await;
+    fixture.cycle().await;
+    assert!(
+        fixture.handle.shared.lock().nodes_dirty,
+        "event during a periodic failure must survive"
+    );
+    tokio::time::advance(test_policy().backoff_max).await;
+    fixture.cycle().await;
+    assert!(
+        fixture.handle.shared.lock().nodes_dirty,
+        "event-driven failure keeps invalidating polls"
+    );
+
+    fixture.docker.set_list_errors(None, None);
+    tokio::time::advance(test_policy().backoff_max).await;
+    fixture.cycle().await;
+    assert!(!fixture.handle.shared.lock().nodes_dirty);
+    assert_eq!(
+        fixture.reconciler.next_wake_delay(Instant::now()),
+        Some(NODE_REFRESH_INTERVAL)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_panicking_periodic_refresh_does_not_leave_an_expired_wake_deadline() {
+    let mut fixture = fixture(TestDocker::default());
+    fixture.complete_first_resync().await;
+    fixture.docker.lock().after_node_list = Some(Box::new(|| panic!("node refresh panic")));
+    tokio::time::advance(NODE_REFRESH_INTERVAL).await;
+    fixture.cycle().await;
+    assert_eq!(
+        fixture.reconciler.next_wake_delay(Instant::now()),
+        Some(test_policy().backoff_initial)
+    );
+    assert!(fixture.logs.contains(
+        "ERROR",
+        "reconciler recovered from panic",
+        &[("step", "nodes")]
+    ));
+}
+
 /// The wake delay: due work is zero, nothing scheduled is none, else the earliest time.
 #[tokio::test(start_paused = true)]
 async fn next_wake_delay_follows_the_earliest_work() {
@@ -1633,8 +1825,8 @@ async fn next_wake_delay_follows_the_earliest_work() {
     fixture.complete_first_resync().await;
     assert_eq!(
         fixture.reconciler.next_wake_delay(Instant::now()),
-        Some(PERIODIC_RESYNC_INTERVAL),
-        "the periodic resync"
+        Some(NODE_REFRESH_INTERVAL),
+        "the node refresh precedes the periodic resync"
     );
     fixture
         .handle
@@ -1659,6 +1851,7 @@ fn the_default_policy_is_gos() {
     assert_eq!(policy.pending_cap, 4096);
     assert_eq!(SERVICE_KEYS_PER_CYCLE, 32);
     assert_eq!(policy.resync_interval, Duration::from_secs(300));
+    assert_eq!(policy.node_refresh_interval, Duration::from_secs(60));
     assert_eq!(
         policy.retry_delays,
         [
