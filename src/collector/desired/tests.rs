@@ -175,6 +175,7 @@ fn constrained_node() -> Node {
             role: "manager".to_owned(),
             availability: "active".to_owned(),
         },
+        manager_status: None,
     }
 }
 
@@ -571,7 +572,7 @@ fn schedulable_is_forced_to_zero_for_jobs_and_one_shots() {
     );
     let mut one_shot = metadata(SERVICE_MODE_REPLICATED, 1.0);
     one_shot.service = "cron".to_owned();
-    one_shot.restart_condition_none = true;
+    one_shot.restart_condition = crate::collector::types::RestartCondition::None;
     gauges.set_schedulable(&one_shot, 1.0).unwrap();
     assert_eq!(gauges.schedulable().get_with(&labels(&one_shot)), Some(0.0));
     for mode in [SERVICE_MODE_REPLICATED_JOB, SERVICE_MODE_GLOBAL_JOB] {

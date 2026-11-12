@@ -291,6 +291,57 @@ fn gathered_value(registry: &Registry, name: &str) -> f64 {
     values[0]
 }
 
+/// Fixed restart-policy labels do not collide with a user-requested custom label.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_condition_custom_labels_work_through_running_workers_and_http() {
+    use swarm_scheduler_exporter::labels::validate_and_sanitize_label_names;
+    for raw in ["restart_condition", "restart.condition"] {
+        let names = validate_and_sanitize_label_names(&[raw.to_owned()])
+            .unwrap_or_else(|error| panic!("custom label: {error}"));
+        let mut registry = Registry::default();
+        let metrics = register_metrics(
+            &mut registry,
+            &MetricsOptions {
+                custom_labels: CustomLabels::new(&[raw.to_owned()], &names),
+                poll_delay: Duration::from_secs(3600),
+                containers: ContainersConfig::new(false, false),
+                build: [String::new(), String::new(), String::new()],
+            },
+            clock(),
+        );
+        let registry = Arc::new(registry);
+        let docker = Arc::new(LifecycleDocker::new(0));
+        let cancel = CancellationToken::new();
+        let workers = run_workers(&cancel, &docker, &metrics);
+        wait_until("the first poll", || docker.calls().task_list > 0).await;
+        let address = serve_endpoints(&cancel, &registry, &metrics).await;
+        let (status, body) = get(address, "/metrics").await;
+        cancel.cancel();
+        wait_workers(workers).await;
+        assert_eq!(status, 200);
+        let restart: Vec<_> = body
+            .lines()
+            .filter(|line| line.starts_with("swarm_service_restart_policy{"))
+            .collect();
+        assert_eq!(restart.len(), 3);
+        assert!(
+            restart
+                .iter()
+                .all(|line| !line.contains("restart_condition=\"\""))
+        );
+        assert!(
+            restart
+                .iter()
+                .any(|line| line.contains("restart_condition=\"any\"") && line.ends_with(" 1.0"))
+        );
+        assert!(
+            body.lines()
+                .any(|line| line.starts_with("swarm_service_desired_replicas{")
+                    && line.contains("restart_condition=\"\""))
+        );
+    }
+}
+
 /// Go: `TestWorkers_FirstResyncRetryThenPollAndListenOnce`
 #[tokio::test(flavor = "multi_thread")]
 async fn first_resync_retry_then_poll_and_listen_once() {

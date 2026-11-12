@@ -31,6 +31,23 @@ use super::*;
 
 const FIXTURE_SETS: [&str; 2] = ["api-1.51", "api-1.56"];
 
+#[test]
+fn manager_status_preserves_presence_and_defaults() {
+    for (json, expected) in [
+        (
+            r#"{"ManagerStatus":{"Leader":true,"Reachability":"reachable"}}"#,
+            Some(ManagerStatus {
+                leader: true,
+                reachability: "reachable".to_owned(),
+            }),
+        ),
+        ("{}", None),
+        (r#"{"ManagerStatus":{}}"#, Some(ManagerStatus::default())),
+    ] {
+        assert_eq!(node(decode(json.as_bytes())).manager_status, expected);
+    }
+}
+
 fn fixture(set: &str, name: &str) -> Vec<u8> {
     let path: PathBuf = [
         env!("CARGO_MANIFEST_DIR"),

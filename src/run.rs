@@ -41,11 +41,12 @@ use crate::collector::containers::{ContainersConfig, ContainersState};
 use crate::collector::desired::ReplicaGauges;
 use crate::collector::exporter_metrics::ExporterMetrics;
 use crate::collector::health::{Health, HealthGauges, Timestamps};
-use crate::collector::nodes::NodesByState;
+use crate::collector::nodes::{NodeMetrics, NodesByState};
 use crate::collector::reconciler::{
     Collectors, Reconciler, ReconcilerHandle, listen_swarm_events, poll_and_publish_replicas_state,
 };
 use crate::collector::replicas_state::ReplicasState;
+use crate::collector::service_restart::ServiceRestartPolicy;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::docker::{self, Client, DockerApi};
@@ -65,7 +66,7 @@ pub const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
 /// What the families are built with.
 #[derive(Debug, Clone)]
 pub struct MetricsOptions {
-    /// The custom labels of every per-service family.
+    /// The custom labels, excluding restart-policy metadata.
     pub custom_labels: CustomLabels,
     /// The poll interval, which sets the health window.
     pub poll_delay: Duration,
@@ -109,6 +110,10 @@ pub fn register_metrics(
     HealthGauges::new(health.clone(), version, commit, date).register(registry);
     let nodes_by_state = Arc::new(NodesByState::new());
     nodes_by_state.register(registry);
+    let node_metrics = Arc::new(NodeMetrics::new());
+    node_metrics.register(registry);
+    let restart_policy = Arc::new(ServiceRestartPolicy::new());
+    restart_policy.register(registry);
     let exporter_metrics = Arc::new(ExporterMetrics::new(timestamps));
     exporter_metrics.register(registry);
     let service_update = Arc::new(ServiceUpdateMetrics::new(custom));
@@ -124,6 +129,8 @@ pub fn register_metrics(
             replica_gauges,
             service_update,
             nodes_by_state,
+            node_metrics,
+            restart_policy,
             replicas_state,
             metrics: exporter_metrics,
         },

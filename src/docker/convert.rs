@@ -39,9 +39,9 @@ use jiff::Timestamp;
 use super::error::{Error, ErrorKind};
 use super::types::{
     Actor, ContainerConfig, ContainerInspect, ContainerState, ContainerSummary, EngineDescription,
-    Event, GoTime, Health, JobStatus, Labels, Node, NodeDescription, NodeSpec, NodeStatus,
-    Placement, Platform, Present, ReplicatedJob, ReplicatedService, RestartPolicy, Service,
-    ServiceMode, ServiceSpec, Task, TaskSpec, TaskStatus, UpdateStatus, Version,
+    Event, GoTime, Health, JobStatus, Labels, ManagerStatus, Node, NodeDescription, NodeSpec,
+    NodeStatus, Placement, Platform, Present, ReplicatedJob, ReplicatedService, RestartPolicy,
+    Service, ServiceMode, ServiceSpec, Task, TaskSpec, TaskStatus, UpdateStatus, Version,
 };
 
 /// The wire text of an enum, empty when it is missing.
@@ -172,6 +172,10 @@ pub fn node(value: wire::Node) -> Node {
             state: text(status.state),
             addr: status.addr.unwrap_or_default(),
         },
+        manager_status: value.manager_status.map(|status| ManagerStatus {
+            leader: status.leader.unwrap_or_default(),
+            reachability: text(status.reachability),
+        }),
     }
 }
 

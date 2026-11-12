@@ -24,9 +24,10 @@
 
 //! A removed service's series.
 
+use bollard::models::TaskSpecRestartPolicyConditionEnum;
 use std::time::Duration;
 
-use testenv::metrics_text::{format_sample, labels_include};
+use testenv::metrics_text::{format_sample, labels, labels_include};
 use testenv_core::context::Context;
 
 use crate::http::scrape_metrics;
@@ -36,7 +37,7 @@ use crate::testing::{TestHandle, TestResult};
 use crate::wait::{
     METRIC_AT_DESIRED, METRIC_DESIRED, METRIC_REPLICAS_STATE, METRIC_RUNNING, METRIC_SCHEDULABLE,
     METRIC_UPDATE_COMPLETE, METRIC_UPDATE_STARTED, METRIC_UPDATE_STATE, compare_metrics,
-    consistently, eventually, want_service,
+    consistently, eventually, want, want_service,
 };
 
 const STACK: &str = "it-remove";
@@ -57,7 +58,18 @@ pub async fn service_removed(test: TestHandle) -> TestResult {
         },
     )
     .await?;
-    let base_url = Launch::seeded(std::slice::from_ref(&doomed), &[])
+    let oneshot = ServiceKey::new(STACK, "oneshot");
+    deploy_service(
+        &test,
+        STACK,
+        oneshot.service,
+        &ServiceOpts {
+            restart_condition: Some(TaskSpecRestartPolicyConditionEnum::NONE),
+            ..ServiceOpts::default()
+        },
+    )
+    .await?;
+    let base_url = Launch::seeded(&[doomed.clone(), oneshot.clone()], &[])
         .start(&test)
         .await?;
 
@@ -70,10 +82,31 @@ pub async fn service_removed(test: TestHandle) -> TestResult {
         METRIC_UPDATE_STATE,
         METRIC_UPDATE_STARTED,
         METRIC_UPDATE_COMPLETE,
+        "swarm_service_restart_policy",
     ];
 
     // Every family must be there first, or its absence afterwards would prove nothing.
-    let running = [want_service(METRIC_RUNNING, &doomed, 1.0)];
+    let running = [
+        want_service(METRIC_RUNNING, &doomed, 1.0),
+        want(
+            "swarm_service_restart_policy",
+            labels(&[
+                ("stack", STACK),
+                ("service", doomed.service),
+                ("restart_condition", "any"),
+            ]),
+            1.0,
+        ),
+        want(
+            "swarm_service_restart_policy",
+            labels(&[
+                ("stack", STACK),
+                ("service", oneshot.service),
+                ("restart_condition", "none"),
+            ]),
+            1.0,
+        ),
+    ];
     eventually(&test, Duration::from_secs(60), async |ctx| {
         let scraped = scrape_metrics(ctx, &base_url).await?;
         if let Some(family) = families

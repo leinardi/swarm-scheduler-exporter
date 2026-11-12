@@ -220,6 +220,17 @@ pub struct Node {
     pub description: NodeDescription,
     /// `Status`.
     pub status: NodeStatus,
+    /// `ManagerStatus`, absent on workers.
+    pub manager_status: Option<ManagerStatus>,
+}
+
+/// swarm `ManagerStatus`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManagerStatus {
+    /// `Leader`, false when omitted.
+    pub leader: bool,
+    /// `Reachability`: `reachable`, `unreachable` or `unknown`.
+    pub reachability: String,
 }
 
 /// swarm `NodeSpec`, with its `Annotations` inline.

@@ -242,10 +242,9 @@ fn inventory(scrape: &Exposition) -> BTreeSet<(String, String, String)> {
         .collect()
 }
 
-/// Inventory: with every family populated, the set of names, types and label names is the Go
-/// exporter's, minus the Go runtime and the scrape handler's own families (documented drops).
+/// Inventory of the public metric contract, with every family populated.
 #[test]
-fn the_inventory_is_the_go_exporters_minus_the_documented_drops() {
+fn the_inventory_matches_the_public_contract() {
     let setup = Setup::new(&[]);
     let service = metadata("web", "api", "replicated", None);
     publish_poll(
@@ -253,6 +252,16 @@ fn the_inventory_is_the_go_exporters_minus_the_documented_drops() {
         &[(&service, 2)],
         &[node("worker", "active", "ready")],
     );
+    setup
+        .metrics
+        .collectors
+        .node_metrics
+        .update_from_slice(&[node("manager", "active", "ready")]);
+    setup
+        .metrics
+        .collectors
+        .restart_policy
+        .publish_from(std::iter::once(&service));
     setup
         .metrics
         .containers
@@ -287,6 +296,134 @@ fn the_content_type_is_openmetrics() {
         CONTENT_TYPE,
         "application/openmetrics-text; version=1.0.0; charset=utf-8"
     );
+}
+
+#[test]
+fn restart_condition_custom_labels_remain_compatible() {
+    use swarm_scheduler_exporter::cli;
+    use swarm_scheduler_exporter::labels::validate_and_sanitize_label_names;
+    for raw in ["restart_condition", "restart.condition"] {
+        let args = cli::parse(["exporter", "--label", raw]).unwrap();
+        let names = validate_and_sanitize_label_names(&[raw.to_owned()]).unwrap();
+        let custom = CustomLabels::new(&[raw.to_owned()], &names);
+        let mut registry = Registry::default();
+        let metrics = register_metrics(
+            &mut registry,
+            &MetricsOptions {
+                custom_labels: custom,
+                poll_delay: Duration::from_secs(10),
+                containers: ContainersConfig::new(false, false),
+                build: [String::new(), String::new(), String::new()],
+            },
+            Arc::new(FakeClock::new(Timestamp::UNIX_EPOCH)),
+        );
+        drop(args);
+        let mut service = metadata("stack", "service", "replicated", None);
+        service
+            .custom_labels
+            .insert("restart_condition".to_owned(), "custom".to_owned());
+        ok(metrics.collectors.replica_gauges.set_desired(&service, 1.0));
+        let counters = ServiceCounter::from([("svc".to_owned(), counter(&service, 1, 0, 1.0))]);
+        ok(metrics.collectors.replicas_state.update(&counters));
+        ok(metrics
+            .collectors
+            .service_update
+            .update_for_service(&Service::default(), &service));
+        metrics
+            .collectors
+            .restart_policy
+            .publish_from(std::iter::once(&service));
+        let scrape = parse(&render(&registry));
+        for sample in &scrape.samples {
+            if sample.name == "swarm_service_restart_policy" {
+                assert_eq!(sample.labels.len(), 5);
+                assert!(!sample.labels.iter().any(|(_, value)| value == "custom"));
+            } else if sample.name.starts_with("swarm_service_")
+                || sample.name == "swarm_task_replicas_state"
+            {
+                assert!(
+                    sample
+                        .labels
+                        .contains(&("restart_condition".to_owned(), "custom".to_owned()))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn node_and_restart_state_sets_are_atomic_during_scrapes() {
+    use swarm_scheduler_exporter::collector::types::RestartCondition;
+    let setup = Setup::new(&[]);
+    let mut service = metadata("stack", "job", "replicated", None);
+    let mut current_node = node("manager", "active", "ready");
+    current_node.id = "n1".to_owned();
+    setup
+        .metrics
+        .collectors
+        .node_metrics
+        .update_from_slice(&[current_node.clone()]);
+    setup
+        .metrics
+        .collectors
+        .restart_policy
+        .publish_from(std::iter::once(&service));
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..5000 {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                for (condition, availability) in [
+                    (RestartCondition::None, "drain"),
+                    (RestartCondition::Any, "active"),
+                ] {
+                    service.restart_condition = condition;
+                    availability.clone_into(&mut current_node.spec.availability);
+                    setup
+                        .metrics
+                        .collectors
+                        .restart_policy
+                        .publish_from(std::iter::once(&service));
+                    setup
+                        .metrics
+                        .collectors
+                        .node_metrics
+                        .update_from_slice(&[current_node.clone()]);
+                }
+            }
+        });
+        for _ in 0..500 {
+            let scrape = setup.scrape();
+            for name in [
+                "swarm_service_restart_policy",
+                "swarm_node_status",
+                "swarm_node_availability",
+                "swarm_node_manager_reachability",
+            ] {
+                let samples: Vec<_> = scrape
+                    .samples
+                    .iter()
+                    .filter(|sample| sample.name == name)
+                    .collect();
+                assert_eq!(
+                    samples
+                        .iter()
+                        .filter(|sample| Some(sample.value) == Some(1.0))
+                        .count(),
+                    1,
+                    "{name}: {samples:?}"
+                );
+                assert!(
+                    samples
+                        .iter()
+                        .all(|sample| [0.0, 1.0].contains(&sample.value))
+                );
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+    });
 }
 
 /// The exporter's own counters and gauges of [`expected_series`].

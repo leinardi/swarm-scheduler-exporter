@@ -31,9 +31,10 @@ use jiff::SignedDuration;
 use super::*;
 use crate::collector::desired::ReplicaGauges;
 use crate::collector::exporter_metrics::ExporterMetrics;
-use crate::collector::nodes::NodesByState;
+use crate::collector::nodes::{NodeMetrics, NodesByState};
 use crate::collector::reconciler::{Collectors, Reconciler};
 use crate::collector::replicas_state::ReplicasState;
+use crate::collector::service_restart::ServiceRestartPolicy;
 use crate::collector::service_update::ServiceUpdateMetrics;
 use crate::collector::types::CustomLabels;
 use crate::test_support::FakeDocker;
@@ -59,6 +60,8 @@ fn reconciler_handle() -> ReconcilerHandle {
         replica_gauges: Arc::new(ReplicaGauges::new(&custom)),
         service_update: Arc::new(ServiceUpdateMetrics::new(&custom)),
         nodes_by_state: Arc::new(NodesByState::new()),
+        node_metrics: Arc::new(NodeMetrics::new()),
+        restart_policy: Arc::new(ServiceRestartPolicy::new()),
         replicas_state: Arc::new(ReplicasState::new(&custom)),
         metrics: Arc::new(ExporterMetrics::new(Arc::new(Timestamps::default()))),
     };

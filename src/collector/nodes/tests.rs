@@ -147,3 +147,106 @@ fn family_carries_go_name_help_and_labels() {
     let mut registry = Registry::default();
     nodes.register(&mut registry);
 }
+
+fn node_view(metrics: &NodeMetrics) -> BTreeMap<String, f64> {
+    crate::test_support::gather_registered(|registry| metrics.register(registry))
+}
+
+#[test]
+fn per_node_states_are_exhaustive_and_workers_have_no_manager_series() {
+    use crate::docker::types::ManagerStatus;
+    let metrics = NodeMetrics::new();
+    for status in ["ready", "down", "disconnected", "unknown", "", "invalid"] {
+        for availability in ["active", "pause", "drain", "", "invalid"] {
+            for reachability in ["reachable", "unreachable", "unknown", "", "invalid"] {
+                let mut manager = node("manager", availability, status);
+                manager.id = "manager".to_owned();
+                manager.description.hostname = "same-host".to_owned();
+                manager.manager_status = Some(ManagerStatus {
+                    leader: true,
+                    reachability: reachability.to_owned(),
+                });
+                let mut worker = manager.clone();
+                worker.id = "worker".to_owned();
+                worker.spec.role = "worker".to_owned();
+                worker.manager_status = None;
+                metrics.update_from_slice(&[manager, worker]);
+                let view = node_view(&metrics);
+                assert_eq!(view.len(), 20);
+                for id in ["manager", "worker"] {
+                    let identity = [(LABEL_NODE_ID, id), (LABEL_NODE, "same-host")];
+                    for (name, label, states, current) in [
+                        (
+                            "swarm_node_status",
+                            LABEL_NODE_STATUS,
+                            NODE_STATUSES.as_slice(),
+                            known_or_unknown(status, &NODE_STATUSES),
+                        ),
+                        (
+                            "swarm_node_availability",
+                            LABEL_NODE_AVAILABILITY,
+                            NODE_AVAILABILITIES.as_slice(),
+                            availability,
+                        ),
+                    ] {
+                        for state in states {
+                            let mut labels = identity.to_vec();
+                            labels.push((label, *state));
+                            assert_eq!(
+                                view.get(&series_id(name, &labels)),
+                                Some(&f64::from(*state == current))
+                            );
+                        }
+                    }
+                }
+                for state in MANAGER_REACHABILITIES {
+                    let labels = [
+                        (LABEL_NODE_ID, "manager"),
+                        (LABEL_NODE, "same-host"),
+                        (LABEL_NODE_REACHABILITY, state),
+                    ];
+                    assert_eq!(
+                        view.get(&series_id("swarm_node_manager_reachability", &labels)),
+                        Some(&f64::from(
+                            state == known_or_unknown(reachability, &MANAGER_REACHABILITIES)
+                        ))
+                    );
+                }
+                assert!(
+                    view.keys()
+                        .filter(|key| key.starts_with("swarm_node_manager_"))
+                        .all(|key| !key.contains("node_id=\"worker\""))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn node_removal_demotion_and_missing_manager_fields_replace_the_snapshot() {
+    let metrics = NodeMetrics::new();
+    let mut manager = node("manager", "active", "ready");
+    manager.id = "n1".to_owned();
+    metrics.update_from_slice(&[manager.clone()]);
+    let view = node_view(&metrics);
+    let identity = [(LABEL_NODE_ID, "n1"), (LABEL_NODE, "")];
+    assert_eq!(
+        view.get(&series_id("swarm_node_manager_leader", &identity)),
+        Some(&0.0)
+    );
+    let mut labels = identity.to_vec();
+    labels.push((LABEL_NODE_REACHABILITY, "unknown"));
+    assert_eq!(
+        view.get(&series_id("swarm_node_manager_reachability", &labels)),
+        Some(&1.0)
+    );
+    manager.spec.role = "worker".to_owned();
+    metrics.update_from_slice(&[manager]);
+    assert!(
+        node_view(&metrics)
+            .keys()
+            .all(|key| !key.starts_with("swarm_node_manager_"))
+    );
+    metrics.update_from_slice(&[]);
+    assert!(node_view(&metrics).is_empty());
+}

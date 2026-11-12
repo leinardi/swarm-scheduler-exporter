@@ -245,13 +245,59 @@ fn build_metadata_restart_condition_none() {
     service.spec.task_template.restart_policy = Some(RestartPolicy {
         condition: "none".to_owned(),
     });
-    assert!(build_metadata(&service, &CustomLabels::default()).restart_condition_none);
+    assert_eq!(
+        build_metadata(&service, &CustomLabels::default()).restart_condition,
+        RestartCondition::None
+    );
     service.spec.task_template.restart_policy = Some(RestartPolicy {
         condition: "any".to_owned(),
     });
-    assert!(!build_metadata(&service, &CustomLabels::default()).restart_condition_none);
+    assert_eq!(
+        build_metadata(&service, &CustomLabels::default()).restart_condition,
+        RestartCondition::Any
+    );
     service.spec.task_template.restart_policy = None;
-    assert!(!build_metadata(&service, &CustomLabels::default()).restart_condition_none);
+    assert_eq!(
+        build_metadata(&service, &CustomLabels::default()).restart_condition,
+        RestartCondition::Any
+    );
+}
+
+#[test]
+fn restart_condition_defaults_and_defensive_mapping() {
+    for (condition, expected) in [
+        ("", RestartCondition::Any),
+        ("any", RestartCondition::Any),
+        ("none", RestartCondition::None),
+        ("on-failure", RestartCondition::OnFailure),
+        ("invalid", RestartCondition::Unrecognized),
+    ] {
+        let mut service = named("policy", replicated(1));
+        service.spec.task_template.restart_policy = Some(RestartPolicy {
+            condition: condition.to_owned(),
+        });
+        assert_eq!(
+            build_metadata(&service, &CustomLabels::default()).restart_condition,
+            expected
+        );
+    }
+}
+
+#[test]
+fn node_cache_compares_data_independently_of_list_order() {
+    let first = Node {
+        id: "a".to_owned(),
+        ..Node::default()
+    };
+    let second = Node {
+        id: "b".to_owned(),
+        ..Node::default()
+    };
+    let mut cache = NodeCache::new();
+    cache.set(&[second.clone(), first.clone()]);
+    assert_eq!(cache.get(), &[first.clone(), second.clone()]);
+    assert!(cache.matches(&[second.clone(), first]));
+    assert!(!cache.matches(&[second]));
 }
 
 /// Go: `TestBuildMetadata_CustomLabels`; the labels are an argument instead of Go's package

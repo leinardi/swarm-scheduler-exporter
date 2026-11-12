@@ -35,5 +35,6 @@ pub mod nodes;
 pub mod poll_snapshot;
 pub mod reconciler;
 pub mod replicas_state;
+pub mod service_restart;
 pub mod service_update;
 pub mod types;

@@ -33,6 +33,7 @@ use testenv::metrics_text::labels;
 use testenv_core::context::Context;
 
 use crate::cluster_smoke::{node_count, runs_on_every_node};
+use crate::http::scrape_metrics;
 use crate::launcher::Launch;
 use crate::swarm::{
     Mode, ServiceKey, ServiceOpts, TaskInfo, deploy_service, describe_tasks, list_tasks,
@@ -309,6 +310,35 @@ pub async fn node_drain(test: TestHandle) -> TestResult {
         metrics_match(ctx, &scenario.base_url, scenario.stack, &drained).await
     })
     .await?;
+    eventually(&test, NODE_CHANGE_TIMEOUT, async |ctx| {
+        let scraped = scrape_metrics(ctx, &scenario.base_url).await?;
+        for (availability, expected) in [("drain", 1.0), ("active", 0.0), ("pause", 0.0)] {
+            let identity = labels(&[
+                ("node_id", &scenario.victim.swarm_node_id),
+                ("availability", availability),
+            ]);
+            if scraped.value("swarm_node_availability", &identity) != Some(expected) {
+                return Err(format!("victim availability {availability}: not yet"));
+            }
+        }
+        // The harness has one manager, so it cannot exercise a quorum-preserving leader change.
+        if Some(scraped.sum("swarm_node_manager_leader", &labels(&[]))) != Some(1.0) {
+            return Err("want exactly one manager leader".to_owned());
+        }
+        for worker in cluster().workers() {
+            let identity = labels(&[("node_id", &worker.swarm_node_id)]);
+            for family in [
+                "swarm_node_manager_leader",
+                "swarm_node_manager_reachability",
+            ] {
+                if scraped.has(family, &identity) {
+                    return Err(format!("worker {} has manager series", worker.hostname));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await?;
 
     update_node(&test, &scenario.victim.swarm_node_id, |spec| {
         spec.availability = Some(NodeSpecAvailabilityEnum::ACTIVE);
@@ -316,6 +346,22 @@ pub async fn node_drain(test: TestHandle) -> TestResult {
     .await?;
 
     let restored = [
+        want(
+            "swarm_node_availability",
+            labels(&[
+                ("node_id", &scenario.victim.swarm_node_id),
+                ("availability", "active"),
+            ]),
+            1.0,
+        ),
+        want(
+            "swarm_node_availability",
+            labels(&[
+                ("node_id", &scenario.victim.swarm_node_id),
+                ("availability", "drain"),
+            ]),
+            0.0,
+        ),
         want_sum(
             METRIC_NODES_BY_STATE,
             labels(&[("availability", "drain")]),

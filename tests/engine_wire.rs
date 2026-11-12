@@ -187,8 +187,32 @@ const CUSTOM_LABEL: &str = "com.example.team";
 const GOLDEN_FILE: &str = "tests/testdata/engine_wire/metrics.golden";
 
 /// The registered families the golden file deliberately does not pin, because their values
-/// depend on timing or do not come from the Docker API: Go's `engineWireExcludedFamilies`.
-const EXCLUDED_FAMILIES: [(&str, &str); 11] = [
+/// depend on timing or have dedicated assertions outside the historical Go golden.
+const EXCLUDED_FAMILIES: [(&str, &str); 17] = [
+    (
+        "swarm_node_info",
+        "additive metric, covered by node snapshot tests",
+    ),
+    (
+        "swarm_node_status",
+        "additive metric, covered by node snapshot tests",
+    ),
+    (
+        "swarm_node_availability",
+        "additive metric, covered by node snapshot tests",
+    ),
+    (
+        "swarm_node_manager_reachability",
+        "asserted against the wire fixture below",
+    ),
+    (
+        "swarm_node_manager_leader",
+        "asserted against the wire fixture below",
+    ),
+    (
+        "swarm_service_restart_policy",
+        "additive metric, covered by restart snapshot tests",
+    ),
     ("swarm_exporter_poll_duration_seconds", "timing-dependent"),
     (
         "swarm_exporter_polls_total",
@@ -503,10 +527,50 @@ async fn pins_requests_and_metrics(set: &str) {
     assert_coverage(&registered);
 
     cancel.cancel();
-    tokio::time::timeout(Duration::from_secs(5), reconciler_task)
+    let reconciler = tokio::time::timeout(Duration::from_secs(5), reconciler_task)
         .await
         .or_panic()
         .or_panic();
+    assert_manager_status(reconciler.nodes(), &registry);
+}
+
+fn assert_manager_status(
+    nodes: &[swarm_scheduler_exporter::docker::types::Node],
+    registry: &Registry,
+) {
+    let manager = nodes
+        .iter()
+        .find(|node| node.id == "node-mgr1")
+        .unwrap_or_else(|| panic!("the fixture has a manager"));
+    assert_eq!(
+        manager.manager_status,
+        Some(swarm_scheduler_exporter::docker::types::ManagerStatus {
+            leader: true,
+            reachability: "reachable".to_owned(),
+        })
+    );
+    assert!(
+        nodes
+            .iter()
+            .filter(|node| node.spec.role == "worker")
+            .all(|node| node.manager_status.is_none())
+    );
+    let output = scrape(registry);
+    for name in [
+        "swarm_node_manager_leader",
+        "swarm_node_manager_reachability",
+    ] {
+        assert!(
+            output
+                .samples
+                .iter()
+                .filter(|sample| sample.name == name)
+                .any(|sample| sample
+                    .labels
+                    .contains(&("node_id".to_owned(), "node-mgr1".to_owned()))
+                    && Some(sample.value) == Some(1.0))
+        );
+    }
 }
 
 /// A stream the engine closes is reconnected from the margin before its last event, which a

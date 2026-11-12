@@ -17,7 +17,8 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
 - Watches Swarm **service** and **node** events to keep metrics fresh: events only mark what
   changed, and a single reconciler inspects it, backed by a full resync (service and node list) at
   startup, every 5 minutes, whenever it had to drop changes, and every time the event stream
-  reconnects. A reconnect resumes the stream from just before the last event seen; the resync covers
+  reconnects. A node-only refresh also runs about every minute to keep node and manager status fresh.
+  A reconnect resumes the stream from just before the last event seen; the resync covers
   what the daemon no longer replays, such as the events of a restart. A stream that ends cleanly is
   logged at info, any other stream end at warn. A socket proxy cutting an idle stream (HAProxy does
   so after its client timeout, about 10 minutes, on a quiet cluster) ends it without the chunked
@@ -55,8 +56,8 @@ All metrics live under the `swarm_` namespace.
 
 ### Service-level
 
-Every service-level metric, including the update/rollback metrics below, carries the same service
-labels:
+Every service-level metric, including the update/rollback metrics below, carries these service
+identity labels. All except `swarm_service_restart_policy` also carry custom labels:
 
 - `stack` — the stack namespace (`com.docker.stack.namespace`), empty for a service not deployed as
   part of a stack
@@ -134,6 +135,17 @@ labels:
   swarm_service_running_replicas < on(stack,service,service_mode,display_name) swarm_service_schedulable_replicas
   ```
 
+- `swarm_service_restart_policy{stack,service,service_mode,display_name,restart_condition}`
+  Exhaustive `0`/`1` gauges for `none`, `on-failure` and `any`. A missing policy or empty condition
+  defaults to `any`. Unlike `schedulable_replicas=0`, the policy identifies intentionally one-shot
+  services, but does not prove successful completion. This family carries **no custom labels**,
+  so `restart_condition` remains usable as a custom label on existing families. Join using
+  `on(stack,service,service_mode,display_name)`, for example:
+
+  ```promql
+  swarm_service_running_replicas and on(stack,service,service_mode,display_name) (swarm_service_restart_policy{restart_condition="none"} == 1)
+  ```
+
 > ℹ️ **Global services:** `desired_replicas` is the number of eligible nodes, not `0`. It is `0`
 > only when no node is eligible: none is `ready` + `active` (a node that is down, disconnected,
 > paused, or drained does not count), or none meets the placement constraints or platforms.
@@ -156,6 +168,25 @@ labels:
 
 - `swarm_cluster_nodes_by_state{role,availability,status}`
   Count of nodes by manager/worker, active/pause/drain, and ready/down/… .
+
+### Node-level
+
+- `swarm_node_info{node_id,node,role}` — identity, value `1`; role is the Docker wire text.
+- `swarm_node_status{node_id,node,status}` — exhaustive `0`/`1` gauges for `ready`, `down`,
+  `disconnected`, `unknown`.
+- `swarm_node_availability{node_id,node,availability}` — exhaustive `0`/`1` gauges for `active`,
+  `pause`, `drain`. An empty availability emits all zeros.
+- `swarm_node_manager_reachability{node_id,node,reachability}` — managers only, exhaustive `0`/`1`
+  gauges for `reachable`, `unreachable`, `unknown`.
+- `swarm_node_manager_leader{node_id,node}` — managers only, `1` for the leader, otherwise `0`.
+  A missing `Leader` is `0`; workers have no manager series.
+
+`node` is `Description.Hostname`; `node_id` distinguishes nodes with duplicate hostnames (including
+nodes that left and rejoined). All five families are published in one snapshot; removed nodes and
+old role identities disappear. Node and manager status is normally refreshed about every minute;
+node events refresh sooner, and failures can delay updates. The full resync still runs every 5 minutes.
+Missing status or reachability maps to `unknown`. Unknown enum values invented by a newer daemon
+fail the Docker call during decoding, rather than passing through as labels (see Q16).
 
 ### Exporter self-metrics
 
@@ -577,6 +608,14 @@ Prometheus Alert rule:
     description: |
       One or more Swarm nodes are not in 'ready' status.
       Check 'docker node ls' and node availability / connectivity.
+
+- alert: SwarmNodeNotReady
+  expr: swarm_node_status{status="ready"} == 0
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Swarm node {{ $labels.node }} ({{ $labels.node_id }}) is not ready"
 ```
 
 > ℹ️ **Jobs and `SwarmServiceNotAtDesired`:** a job reports `at_desired=0` until it has finished, so

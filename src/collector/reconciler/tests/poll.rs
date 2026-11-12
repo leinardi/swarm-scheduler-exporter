@@ -152,6 +152,52 @@ fn value_in(
 
 // ---- Staleness ----
 
+#[tokio::test(start_paused = true)]
+async fn periodic_refresh_and_failures_do_not_reject_racing_global_polls() {
+    let mut fixture = poll_fixture(
+        vec![global_service("svc1", "stack", "agent")],
+        vec![schedulable_node("n1", "node")],
+        vec![running_task("svc1", 0, "n1")],
+    )
+    .await;
+    let snapshot = fixture.reconciler.build_poll_snapshot();
+    let counters = fixture.count(&snapshot).await;
+    tokio::time::advance(NODE_REFRESH_INTERVAL).await;
+    fixture.cycle().await;
+    fixture
+        .reconciler
+        .apply_poll_counts(&snapshot, &counters)
+        .unwrap();
+    fixture.docker.set_list_errors(None, Some(unavailable()));
+    tokio::time::advance(NODE_REFRESH_INTERVAL).await;
+    for _ in 0..5 {
+        fixture.cycle().await;
+        assert!(!fixture.handle.shared.lock().nodes_dirty);
+        fixture
+            .reconciler
+            .apply_poll_counts(&snapshot, &counters)
+            .unwrap();
+        assert_eq!(Some(fixture.rejections()), Some(0.0));
+        assert!(!fixture.replicas_state_series().is_empty());
+        tokio::time::advance(test_policy().backoff_max).await;
+    }
+    fixture.handle.mark_nodes_dirty();
+    fixture.cycle().await;
+    assert!(fixture.handle.shared.lock().nodes_dirty);
+    for _ in 0..MAX_CARRIED_POLLS {
+        fixture
+            .reconciler
+            .apply_poll_counts(&snapshot, &counters)
+            .unwrap();
+    }
+    assert!(
+        fixture
+            .reconciler
+            .apply_poll_counts(&snapshot, &counters)
+            .is_err()
+    );
+}
+
 /// Go: `TestPoll_SameIDJobRerunIsRejected`
 #[tokio::test]
 async fn a_same_id_job_rerun_is_rejected() {

@@ -35,6 +35,8 @@ pub const SERVICE_SUBSYSTEM: &str = "service";
 pub const TASK_SUBSYSTEM: &str = "task";
 /// The subsystem of the node metrics.
 pub const CLUSTER_SUBSYSTEM: &str = "cluster";
+/// The subsystem of the per-node metrics.
+pub const NODE_SUBSYSTEM: &str = "node";
 
 /// The `container` label.
 pub const LABEL_CONTAINER: &str = "container";
