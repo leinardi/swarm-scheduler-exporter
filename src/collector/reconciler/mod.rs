@@ -105,6 +105,8 @@ const BACKOFF_MULTIPLIER: u32 = 2;
 
 /// The step name of the resync, which counts a panic in it as a failed resync.
 const RESYNC_STEP: &str = "resync";
+/// The step name of the node refresh, which schedules a retry after a panic.
+const NODES_STEP: &str = "nodes";
 
 const EVENT_TYPE_NODE: &str = "node";
 const EVENT_TYPE_SERVICE: &str = "service";
@@ -574,7 +576,7 @@ impl<D: DockerApi> Reconciler<D> {
         }
         if self.nodes_due(now) {
             let outcome = recover(self.reconcile_nodes(cancel)).await;
-            self.after_step("nodes", outcome);
+            self.after_step(NODES_STEP, outcome);
         }
         if self.resync_due(now) {
             let outcome = recover(self.resync(cancel)).await;
@@ -622,7 +624,7 @@ impl<D: DockerApi> Reconciler<D> {
         if step == RESYNC_STEP {
             self.collectors.metrics.inc_resync(ResyncResult::Failure);
         }
-        if step == "nodes" {
+        if step == NODES_STEP {
             self.schedule_node_retry();
         }
         self.request_resync_after_panic();

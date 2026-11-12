@@ -17,7 +17,8 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
 - Watches Swarm **service** and **node** events to keep metrics fresh: events only mark what
   changed, and a single reconciler inspects it, backed by a full resync (service and node list) at
   startup, every 5 minutes, whenever it had to drop changes, and every time the event stream
-  reconnects. A reconnect resumes the stream from just before the last event seen; the resync covers
+  reconnects. A node-only refresh also runs about every minute to keep node and manager status fresh.
+  A reconnect resumes the stream from just before the last event seen; the resync covers
   what the daemon no longer replays, such as the events of a restart. A stream that ends cleanly is
   logged at info, any other stream end at warn. A socket proxy cutting an idle stream (HAProxy does
   so after its client timeout, about 10 minutes, on a quiet cluster) ends it without the chunked
@@ -183,7 +184,7 @@ identity labels. All except `swarm_service_restart_policy` also carry custom lab
 `node` is `Description.Hostname`; `node_id` distinguishes nodes with duplicate hostnames (including
 nodes that left and rejoined). All five families are published in one snapshot; removed nodes and
 old role identities disappear. Node and manager status is normally refreshed about every minute;
-node events refresh sooner, and failures can delay updates. The full resync remains five minutes.
+node events refresh sooner, and failures can delay updates. The full resync still runs every 5 minutes.
 Missing status or reachability maps to `unknown`. Unknown enum values invented by a newer daemon
 fail the Docker call during decoding, rather than passing through as labels (see Q16).
 

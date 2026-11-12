@@ -276,21 +276,6 @@ fn the_inventory_matches_the_public_contract() {
     let scrape = setup.scrape();
     assert!(scrape.eof, "OpenMetrics text ends with # EOF");
     let got = inventory(&scrape);
-    if std::env::var_os("UPDATE_METRICS_INVENTORY").is_some() {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/metrics/inventory.txt");
-        let text = got
-            .iter()
-            .map(|(name, kind, labels)| {
-                if labels.is_empty() {
-                    format!("{name} {kind}\n")
-                } else {
-                    format!("{name} {kind} {labels}\n")
-                }
-            })
-            .collect::<String>();
-        std::fs::write(path, format!("# Public metric inventory: name, type, sorted label names (histograms omit le).\n# Regenerate: UPDATE_METRICS_INVENTORY=1 cargo test --test metrics the_inventory_matches_the_public_contract\n\n{text}")).unwrap();
-    }
     let mut want = committed_inventory();
     if !cfg!(target_os = "linux") {
         want.retain(|(name, ..)| !name.starts_with("process_"));

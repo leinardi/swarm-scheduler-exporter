@@ -1,5 +1,5 @@
 # Public metric inventory: name, type, sorted label names (histograms omit le).
-# Regenerate: UPDATE_METRICS_INVENTORY=1 cargo test --test metrics the_inventory_matches_the_public_contract
+# A counter is listed under its sample name, with `_total`; OpenMetrics names the family without it.
 
 process_cpu_seconds_total counter
 process_max_fds gauge
