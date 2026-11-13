@@ -36,13 +36,15 @@
 # Select tests:             make test-integration RUN='^TestNode_'
 # Rewrite the golden file:  make test-integration UPDATE=1 RUN=TestSnapshot_
 
-# The binary under test: the release build below, unless SSE_IT_BINARY is set.
-export SSE_IT_BINARY ?= $(REPO_ROOT)/target/release/$(BIN_NAME)
+# The binary under test: the release build below, in cargo's own target directory, unless
+# SSE_IT_BINARY is set. Not exported: RUST_TARGET_DIR runs cargo metadata, so only this recipe
+# expands it.
+SSE_IT_BINARY ?= $(abspath $(RUST_TARGET_DIR))/release/$(BIN_NAME)
 
 .PHONY: test-integration
 test-integration: ## Run the DinD Swarm integration suite against the release binary (requires Docker with privileged containers)
 	$(RUST_VERSION_ENV) $(CARGO) build --locked --release --bin $(BIN_NAME)
-	$(if $(filter 1,$(UPDATE)),SSE_IT_UPDATE=1,) \
+	$(if $(filter 1,$(UPDATE)),SSE_IT_UPDATE=1,) SSE_IT_BINARY='$(SSE_IT_BINARY)' \
 	  $(CARGO) test --locked -p testenv --features integration --test integration -- --run '$(RUN)'
 
 # Everything the suite creates carries the envid label, so this removes every leak, whatever its
