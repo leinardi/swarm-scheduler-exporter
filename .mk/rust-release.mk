@@ -84,22 +84,11 @@ rust_release_asset = $(RUST_RELEASE_DIR)/$(or $(2),$(BIN_NAME))-$(subst /,-,$(1)
 # release writes it after adding the assets a recovery took from what is already published.
 RUST_RELEASE_SHIPPED_PLATFORMS ?= linux/amd64 linux/arm64
 
-# Where cargo writes: its effective target directory (the binaries) and build directory (a build
-# script's OUT_DIR, which is the target directory unless build.build-dir moves it), as cargo
-# metadata reports them, so CARGO_TARGET_DIR, CARGO_BUILD_TARGET_DIR, build.target-dir and
-# build.build-dir in a .cargo/config.toml all count (rust.mk's RUST_TARGET_DIR reads the first
-# only). Those variables and CARGO_HOME (its config.toml counts too) are passed to cargo by name:
-# GNU make before 4.4 runs $(shell) without the command line's and the exported ones, which the
-# build's recipe has. Recursive and read once per make run, so cargo is asked only by a recipe
-# that copies; a consumer may set either instead. The keys are matched where cargo prints them,
-# before version and workspace_root, so a [workspace.metadata] or [package.metadata] key of the
-# same name is not read. A path holding a backslash or a double quote (escaped in the JSON) is
-# not read: set it then. A path holding a space stops make: RUSTFLAGS cannot remap it.
-_RUST_RELEASE_CARGO_ENV = $(foreach var,CARGO_HOME CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR,$(if $($(var)),$(var)="$($(var))"))
-_RUST_RELEASE_METADATA = $(shell cd "$(REPO_ROOT)" && $(_RUST_RELEASE_CARGO_ENV) $(CARGO) metadata --format-version 1 --no-deps 2>/dev/null | sed -n -e 's/.*"target_directory":"\([^"\\ ]*\)","build_directory":"\([^"\\ ]*\)","version":1,"workspace_root":".*/\1 \2/p' -e t -e 's/.*"target_directory":"\([^"\\ ]*\)","version":1,"workspace_root":".*/\1/p')
-_rust_release_metadata = $(or $(_RUST_RELEASE_DIRS),$(eval _RUST_RELEASE_DIRS := $$(_RUST_RELEASE_METADATA))$(_RUST_RELEASE_DIRS))
-RUST_RELEASE_TARGET_DIR ?= $(word 1,$(_rust_release_metadata))
-RUST_RELEASE_BUILD_DIR  ?= $(or $(word 2,$(_rust_release_metadata)),$(RUST_RELEASE_TARGET_DIR))
+# Where cargo writes, as rust.mk reads it from cargo metadata (its _rust_metadata, read once per
+# make run, so cargo is asked only by a recipe that copies); a consumer may set either instead. A
+# path holding a space stops make: RUSTFLAGS cannot remap it.
+RUST_RELEASE_TARGET_DIR ?= $(word 1,$(_rust_metadata))
+RUST_RELEASE_BUILD_DIR  ?= $(or $(word 2,$(_rust_metadata)),$(RUST_RELEASE_TARGET_DIR))
 rust_release_target_dir = $(if $(word 3,$(RUST_RELEASE_TARGET_DIR) $(RUST_RELEASE_BUILD_DIR)),$(error a target or build directory with a space cannot be remapped))$(or $(RUST_RELEASE_TARGET_DIR),$(error cannot read cargo's target directory; set RUST_RELEASE_TARGET_DIR))
 # The directories cargo writes to other than the checkout's target/ (outside it, or another one
 # inside it), remapped to /src/target, where a default build has them, so a build with another

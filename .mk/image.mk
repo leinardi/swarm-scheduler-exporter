@@ -100,15 +100,22 @@ endef
 
 $(foreach t,$(DOCKER_TARGETS),$(eval $(call _IMAGE_TEMPLATE,$(t))))
 
+# An aggregate with no image would pass without building or testing anything: an empty
+# DOCKER_TARGETS stops it. A consumer may add its own prerequisites to the aggregates.
+_IMAGE_TARGETS_GUARD = @test -n "$(strip $(DOCKER_TARGETS))" || { echo "DOCKER_TARGETS is empty; image gates require an image" >&2; exit 1; }
+
 .PHONY: image-build-prebuilt
 image-build-prebuilt: $(addprefix image-build-prebuilt-,$(DOCKER_TARGETS)) ## Build every prebuilt image for IMAGE_PLATFORM from dist/
+	$(_IMAGE_TARGETS_GUARD)
 
 .PHONY: image-test
 image-test: $(addprefix image-test-,$(DOCKER_TARGETS)) ## Test every prebuilt image against its release asset
+	$(_IMAGE_TARGETS_GUARD)
 
 # Each image is built, then tested; under make -j the images run side by side, but none is tested
 # before its own build.
 .PHONY: image-build-test
 image-build-test: $(addprefix image-build-test-,$(DOCKER_TARGETS)) ## Build, then test, every prebuilt image (ordered per image, safe under make -j)
+	$(_IMAGE_TARGETS_GUARD)
 
 endif  # MK_COMMON_IMAGE_INCLUDED
