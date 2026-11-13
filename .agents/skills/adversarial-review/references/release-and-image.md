@@ -2,7 +2,8 @@
 
 Back to [SKILL.md](../SKILL.md). These items belong to its §3 "Endpoint and image hardening".
 Walk them when the diff touches `deployments/docker/**`, `.trivyignore.yaml`,
-`.github/workflows/**`, `scripts/image-test.sh`, `.mk/dist.mk`, `.mk/image.mk` or `docs/release.md`.
+`.github/workflows/**`, `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings, the
+shared `.mk/rust-release.mk` or `.mk/image.mk`, or `docs/release.md`.
 
 ## The image
 
@@ -37,8 +38,8 @@ immutable, so the order of the release job is the safety property:
   treated as absence is critical.
 - The release runs no test suite of its own: `ci-green` (`require-ci-green`) gates on CI's
   `ci-result` and on `integration.yaml`'s `integration` for the push of the exact commit; CI's
-  `image` job builds the release binaries with `make dist-static` and the `prebuilt` target from
-  them, and runs the full image suite on amd64 and the reduced one on arm64 (`docs/release.md`,
+  `image` job builds the release binaries with `make rust-release-binaries` and the `prebuilt`
+  target from them, and runs the full image suite on amd64 and the reduced one on arm64 (`docs/release.md`,
   "What CI proves"). A change that weakens CI's `image` or `rust` job, or the integration suite,
   or lets one skip on a push, weakens the release and is a finding.
 - The `audit` job (cargo-deny) runs alongside the release job's build; `require-job-success`

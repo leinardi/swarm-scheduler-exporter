@@ -7,9 +7,9 @@ every row. Most common:
   integration suite exercises, `make test-integration` (Docker).
 - `Cargo.toml`/`Cargo.lock`/`deny.toml`: `make rust-deny` (network).
 - Dockerfile/droast.toml/.dockerignore: `cargo test -p meta --test dockerfiles --test toolchain`,
-  `make dist-static`, then `make image-build-test` (amd64 full; arm64
+  `make rust-release-binaries`, then `make image-build-test` (amd64 full; arm64
   `IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced` under QEMU), `make docker-build`.
-- `scripts/image-test.sh`, `.mk/dist.mk`, `.mk/image.mk`: the same image runs; keep
+- `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings: the same image runs; keep
   `docs/release.md#what-ci-proves` true.
 - `.github/**`: `pre-commit run actionlint --all-files`,
   `cargo test -p meta --test toolchain --test dockerfiles`.

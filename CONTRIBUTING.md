@@ -7,9 +7,11 @@
 - [cargo-deny](https://github.com/EmbarkStudios/cargo-deny), for `make audit-deps` and
   `make rust-deny` (`cargo install --locked cargo-deny`)
 - [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and [zig](https://ziglang.org/),
-  only to build the static musl binaries the releases ship outside Docker (`make dist-static`, at
-  the versions the Dockerfile's build stage and the workflows' `setup-zigbuild` steps pin;
-  `rust-toolchain.toml` adds both musl targets)
+  only to build the static musl binaries the releases ship outside Docker
+  (`make rust-release-binaries`, at the versions the Makefile pins and the Dockerfile's build stage
+  and the workflows' `setup-zigbuild` steps copy; `make rust-zigbuild-install` installs them into
+  `target/zigbuild-tools`, whose `bin` goes on `PATH`; `rust-toolchain.toml` adds both musl
+  targets)
 - Docker, for building the container image and running the integration tests, with a `dhi.io`
   login (`docker login dhi.io`) for the image's bases; QEMU (binfmt) to run the arm64 image tests on
   another architecture
@@ -31,8 +33,8 @@ make verify           # rust-build, rust-fmt-check, rust-clippy and rust-test in
 make rust-run ARGS="--containers --log-level debug"  # run against the local Docker daemon, version-stamped
 make audit-deps       # cargo-deny against the RustSec advisories (network required)
 make rust-deny        # every cargo-deny check: advisories, licences, bans, sources (network required)
-make dist-static      # the static release binaries in dist/, as the release builds them
-make image-build-test # the image from those binaries, then its full test suite
+make rust-release-binaries  # the static release binaries in dist/, as the release builds them
+make image-build-test       # the image from those binaries, then its full test suite
 make docker-build     # the container image's default target, which compiles the binary itself
 ```
 

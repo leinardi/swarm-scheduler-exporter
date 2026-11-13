@@ -73,8 +73,23 @@ RUST_DENY_ARGS ?= --workspace
 # rust-run's binary, for a package with more than one; empty lets cargo pick the only one.
 RUST_RUN_BIN ?=
 
-# Where cargo puts its output, so rust-dist finds the binary under a custom CARGO_TARGET_DIR.
-RUST_TARGET_DIR ?= $(or $(CARGO_TARGET_DIR),target)
+# Where cargo writes: its effective target directory (the binaries) and build directory (a build
+# script's OUT_DIR, which is the target directory unless build.build-dir moves it), as cargo
+# metadata reports them, so CARGO_TARGET_DIR, CARGO_BUILD_TARGET_DIR, build.target-dir and
+# build.build-dir in a .cargo/config.toml all count. Those variables and CARGO_HOME (its
+# config.toml counts too) are passed to cargo by name: GNU make before 4.4 runs $(shell) without
+# the command line's and the exported ones, which the build's recipe has. Recursive and read once
+# per make run, so cargo is asked only by a recipe that copies. The keys are matched where cargo
+# prints them, before version and workspace_root, so a [workspace.metadata] or
+# [package.metadata] key of the same name is not read. A path holding a space, a backslash or a
+# double quote (escaped in the JSON) is not read: set RUST_TARGET_DIR (and, for rust-release.mk,
+# RUST_RELEASE_TARGET_DIR) then.
+_RUST_CARGO_ENV = $(foreach var,CARGO_HOME CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR,$(if $($(var)),$(var)="$($(var))"))
+_RUST_METADATA = $(shell cd "$(or $(REPO_ROOT),.)" && $(_RUST_CARGO_ENV) $(CARGO) metadata --format-version 1 --no-deps 2>/dev/null | sed -n -e 's/.*"target_directory":"\([^"\\ ]*\)","build_directory":"\([^"\\ ]*\)","version":1,"workspace_root":".*/\1 \2/p' -e t -e 's/.*"target_directory":"\([^"\\ ]*\)","version":1,"workspace_root":".*/\1/p')
+_rust_metadata = $(or $(_RUST_DIRS),$(eval _RUST_DIRS := $$(_RUST_METADATA))$(_RUST_DIRS))
+
+# Where rust-dist finds the binary: cargo's target directory by default; a consumer may set it.
+RUST_TARGET_DIR ?= $(or $(word 1,$(_rust_metadata)),$(error cannot read cargo's target directory (run cargo metadata to see why); set RUST_TARGET_DIR))
 
 # The Cargo profile rust-dist builds: release by default; another one (say a local profile that
 # inherits release with thin or no LTO, for a quicker edit-run loop) with --profile, from its own
