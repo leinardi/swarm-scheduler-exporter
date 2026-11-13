@@ -12,8 +12,8 @@ way.
 
 - Two static binaries, `swarm-scheduler-exporter-linux-amd64` and `swarm-scheduler-exporter-linux-arm64`,
   cross-compiled for the `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` targets by
-  `make dist-static` (`cargo zigbuild --release --locked`), with the build paths remapped and the
-  version, commit and commit date compiled in, plus `checksums.txt` over both. All three are
+  `make rust-release-binaries` (`cargo zigbuild --release --locked`), with the build paths remapped
+  and the version, commit and commit date compiled in, plus `checksums.txt` over both. All three are
   attached to the GitHub release, and each binary has a
   [build provenance attestation](https://docs.github.com/actions/security-guides/using-artifact-attestations)
   from the release workflow.
@@ -176,9 +176,9 @@ The run has four jobs:
 
 A **fresh** release then runs:
 
-1. **Build the binaries once**, with `make dist-static`, the make target CI builds them with. The
-   Rust build cache is the release's own (`prefix-key: release`), written only by this workflow.
-   `checksums.txt` is written over both.
+1. **Build the binaries once**, with `make rust-release-binaries`, the make target CI builds them
+   with. The Rust build cache is the release's own (`prefix-key: release`), written only by this
+   workflow. `checksums.txt` is written over both (`make rust-release-checksums`).
 2. Start a registry inside the job (`registry:3.1.2`, pinned by digest).
 3. **Build the image once**, the Dockerfile's `prebuilt` target, for both platforms, with those
    binaries as the `dist` build context, so the image binary is the release asset. It is pushed by
@@ -216,11 +216,12 @@ Everything stamped into an artifact comes from the commit rather than from the c
 fixed seven-character commit prefix, the commit date as the build date (and the image's `created`
 label), and the commit time as BuildKit's `SOURCE_DATE_EPOCH`. The binaries are built with the
 pinned Rust toolchain, zig and cargo-zigbuild, `Cargo.lock` (`--locked`), and `--remap-path-prefix`
-for the checkout and the cargo home, so a re-run of the same commit produces the same bytes, which
-is what lets a recovery check published assets by sha256. The image is not byte-reproducible: its
-provenance records the build itself, so two builds of the same commit have different index digests.
-That is why a recovery never compares a rebuilt index with a published one, and never rebuilds a
-published one.
+for the checkout, the cargo home and the toolchain's `rust-src` (when installed, mapped back to the
+`/rustc/<commit>` prefix a machine without it writes), so a re-run of the same commit produces the
+same bytes, which is what lets a recovery check published assets by sha256. The image is not
+byte-reproducible: its provenance records the build itself, so two builds of the same commit have
+different index digests. That is why a recovery never compares a rebuilt index with a published one,
+and never rebuilds a published one.
 
 ## What CI proves
 
@@ -235,8 +236,8 @@ being released:
   tests, the docs and cargo-deny) and `pre-commit-all` (every hook on every file).
 - **The packaging was tested on that commit.** `ci-result` needs the `image` job, which runs on
   every pull request and every push, with no path filter. It builds the static binaries with
-  `make dist-static`, the release's own make target, then the `prebuilt` image target from them
-  for both platforms:
+  `make rust-release-binaries`, the release's own make target, then the `prebuilt` image target
+  from them for both platforms:
   - **linux/amd64, the full suite** (`scripts/image-test.sh --tier full`): the image is the
     platform's; its binary is the `dist/` binary just built, byte for byte; the container, started
     with no Docker socket, logs the stamps in its startup line and serves them as
@@ -432,12 +433,12 @@ shipped (see [What CI proves](#what-ci-proves)). Dependabot's `docker` ecosystem
 digests and `rust-toolchain.toml` (the `toolchain` meta-test fails when the Rust line, the image
 patch or the copies of a zig pin disagree).
 
-**The binaries are built outside Docker, once.** The release's `dist-static` gets zig and
-cargo-zigbuild from gh-composite-actions' `setup-zigbuild`, at the versions the Dockerfile's build
-stage pins (`ZIG_VERSION`, `CARGO_ZIGBUILD_VERSION`), and Rust from `rust-toolchain.toml`
-(`rustup toolchain install`), or, on a recovery, the release the tag records. The image's `prebuilt`
-target never runs that build stage: it COPYs the binaries, so `dhi.io/rust` is not part of a
-release at all.
+**The binaries are built outside Docker, once.** The release's `rust-release-binaries` gets zig and
+cargo-zigbuild from gh-composite-actions' `setup-zigbuild`, at the versions the Makefile pins and
+the Dockerfile's build stage copies (`ZIG_VERSION`, `CARGO_ZIGBUILD_VERSION`), and refuses any other
+release on `PATH`; Rust comes from `rust-toolchain.toml` (`rustup toolchain install`), or, on a
+recovery, the release the tag records. The image's `prebuilt` target never runs that build stage: it
+COPYs the binaries, so `dhi.io/rust` is not part of a release at all.
 
 **Workflow tokens are read-only by default.** Each workflow sets `permissions: contents: read` at
 the top; only the release job adds `contents: write`, `packages: write`, `id-token: write`,
@@ -520,17 +521,23 @@ against a sha256 written in the Dockerfile, and those archives must be the image
 A bump is therefore one hand-made pull request that moves, together:
 
 1. the image tag and `ARG RUST_VERSION` in the Dockerfile;
-2. the two `rust-std` sha256s (the `.sha256` file published next to each archive);
-3. `rust-toolchain.toml`;
-4. the MSRV in `Cargo.toml` when the minor version changes.
+2. the two `rust-std` sha256s in the Dockerfile (the `.sha256` file published next to each
+   archive);
+3. `RUST_RELEASE_RUST_STD_VERSION` and the same two sha256s in the Makefile;
+4. `rust-toolchain.toml`;
+5. the MSRV in `Cargo.toml` when the minor version changes.
 
-zig and cargo-zigbuild follow the same rule between the Dockerfile and the `setup-zigbuild` steps of
-`ci.yaml` and `release.yaml` (their `zig-version` and `cargo-zigbuild-version` inputs): each version
-is one value, checked by the same meta-test. gh-composite-actions' `setup-zigbuild` checks the
-archives it downloads against its `zig-sha256` and `cargo-zigbuild-sha256` inputs, whose defaults
-are its default versions' digests, so a version bump passes the new digests to it too. A release
-built after such a bump produces new binary digests, as any toolchain change does; a recovery of an
-older release must run on its own commit, which still names its own toolchain.
+zig and cargo-zigbuild follow the same rule between the Makefile (the one record of their versions
+and archive digests), the Dockerfile and the `setup-zigbuild` steps of `ci.yaml` and `release.yaml`
+(their `zig-version` and `cargo-zigbuild-version` inputs): each version is one value, and each
+digest one value between the Makefile and the Dockerfile, checked by the same meta-test. The
+Makefile's `RUST_RELEASE_*` settings override the defaults of the shared `.mk/rust-release.mk`,
+which is fetched from make-common and never edited here.
+gh-composite-actions' `setup-zigbuild` checks the archives it downloads against its `zig-sha256` and
+`cargo-zigbuild-sha256` inputs, whose defaults are its default versions' digests, so a version bump
+passes the new digests to it too. A release built after such a bump produces new binary digests, as
+any toolchain change does; a recovery of an older release must run on its own commit, which still
+names its own toolchain.
 
 ## Commit messages are checked on every pull request
 

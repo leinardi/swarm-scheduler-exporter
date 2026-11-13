@@ -303,9 +303,9 @@ jobs:
         run: make rust-deny
 
   # The release's packaging path, on every pull request and every push to master: the static release
-  # binaries built with the release's own make target (dist-static), then the image's prebuilt
-  # target, which COPYs those binaries, for both shipped platforms. linux/amd64 runs the full image
-  # suite natively; linux/arm64 runs the reduced suite under QEMU (the binary's ELF machine and
+  # binaries built with the release's own make target (rust-release-binaries), then the image's
+  # prebuilt target, which COPYs those binaries, for both shipped platforms. linux/amd64 runs the
+  # full image suite natively; linux/arm64 runs the reduced suite under QEMU (the binary's ELF machine and
   # static linking, its mode and owner, the image config, the container starting, logging its
   # stamps and serving them on /metrics). Both check that the image binary is byte for byte the dist/ binary built here. The
   # release builds the same target from the same make target on the same base tag, and runs only
@@ -378,7 +378,8 @@ jobs:
           key: static
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
-      # The versions the Dockerfile's build stage pins (meta/tests/toolchain.rs), as the release.
+      # The versions the Makefile pins and the Dockerfile's build stage copies
+      # (meta/tests/toolchain.rs), as the release.
       - name: Set up cargo-zigbuild
         if: steps.dhi.outputs.available == 'true'
         uses: leinardi/gh-composite-actions/setup-zigbuild@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
@@ -402,10 +403,10 @@ jobs:
       - name: Build the static release binaries
         if: steps.dhi.outputs.available == 'true'
         env:
-          DIST_VERSION: ${{ steps.stamp.outputs.version }}
-          DIST_COMMIT: ${{ steps.stamp.outputs.commit }}
-          DIST_DATE: ${{ steps.stamp.outputs.date }}
-        run: make dist-static DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}"
+          GIT_VERSION: ${{ steps.stamp.outputs.version }}
+          GIT_COMMIT: ${{ steps.stamp.outputs.commit }}
+          BUILD_DATE: ${{ steps.stamp.outputs.date }}
+        run: make rust-release-binaries GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" BUILD_DATE="${BUILD_DATE}"
 
       # The arm64 image runs on the amd64 runner through binfmt emulation. The registered emulator
       # image is pinned by index digest, because the action's default is the moving `latest` tag.
@@ -420,23 +421,23 @@ jobs:
       - name: Build and test the linux/amd64 image (full suite)
         if: steps.dhi.outputs.available == 'true'
         env:
-          DIST_VERSION: ${{ steps.stamp.outputs.version }}
-          DIST_COMMIT: ${{ steps.stamp.outputs.commit }}
-          DIST_DATE: ${{ steps.stamp.outputs.date }}
+          GIT_VERSION: ${{ steps.stamp.outputs.version }}
+          GIT_COMMIT: ${{ steps.stamp.outputs.commit }}
+          BUILD_DATE: ${{ steps.stamp.outputs.date }}
         run: |
           set -euo pipefail
-          stamps=(DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}")
+          stamps=(GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" BUILD_DATE="${BUILD_DATE}")
           make image-build-test "${stamps[@]}" IMAGE_PLATFORM=linux/amd64 IMAGE_TEST_TIER=full
 
       - name: Build and test the linux/arm64 image (reduced suite, QEMU)
         if: steps.dhi.outputs.available == 'true'
         env:
-          DIST_VERSION: ${{ steps.stamp.outputs.version }}
-          DIST_COMMIT: ${{ steps.stamp.outputs.commit }}
-          DIST_DATE: ${{ steps.stamp.outputs.date }}
+          GIT_VERSION: ${{ steps.stamp.outputs.version }}
+          GIT_COMMIT: ${{ steps.stamp.outputs.commit }}
+          BUILD_DATE: ${{ steps.stamp.outputs.date }}
         run: |
           set -euo pipefail
-          stamps=(DIST_VERSION="${DIST_VERSION}" DIST_COMMIT="${DIST_COMMIT}" DIST_DATE="${DIST_DATE}")
+          stamps=(GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" BUILD_DATE="${BUILD_DATE}")
           make image-build-test "${stamps[@]}" IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced
 
   # The one check that stands for the rest, for the branch ruleset to require and for release.yaml

@@ -27,7 +27,7 @@ make rust-deny            # cargo-deny: advisories, licences, bans and sources (
 make audit-deps           # cargo-deny advisories only (network required); CI and the cargo-deny hook (on Cargo.toml/Cargo.lock/deny.toml changes) run every check
 make check                # pre-commit on all files: the authoritative local gate, the same as CI's pre-commit-all
 make check-stage          # pre-commit on the staging area only
-make dist-static          # the static release binaries, dist/swarm-scheduler-exporter-linux-{amd64,arm64} (zig, cargo-zigbuild)
+make rust-release-binaries # the static release binaries, dist/swarm-scheduler-exporter-linux-{amd64,arm64} (zig, cargo-zigbuild)
 make image-build-prebuilt # the image's prebuilt target from dist/, for IMAGE_PLATFORM (default: the host's; needs a dhi.io login)
 make image-test           # scripts/image-test.sh on that image, IMAGE_TEST_TIER full (default), reduced or smoke
 make docker-build         # the image's default target, which compiles the binary itself
@@ -58,10 +58,14 @@ cargo test --test engine_wire
 ```
 
 The Makefile pulls shared snippets from `leinardi/make-common@v1` into `.mk/` on first run,
-`rust.mk` (the `rust-*` targets and `verify-rust`) among them; the Makefile sets its knobs
-(`RUST_STAMP_PREFIX`, `RUST_RUN_BIN`). To refresh: `make mk-common-update`. Project targets live
-in the local `.mk/*.mk` files listed in `MK_LOCAL_FILES` (`docker-socket-run.mk`, `audit-deps.mk`,
-`integration-test.mk`, `verify.mk`, `dist.mk`, `image.mk`), never as recipes in the Makefile.
+`rust.mk` (the `rust-*` targets and `verify-rust`), `rust-release.mk` (the static release binaries,
+`rust-release-binaries` and `rust-release-checksums`) and `image.mk` (the prebuilt image and its
+tests) among them; the Makefile sets their knobs (`RUST_STAMP_PREFIX`, `RUST_RUN_BIN`, and with `:=`
+the release's zig, cargo-zigbuild and `rust-std` pins and digests, triples, shipped platforms and
+output directory, which `meta/tests/toolchain.rs` checks against their copies). To refresh:
+`make mk-common-update`. Project targets live in the local `.mk/*.mk` files listed in
+`MK_LOCAL_FILES` (`docker-socket-run.mk`, `audit-deps.mk`, `integration-test.mk`, `verify.mk`),
+never as recipes in the Makefile.
 
 ## Layout
 
@@ -148,7 +152,7 @@ meta-tests' checks). The exporter keeps only what is its own.
 
 ### Generated or vendored: never hand-edit
 
-- `.mk/{docker,help,password,pre-commit,rust}.mk`, `.mk/.mk-common-version` and
+- `.mk/{docker,help,password,pre-commit,rust,rust-release,image}.mk`, `.mk/.mk-common-version` and
   `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
   `make mk-common-update` and port a change upstream.
 - `tests/testdata/**` and `testenv/tests/integration/testdata/**`: Engine API fixtures (captured
@@ -198,10 +202,10 @@ The ones to keep in mind while writing code:
 - The version strings come from `SWARM_SCHEDULER_EXPORTER_VERSION`, `_COMMIT` and `_DATE` at
   compile time (`src/version.rs`, `service_kit::buildinfo!`); unset, they read `dev`, `none` and
   `unknown`, and an empty one stays empty. `make rust-dist` and `make rust-run` set them from git;
-  `make dist-static` from `DIST_VERSION`, `DIST_COMMIT` and `DIST_DATE`, which the release sets to
-  the tag, the commit's first seven characters and its commit date; and the Dockerfile's build
-  stage from its `VERSION`, `COMMIT` and `DATE` arguments, which also fill the image labels. The
-  binary has no `--version`: it logs them in its startup line and exports them as
+  `make rust-release-binaries` from rust.mk's `GIT_VERSION`, `GIT_COMMIT` and `BUILD_DATE`, which
+  the release sets to the tag, the commit's first seven characters and its commit date; and the
+  Dockerfile's build stage from its `VERSION`, `COMMIT` and `DATE` arguments, which also fill the
+  image labels. The binary has no `--version`: it logs them in its startup line and exports them as
   `swarm_exporter_build_info`.
 - Lints are silenced only with `#[expect(lint, reason = "...")]`: `allow_attributes` is denied,
   the reason is mandatory, and an `#[expect]` that stops firing fails the build.
@@ -226,8 +230,8 @@ Run before considering an edit done. `make check` applies to every row.
 | --- | --- |
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
-| `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain` (droast runs in `make check`); gh-composite-actions' `check-pinned-bases/check-pinned-bases.sh --tag-only dhi.io deployments/docker/Dockerfile`; `make dist-static`, then `make image-build-test`, and with QEMU `make image-build-test IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced`; `make docker-build` (all need a `dhi.io` login) |
-| `scripts/image-test.sh`, `.mk/dist.mk`, `.mk/image.mk` | `make dist-static`, then `make image-build-test` (and the arm64 run above); keep `docs/release.md#what-ci-proves` true |
+| `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain` (droast runs in `make check`); gh-composite-actions' `check-pinned-bases/check-pinned-bases.sh --tag-only dhi.io deployments/docker/Dockerfile`; `make rust-release-binaries`, then `make image-build-test`, and with QEMU `make image-build-test IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced`; `make docker-build` (all need a `dhi.io` login) |
+| `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings | `make rust-release-binaries`, then `make image-build-test` (and the arm64 run above); keep `docs/release.md#what-ci-proves` true |
 | `.trivyignore.yaml` | every entry scoped to paths or purls, with a statement and an `expired_at`; scan the prebuilt image with the latest Trivy as `trivy-gate` runs it (`--ignore-unfixed --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml`) |
 | `.github/workflows/**`, `.github/dependabot.yml` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles`; reason through each trigger the workflow has (pull request, fork pull request, push, dispatch, schedule); for `release.yaml`, keep `docs/release.md` in step and dispatch a dry run once CI passed on the commit; for `ci.yaml`'s `image` job, keep `docs/release.md#what-ci-proves` true |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |

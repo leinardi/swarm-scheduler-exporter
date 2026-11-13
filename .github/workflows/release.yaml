@@ -405,7 +405,8 @@ jobs:
         with:
           prefix-key: release
 
-      # The versions the Dockerfile's build stage pins (meta/tests/toolchain.rs), as CI.
+      # The versions the Makefile pins and the Dockerfile's build stage copies
+      # (meta/tests/toolchain.rs), as CI.
       - name: Set up cargo-zigbuild
         if: steps.mode.outputs.rebuild != ''
         uses: leinardi/gh-composite-actions/setup-zigbuild@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
@@ -413,9 +414,9 @@ jobs:
           zig-version: 0.17.0
           cargo-zigbuild-version: 0.24.0
 
-      # The platforms nothing is published for, built with CI's make target (dist-static): static
-      # musl binaries, cross-compiled by cargo-zigbuild, the build paths remapped, the stamps from
-      # the commit. Then the published binaries release-mode verified and fetched are laid over
+      # The platforms nothing is published for, built with CI's make target (rust-release-binaries):
+      # static musl binaries, cross-compiled by cargo-zigbuild, the build paths remapped, the stamps
+      # from the commit. Then the published binaries release-mode verified and fetched are laid over
       # them, so the published bytes win, and checksums.txt is written over the final set.
       - name: Build and assemble the release binaries
         env:
@@ -437,8 +438,8 @@ jobs:
           done
           mkdir -p dist
           if [ "${#PLATFORMS_TO_BUILD[@]}" -gt 0 ]; then
-            make dist-static DIST_PLATFORMS="${PLATFORMS_TO_BUILD[*]}" \
-              DIST_VERSION="$TAG" DIST_COMMIT="$SHORT_SHA" DIST_DATE="$BUILD_DATE"
+            make rust-release-binaries RUST_RELEASE_PLATFORMS="${PLATFORMS_TO_BUILD[*]}" \
+              GIT_VERSION="$TAG" GIT_COMMIT="$SHORT_SHA" BUILD_DATE="$BUILD_DATE"
           fi
           # Read into a variable first: a failure inside a process substitution would be
           # swallowed, and an empty list would read as "nothing published".
@@ -455,7 +456,7 @@ jobs:
               exit 1
             fi
           done
-          make dist-checksums
+          make rust-release-checksums
           if [ "$CHECKSUMS" = "verify" ]; then
             PUBLISHED="$(dirname "$PLAN")/published-checksums.txt"
             if ! cmp -s "$PUBLISHED" dist/checksums.txt; then

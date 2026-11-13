@@ -28,6 +28,6 @@ MK_COMMON_PASSWORD_INCLUDED := 1
 .PHONY: password
 password: ## Generate a 99-character password (PostgreSQL compatible)
 	@echo "Generating a 99-character password (PostgreSQL compatible)..."
-	@env LC_ALL=C tr -dc 'A-Za-z0-9_.-+=,' < /dev/urandom | head -c 99; echo
+	@head -c 4096 /dev/urandom | env LC_ALL=C tr -dc 'A-Za-z0-9_.+=,-' | cut -c 1-99
 
 endif  # MK_COMMON_PASSWORD_INCLUDED

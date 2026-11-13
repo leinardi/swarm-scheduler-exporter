@@ -36,10 +36,10 @@
 # Two targets ship the same runtime stage on the same base:
 #   runtime (the default, last stage): the binary is cross-compiled in the build stage below. For
 #     local development: `make docker-build`.
-#   prebuilt: the binary is the release asset already built outside Docker (`make dist-static`),
-#     COPYed from the `dist` build context, so the image binary is byte for byte the attested
-#     release asset. CI and the release build this one: `make image-build-prebuilt`. The build
-#     stage, and so dhi.io/rust, is never used.
+#   prebuilt: the binary is the release asset already built outside Docker
+#     (`make rust-release-binaries`), COPYed from the `dist` build context, so the image binary is
+#     byte for byte the attested release asset. CI and the release build this one:
+#     `make image-build-prebuilt`. The build stage, and so dhi.io/rust, is never used.
 
 ########################
 # build: cross-compile a static musl binary for the target platform on the build platform, with

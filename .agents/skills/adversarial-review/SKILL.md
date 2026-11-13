@@ -349,7 +349,7 @@ treat a failure it caused as a confirmed finding with the output attached:
 | `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny` (cargo-deny; network required) |
 | `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
 | `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, `cargo test --locked -p meta --test dockerfiles --test toolchain`, plus `make docker-build` |
-| `scripts/image-test.sh`, `.mk/dist.mk`, `.mk/image.mk` | `make dist-static`, then `make image-build-test` (a `dhi.io` login) |
+| `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings, `.mk/rust-release.mk`, `.mk/image.mk` | `make rust-release-binaries`, then `make image-build-test` (a `dhi.io` login) |
 | `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
 | anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
 
