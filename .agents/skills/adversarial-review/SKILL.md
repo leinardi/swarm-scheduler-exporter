@@ -19,67 +19,44 @@ bug, breaks an invariant, or drifts from a contract. Your job is to find the spe
 input, state, or path where it fails — not to praise it, not to restyle it. A review that
 finds nothing is only credible after you have actively tried to break the code and failed.
 
-Copy this checklist and tick items as you go:
+This skill routes to the user-level Rust skills and the project's authorities rather than
+replacing them. Read `AGENTS.md` first: its rules are the review's floor.
 
-```text
-Review progress:
-- [ ] 1. Scope chosen; diff, stated intent and every changed file read in full
-- [ ] 2. User-level Rust skills and AGENTS.md consulted for the Rust and Cargo paths
-- [ ] 3. Repo invariants checked
-- [ ] 4. Adversarial passes run; every candidate confirmed or dropped
-- [ ] 5. Always-on passes (a)–(e) run
-- [ ] 6. Gates run; `git status` checked for hook rewrites; skipped gates marked unverified
-- [ ] 7. Report written: findings, open questions, verdict, gates run and not run
-```
+## Scope
 
----
+When invoked directly: review the scope the user gives (`gh pr view <n>` for intent, then `gh pr
+diff <n>`); with none, the uncommitted work (`git diff HEAD` plus untracked files, which no diff
+shows); on a clean tree, `git diff master...HEAD`. Never review from a description of the change.
 
-## 1. Establish the diff (what am I reviewing?)
+Read the stated **intent** (`git log --oneline` for the range, any linked issue or PR body): a
+change that works but does something other than what it claims is a finding. Read every changed
+file in full, not just the hunks, and for non-trivial changes the callers, implementations, tests
+and docs of what changed, found with a reference search, not assumed from the diff: a signature
+or behavior change is only safe if every call site agrees.
 
-Never review from memory or from the user's description of the change — read the actual
-diff. Pick the scope from what the user said:
-
-| User intent | Command |
-| --- | --- |
-| "my work" / "before I commit" / uncommitted | `git status --short`, then `git diff HEAD`; read untracked files too, which no diff shows |
-| staged changes only | `git diff --staged` |
-| a branch / "this PR" / "ready to merge" | `git diff master...HEAD` (merge-base diff; `master` is this repo's default branch) |
-| a specific commit range | `git diff <base>..<head>` |
-| a GitHub PR number | `gh pr view <n>` for intent, then `gh pr diff <n>` |
-
-If the user names no scope, review the uncommitted work (first row); if the tree is
-clean, review the branch against `master` (third row).
-
-Also read `git log --oneline` for the range and any linked issue/PR body — the stated
-**intent** is what you check the code against. A change that works but does something other
-than what it claims is a finding, and so is a commit type that ships the wrong version: `svu`
-derives the release from the Conventional Commits since the last tag, and pull requests land as
-merge commits, so every commit in the range counts. A change to the binary or the image that users
-should receive typed `chore`, `docs`, `perf` or `refactor` never ships; tooling typed `fix` or
-`feat` cuts a release with nothing in it; a stray `!` cuts a major; and a word ending in `fix` or
-`feat` right before a colon anywhere in a subject counts as that type (`AGENTS.md`,
-`docs/release.md`).
-
-Read every changed file in full, not just the hunks. A hunk looks correct in isolation and
-wrong against the 40 lines above it that git didn't show you. For non-trivial changes, also
-read the callers, implementations, tests and docs of what changed — found with a reference
-search, not assumed from the diff: a signature or behavior change is only safe if every call
-site agrees.
-
-A meta-test under `meta/tests/` guards a claim nothing else checks; §3 "Meta-tests must not pass
-on nothing" says how to attack one.
-
-## 2. Load the domain skill
+## Authority
 
 For any `**/*.rs` path, any `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml` or
 `rust-toolchain.toml`, use user-level Rust skills and read `AGENTS.md`; project rules are findings even
 when clippy is green. Every other path (Dockerfile, compose files, `Makefile`, `.mk/*.mk`,
-GitHub workflows, other YAML, bash, Markdown) gets the passes in §4 plus the invariants in
-§3 with the **same rigor** — an unmatched language is not a lighter review.
+GitHub workflows, other YAML, bash, Markdown) gets the passes below plus the repository
+invariants with the **same rigor** — an unmatched language is not a lighter review.
 
-## 3. Repo invariants — check these on every review, whatever changed
+A meta-test under `meta/tests/` guards a claim nothing else checks; "Meta-tests must not pass on
+nothing" under the invariants says how to attack one.
+
+## Repository invariants (check on every review, whatever changed)
 
 These are the ways this exporter breaks that generic reviewers miss.
+
+### Commit type matches whether it ships
+
+`svu` derives the release from the Conventional Commits since the last tag, and pull requests land
+as merge commits, so every commit in the range counts. A change to the binary or the image that
+users should receive typed `chore`, `docs`, `perf` or `refactor` never ships; tooling typed `fix`
+or `feat` cuts a release with nothing in it; a stray `!` cuts a major; and a word ending in `fix`
+or `feat` right before a colon anywhere in a subject counts as that type (`AGENTS.md`,
+`docs/release.md`).
 
 ### Read-only against Docker — enforced in code, not at runtime
 
@@ -254,39 +231,28 @@ control that fails on a planted violation, and a non-empty-input assertion. A ch
 loosens one — a wider allowlist, a narrower walk, a dropped negative control, a pattern that no
 longer matches the file it reads — is a finding unless it says why.
 
-## 4. Adversarial passes — language-agnostic
+## Adversarial passes
 
-Do not skim for style. Run these passes, each with a "how would I make this fail" framing:
+Beyond the generic passes (logic, nil and empty input, aliasing, error handling, concurrency,
+resources, security), run these with a "how would I make this fail" framing, and name one
+concrete failing input per candidate rather than asserting "looks fine".
 
-- **Generic passes**: correctness and logic, boundaries and nil/empty, aliasing, error
-  handling, concurrency, resources and security. For each, name one concrete failing input and
-  trace it end to end rather than asserting "looks fine".
-- **Contract drift**: does the code do what the commit message / PR / issue claims? A public
-  signature, flag, environment variable, output format, exit code or error text changed without
-  updating every consumer and the docs (§5 (e)).
-- **Tests**: does the diff add or change a test for the behavior it introduces? A test that
-  passes against the *old* code (asserts nothing new), that asserts on a fake's recorded calls
-  instead of the behavior they produced, or that was weakened/deleted to make the change pass —
-  all findings. A bug fix with no regression test is a gap worth flagging.
+- **Contract drift:** a public signature, flag, environment variable, output format, exit code or
+  error text changed without updating every consumer and the docs (*Docs drift* below).
+- **Tests:** a test that passes against the *old* code, that asserts on a fake's recorded calls
+  instead of the behavior they produced, or that was weakened or deleted to make the change pass
+  is a finding. A bug fix with no regression test is a gap worth flagging.
 
-For each candidate defect:
-
-1. Reproduce it with a focused test, or trace one concrete input through the code to the wrong
-   result.
-2. Confirmed: it is a finding. Record the input and the wrong behavior.
-3. Not confirmed: dig once more (callers, tests, config path). Still not confirmed: drop it.
-   A vague "consider" is not a finding.
-
-## 5. Always-on passes
+## Always-on passes
 
 The passes above are shaped by the diff. These run on **every** review, whatever changed.
 
 ### (a) Endpoint and image
 
-Ask the one question the endpoint and image rules in §3 are built on: does this change create
+Ask the one question the endpoint and image rules in the invariants are built on: does this change create
 a new place where something from outside becomes work — a request parameter that becomes a
 Docker call, a label value that becomes a series, an event that becomes a task — or does
-it make the image or its deployment more privileged? If it does, walk the §3 "Endpoint and
+it make the image or its deployment more privileged? If it does, walk the "Endpoint and
 image hardening" (including its reference) and "Bounded work" items against it.
 
 ### (b) Deletion smell
@@ -336,30 +302,33 @@ silently.
 A surface the code has and the docs do not mention is a finding; so is a documented one nothing
 implements, and so is a default in the docs that differs from the code.
 
-## 6. Verify before you trust (don't hand-wave the gates)
+## Gates
 
-Static reading misses things. Use focused tests while investigating (`cargo test --lib
-collector::reconciler`, `cargo test --test engine_wire`), then run the gates the change owes and
-treat a failure it caused as a confirmed finding with the output attached:
+Do not re-run the repository's gates (`make verify`, `make check`, `make rust-deny`, `make
+test-integration`, `cargo test -p meta`, `make docker-build`, `make rust-release-binaries`, `make
+image-build-test`). The implementer is expected to run them and CI runs them again, but do not
+assume either happened: report the verification evidence you actually have (under
+adversarial-review-loop, `verification.txt` when supplied, which is the implementer's claim and not
+proof; when invoked directly, the CI status or gate output in the PR or session) and what is
+missing, such as a `src/collector`, `src/docker` or `testenv` change with no integration run
+reported. A failure in that evidence caused by the change is a confirmed finding. Never say that a
+check you did not see passed, and a skipped test is not a pass: the integration runner prints `SKIP`
+for a test it could not run. Judge whether the change's tests prove it: a behaviour change needs a
+test that fails on the old code. When invoked directly, one focused test (`cargo test --lib
+collector::reconciler::tests::<name>`, or `cargo test --test engine_wire <name>`) may be run to
+confirm a single suspected finding, never a full suite or gate. A candidate that is neither
+reproduced nor traced end to end is dropped: a vague "consider" is not a finding.
 
-| Diff touched | Run |
-| --- | --- |
-| any `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rust-toolchain.toml` | `make verify` (build, fmt, clippy, tests), then `make check` |
-| `src/collector/**`, `src/docker/**`, `testenv/**` | also `make test-integration` (a DinD Swarm; needs Docker with privileged containers) |
-| `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny` (cargo-deny; network required) |
-| `meta/**`, `scripts/check-*.sh`, `.pre-commit-config.yaml`, `.github/**` | `cargo test -p meta` (as the CI `rust` job runs it), then `make check` |
-| `deployments/docker/Dockerfile`, `droast.toml` | droast via `make check`, `cargo test --locked -p meta --test dockerfiles --test toolchain`, plus `make docker-build` |
-| `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings, `.mk/rust-release.mk`, `.mk/image.mk` | `make rust-release-binaries`, then `make image-build-test` (a `dhi.io` login) |
-| `.github/workflows/release.yaml` | actionlint via `make check`; a release dry run is the only end-to-end check, so say which steps you could not exercise |
-| anything else | `make check` (pre-commit on all files: markdownlint, yamllint, actionlint, checkmake, shellcheck, …) |
+Facts the evidence has to be read against:
 
-Several hooks rewrite files (prettier, markdownlint, dclint): check `git status` afterwards and
-report a rewrite as a finding instead of reviewing the rewritten tree. A skipped test is not a
-pass: the integration runner prints `SKIP` for a test it could not run. If a gate
-is impractical here (no Docker daemon, no network for cargo-deny), say so explicitly and mark
-that risk unverified rather than implying it passed.
+- Which gates a changed path owes is `AGENTS.md`'s *Validation matrix*: a changed path with none
+  of its rows in the evidence is missing evidence. A gate that was impractical (no Docker daemon
+  for the DinD Swarm `make test-integration` needs, no network for cargo-deny) is unverified, not
+  passed.
+- A change to `.github/workflows/release.yaml` has no end-to-end check but a release dry run:
+  say which steps could not be exercised.
 
-## 7. Report
+## Report
 
 Rank by severity, worst first. Nothing is more important than a genuine correctness or
 read-only-invariant break: those are normally **critical**. Skip pure formatting the linters
@@ -372,7 +341,7 @@ already catch unless it changes meaning or breaks a required gate. For each find
 ```
 
 Findings first, then open questions or assumptions, then a one-line verdict: **block**,
-**approve with nits**, or **approve** — plus which verification gates you actually ran and which
-you couldn't. If you found nothing, state what you tried to break so the "no findings" is
+**approve with nits**, or **approve**, and one line: `Verification evidence: seen … / missing …`.
+If you found nothing, state what you tried to break so the "no findings" is
 credible. Be blunt; do not soften a real defect to be polite, and do not invent findings to look
 thorough.

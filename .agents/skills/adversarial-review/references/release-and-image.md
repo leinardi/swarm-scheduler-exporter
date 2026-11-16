@@ -1,6 +1,6 @@
 # Image, release and CI invariants — swarm-scheduler-exporter
 
-Back to [SKILL.md](../SKILL.md). These items belong to its §3 "Endpoint and image hardening".
+Back to [SKILL.md](../SKILL.md). These items belong to its "Endpoint and image hardening" invariants.
 Walk them when the diff touches `deployments/docker/**`, `.trivyignore.yaml`,
 `.github/workflows/**`, `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings, the
 shared `.mk/rust-release.mk` or `.mk/image.mk`, or `docs/release.md`.
