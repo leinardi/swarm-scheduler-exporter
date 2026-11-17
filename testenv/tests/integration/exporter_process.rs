@@ -85,6 +85,10 @@ pub async fn healthcheck_unhealthy(test: TestHandle) -> TestResult {
 
 /// Runs the exporter binary with `--healthcheck` against the exporter at `base_url`: its exit
 /// code and combined output. An error only when the probe could not run.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the suite runs the built exporter as its healthcheck probe"
+)]
 async fn run_healthcheck_probe(ctx: &Context, base_url: &str) -> Result<(i32, String), String> {
     let address = base_url.trim_start_matches("http://");
     let run = Command::new(&suite().exporter_binary)

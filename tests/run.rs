@@ -442,6 +442,10 @@ async fn resync_then_publish_is_healthy() {
 
 /// The binary, with an environment that holds only `env`: no Docker socket is reachable unless a
 /// test points `DOCKER_HOST` at one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests run the built exporter as a child"
+)]
 fn exporter(args: &[&str], env: &[(&str, &str)]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_swarm-scheduler-exporter"));
     command
@@ -635,6 +639,10 @@ fn wait_for_exit(child: &mut Child, bound: Duration) -> Option<std::process::Exi
 /// Q8: with every Docker request hanging for 30s, SIGTERM still ends the exporter with exit 0
 /// within the shutdown budget plus 100ms, and a second signal is swallowed.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test signals the exporter child with kill"
+)]
 fn shutdown_within_budget_while_docker_blocks() {
     let docker = blocking_docker();
     let listen = free_port();

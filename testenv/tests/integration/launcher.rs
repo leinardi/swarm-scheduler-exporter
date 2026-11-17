@@ -225,6 +225,10 @@ struct ExporterProc {
     exited: watch::Receiver<bool>,
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the suite runs the built exporter against the cluster"
+)]
 fn launch_exporter(port: u16, docker_host: &str, args: &[&str]) -> Result<ExporterProc, String> {
     let listen = local_addr(port).to_string();
     let mut command = Command::new(&suite().exporter_binary);

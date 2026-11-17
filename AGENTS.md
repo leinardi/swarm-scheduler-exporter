@@ -163,7 +163,8 @@ meta-tests' checks). The exporter keeps only what is its own.
 
 ## Invariants
 
-The full list, with what counts as a finding, is in `.agents/skills/adversarial-review/SKILL.md` §3.
+The full list, with what counts as a finding, is in `.agents/skills/adversarial-review/SKILL.md`,
+"Repository invariants".
 The ones to keep in mind while writing code:
 
 - **Read-only against Docker, enforced in code.** A `:ro` socket bind does not make the API
@@ -192,8 +193,12 @@ The ones to keep in mind while writing code:
 - **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `Zoned::now`,
   `SystemTime::now` and `std::time::Instant::now`; the time comes from the `Clock` trait, so tests
   drive it with tokio's paused clock. The time comes only through `clock::Clock`; the one
-  wall-clock read is clock's `SystemClock`, in rust-common, so this repository has no
-  `disallowed_methods` exemption.
+  wall-clock read is clock's `SystemClock`, in rust-common, so the exporter has no
+  `disallowed_methods` exemption for it.
+- **No child process.** `clippy.toml` also bans `std::process::Command::new` and
+  `tokio::process::Command::new`: the exporter spawns nothing. The tests, meta-tests and harness
+  functions that run a program carry an `#[expect(clippy::disallowed_methods, reason = "...")]`
+  each.
 - **Health means published data.** The health snapshot is evaluated at scrape time; nothing marks
   health from the poller itself.
 

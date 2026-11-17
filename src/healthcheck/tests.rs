@@ -239,6 +239,10 @@ async fn proxy_probe_in_child() {
 /// the probe still goes straight to the exporter. The variables are set on a child process,
 /// since a test cannot set its own environment safely.
 #[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test reruns its own binary as a child with the proxy variables set"
+)]
 async fn the_probe_ignores_the_proxy_variables() {
     let (proxy, proxy_connections) = raw_server(
         b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n".to_vec(),

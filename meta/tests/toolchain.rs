@@ -39,6 +39,10 @@ use repo_meta::vacuous::{AllowedFragment, VacuousFlags};
 use repo_meta::{Problem, report};
 
 /// Runs make in the repository without the flags of a parent make or commit hook.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the meta-test runs make to read the pins it records"
+)]
 fn make() -> std::process::Command {
     let mut command = std::process::Command::new("make");
     command

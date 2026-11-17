@@ -155,11 +155,16 @@ code that is not a whole step.
 
 `clippy.toml` bans `Timestamp::now`, `Zoned::now`, `SystemTime::now` and
 `std::time::Instant::now`; the time comes only through `clock::Clock`, whose one wall-clock
-read (`SystemClock`) lives in rust-common, so this repository has no exemption. Any
-`#[expect(clippy::disallowed_methods)]` here, a ban entry removed, or a
+read (`SystemClock`) lives in rust-common, so this repository has no exemption for them. An
+`#[expect(clippy::disallowed_methods)]` for a clock read, a ban entry removed, or a
 time read that bypasses the `Clock` (a timestamp gauge, a staleness check) is a finding: the
 tests drive health and timestamps with tokio's paused clock and would no longer see the code.
 `tokio::time::Instant` is allowed because it follows the paused clock.
+
+`clippy.toml` also bans `std::process::Command::new` and `tokio::process::Command::new`: the
+exporter spawns no process. Only a test, meta-test or harness function that runs a program
+(the built exporter, `make`, `kill`) carries an `#[expect(clippy::disallowed_methods)]` for it,
+with its reason; one on code under `src/` outside a test module is a finding.
 
 ### Poll consistency
 
