@@ -97,8 +97,10 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
     collector and builder (families built whole per poll and swapped in at once), `ScrapeGauge`,
     and `render` (OpenMetrics text). The fixed families use prometheus-client's counters and
     histogram directly.
-- `testenv/` — the DinD Swarm harness: the cluster, its bring-up and teardown and the suite's
-  names (`config.rs`) over testenv-core, with bollard behind its `integration` feature (the
+- `testenv/` — the DinD Swarm harness: testenv-core's `dind` Swarm (bring-up, teardown, the
+  keep-aware sweep) with the suite's names and keep label (`config.rs`), its `SSE_IT_*` spec
+  (`cluster.rs`) and the workload image load, its one setup step inside the bring-up's cleanup
+  boundary (`images.rs`), with bollard behind its `integration` feature (the
   exporter package names none of testenv, testenv-core and bollard in any table;
   `meta/tests/docker_boundary.rs` checks it),
   and the integration suite's runner and tests under `testenv/tests/integration`.

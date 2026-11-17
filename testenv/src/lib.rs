@@ -48,12 +48,14 @@ pub mod metrics_text;
 
 #[cfg(feature = "integration")]
 pub use cluster::{
-    Cluster, ENV_BINARY, ENV_DIND_IMAGE, ENV_KEEP_ON_FAILURE, ENV_WORKERS, Node, NodeRole, Spec,
-    new_logger, spec_from_env,
+    Cluster, ENV_BINARY, ENV_DIND_IMAGE, ENV_KEEP_ON_FAILURE, ENV_WORKERS, Spec, new_logger,
+    spec_from_env,
 };
 pub use config::cleanup_command;
 #[cfg(feature = "integration")]
-pub use dind::up;
+pub use dind::{NAMES, up, up_with};
 #[cfg(feature = "integration")]
 pub use images::WORKLOAD_IMAGE;
 pub use testenv_core::Error;
+#[cfg(feature = "integration")]
+pub use testenv_core::dind::{Node, NodeRole};

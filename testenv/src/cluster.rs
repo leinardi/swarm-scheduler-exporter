@@ -22,21 +22,19 @@
  * SOFTWARE.
  */
 
-//! The cluster's types: what is asked for ([`Spec`]), and what [`crate::up`] returns
-//! ([`Cluster`], made of [`Node`]s).
+//! The cluster's types: what is asked for ([`Spec`], from the `SSE_IT_*` variables), and what
+//! [`crate::up`] returns ([`Cluster`], testenv-core's `DinD` Swarm with the workload image).
 
-use std::collections::HashMap;
 use std::io::{self, Write as _};
 use std::num::IntErrorKind;
+use std::ops::Deref;
 
-use bollard::Docker;
 use clock::{Clock as _, SystemClock};
-use jiff::Timestamp;
+use testenv_core::dind::{self, Node};
 use testenv_core::redact::Logger;
-use testenv_core::sweep_rules::Owner;
 
 use crate::Error;
-use crate::config::{ENV_IDS, LABELS};
+use crate::config::ENV_IDS;
 
 /// The absolute path of the exporter binary the tests run against the cluster.
 pub const ENV_BINARY: &str = "SSE_IT_BINARY";
@@ -60,16 +58,8 @@ pub fn new_logger() -> Logger {
     })
 }
 
-/// The Swarm role a node was given.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NodeRole {
-    /// The Swarm manager.
-    Manager,
-    /// A Swarm worker.
-    Worker,
-}
-
-/// The requested topology and runtime settings of a test cluster.
+/// The requested topology and runtime settings of a test cluster, as the `SSE_IT_*` variables
+/// give them; [`crate::up`] turns it into testenv-core's [`dind::Spec`].
 #[derive(Debug, Clone)]
 pub struct Spec {
     /// Namespaces every resource of the run; [`spec_from_env`] generates one.
@@ -80,7 +70,8 @@ pub struct Spec {
     pub dind_image: String,
     /// The number of worker nodes; there is always exactly one manager.
     pub workers: usize,
-    /// Leaves a failed bring-up in place instead of removing it.
+    /// Leaves a failed bring-up or a failed run in place, labelled with [`crate::config::KEEP_LABEL`],
+    /// instead of removing it.
     pub keep_on_failure: bool,
     /// Receives the harness's progress.
     pub logger: Logger,
@@ -155,57 +146,26 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-/// One member of the cluster.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Node {
-    /// The `DinD` container name on the host.
-    pub name: String,
-    /// The `DinD` container ID on the host, the target of [`Cluster::pause_node`].
-    pub container_id: String,
-    /// The container hostname, which Swarm reports as the node hostname.
-    pub hostname: String,
-    /// The Swarm role the node was given at bring-up.
-    pub role: NodeRole,
-    /// The node's ID inside the test Swarm.
-    pub swarm_node_id: String,
-    /// The 127.0.0.1 port on the host mapped to the node's daemon.
-    pub host_port: u16,
-    /// The `DOCKER_HOST` value that reaches the node's daemon from the host.
-    pub docker_host: String,
-    /// The node's address on the run's bridge network, which Swarm advertises.
-    pub(crate) bridge_ip: String,
-}
-
-/// A running test Swarm returned by [`crate::up`]. Callers own it and must call
-/// [`Cluster::down`].
+/// A running test Swarm returned by [`crate::up`]: testenv-core's [`dind::Cluster`], which it
+/// derefs to (the spec, the nodes, `down`, `pause_node` and the rest), and the workload image
+/// loaded on every node. Callers own it and must call `down`.
 #[derive(Debug)]
 pub struct Cluster {
-    /// What was asked for.
-    pub spec: Spec,
-    /// The manager, also first in [`Cluster::nodes`].
-    pub manager: Node,
-    /// The manager first, then the workers in order.
-    pub nodes: Vec<Node>,
+    pub(crate) swarm: dind::Cluster,
     /// The ID (`sha256:...`) of the workload image loaded on every node. Services reference it
     /// by ID so no node ever contacts a registry.
     pub workload_image_id: String,
-    /// When bring-up began, the lower bound for reading the nodes' event logs.
-    pub started_at: Timestamp,
-    pub(crate) host_client: Docker,
-    /// The test process that brought the cluster up, recorded in the owner label.
-    pub(crate) owner: Owner,
+}
+
+impl Deref for Cluster {
+    type Target = dind::Cluster;
+
+    fn deref(&self) -> &dind::Cluster {
+        &self.swarm
+    }
 }
 
 impl Cluster {
-    /// The worker nodes, in bring-up order.
-    #[must_use]
-    pub fn workers(&self) -> Vec<&Node> {
-        self.nodes
-            .iter()
-            .filter(|node| node.role == NodeRole::Worker)
-            .collect()
-    }
-
     /// The node whose Swarm node ID is `swarm_node_id`.
     ///
     /// # Errors
@@ -220,20 +180,5 @@ impl Cluster {
                     "swarm node {swarm_node_id:?}: node is not part of the cluster"
                 ))
             })
-    }
-
-    /// The labels every resource of the cluster carries: its envid, which `down` and the manual
-    /// cleanup select by, and the owner and start time the sweep of a later run decides by.
-    #[must_use]
-    pub fn labels(&self) -> HashMap<String, String> {
-        LABELS.run_labels(&self.spec.env_id, &self.owner, self.started_at)
-    }
-
-    /// The client of the host daemon the nodes run on, for a test that needs a helper container
-    /// beside the cluster. Label what it creates with [`Cluster::labels`], so `down` removes it
-    /// even when the test's own cleanup never runs, and a later run's sweep can tell whose it is.
-    #[must_use]
-    pub fn host_client(&self) -> &Docker {
-        &self.host_client
     }
 }

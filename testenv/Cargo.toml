@@ -13,13 +13,15 @@ publish = false
 workspace = true
 
 # integration is Go's integration build tag: it compiles the modules that talk to a Docker daemon
-# (the cluster, its bring-up and teardown, the images) and the suite, and testenv-core's context,
-# testing, redacting logger and host sweep (its bollard feature implies async and redact). Without
-# it, only the /metrics text reader builds, and its tests run in a plain cargo test.
+# (the cluster's spec, the workload image) and the suite, and testenv-core's context, testing,
+# redacting logger, host sweep and DinD Swarm (its bollard feature implies async and redact, its
+# dind feature the nodes' plain-HTTP clients). Without it, only the /metrics text reader builds,
+# and its tests run in a plain cargo test.
 [features]
 integration = [
     "testenv-core/async",
     "testenv-core/bollard",
+    "testenv-core/dind",
     "testenv-core/redact",
     "dep:bollard",
     "dep:futures-util",

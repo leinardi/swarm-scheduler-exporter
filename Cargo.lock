@@ -1489,6 +1489,7 @@ version = "2.0.0"
 source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
 dependencies = [
  "bollard",
+ "futures-util",
  "jiff",
  "regex",
  "rustix",
