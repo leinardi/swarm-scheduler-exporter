@@ -55,6 +55,11 @@ pub const RESOURCES: Resources = Resources {
     images: false,
 };
 
+/// The label a failed run that keeps its environment (`SSE_IT_KEEP_ON_FAILURE`) puts on every
+/// resource, with the value `true`: the sweep of a later run leaves such a run alone, and only
+/// [`cleanup_command`] removes it.
+pub const KEEP_LABEL: &str = "swarm-scheduler-exporter.it.keep";
+
 /// Overrides how old an abandoned environment must be before the sweep removes it (an hour,
 /// testenv-core's `DEFAULT_STALE_AFTER`).
 pub const ENV_STALE_AFTER: &str = "SSE_IT_STALE_AFTER";

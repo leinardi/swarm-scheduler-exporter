@@ -77,13 +77,15 @@ make test-integration UPDATE=1 RUN=TestSnapshot_ # rewrite the golden file under
 expression per `/`-separated level (`'^TestSocketProxy_ExampleAllowlist/denied'`), unanchored, with
 a top-level `|` separating whole alternatives (`'^TestNode_Drain$|^TestService_'`). A pattern that
 selects no test fails the run instead of passing it, so a typo cannot certify coverage, and the run
-prints how many tests it selected. Each test and subtest prints a `--- PASS` or `--- FAIL` line with
-its duration, then the run prints the selected, passed and failed counts. `SSE_IT_BINARY` names
-another binary to test instead of the release build.
+prints how many tests it selected. Each test and subtest prints a `--- PASS`, `--- FAIL` or
+`--- SKIP` line with its duration, then the run prints the selected, passed, skipped and failed
+counts (`[it] 22 selected, 22 passed, 0 skipped, 0 failed`): a skipped test is not counted as
+passed. `SSE_IT_BINARY` names another binary to test instead of the release build.
 
 - `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails, and prints
   the manager's address (`DOCKER_HOST=tcp://127.0.0.1:<port> docker node ls`) and the command that
-  removes it.
+  removes it. Every resource of such a run carries `swarm-scheduler-exporter.it.keep=true`, so no
+  later run's sweep removes it: only that command or `make sweep-test-leaks` does.
 - `SSE_IT_WORKERS` changes the number of workers, `SSE_IT_DIND_IMAGE` the `docker:dind` image, and
   `SSE_IT_SUITE_TIMEOUT` (default `12m`) the deadline after which every waiting test fails and
   teardown runs.
@@ -95,7 +97,8 @@ so a run killed half-way can still be cleaned up by hand. Each run also removes 
 earlier runs that are abandoned: older than an hour (`SSE_IT_STALE_AFTER`, a Go duration), and owned
 (the `swarm-scheduler-exporter.it.owner` label, `<hostname>:<pid>`, and the `.pidns` label) by a
 process on this host, in this PID namespace, that no longer exists. An environment of another host,
-of a run still going, or without readable owner and start labels is kept, and the reason is logged.
+of a run still going, of a run started with `SSE_IT_KEEP_ON_FAILURE`, or without readable owner and
+start labels is kept, and the reason is logged.
 `make sweep-test-leaks` removes every labelled environment, whatever its age or owner — do not run
 it while another run is in progress.
 

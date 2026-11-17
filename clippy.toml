@@ -15,4 +15,7 @@ disallowed-methods = [
     { path = "jiff::Zoned::now", reason = "read the time from the injected Clock" },
     { path = "std::time::SystemTime::now", reason = "read the time from the injected Clock" },
     { path = "std::time::Instant::now", reason = "read the time from the injected Clock" },
+    # The exporter spawns no process; a test or the harness that runs a program says why.
+    { path = "std::process::Command::new", reason = "the exporter spawns no process" },
+    { path = "tokio::process::Command::new", reason = "the exporter spawns no process", allow-invalid = true },
 ]

@@ -32,9 +32,11 @@
 //! `SSE_IT_KEEP_ON_FAILURE` a failed run keeps it. Tests run one after another, since they share
 //! the cluster and several of them disrupt its nodes, and keep their Go names. `--run <pattern>`
 //! selects them with Go's `-run` semantics, subtests included, and a pattern that selects no test
-//! fails the run. Each test and subtest prints one `--- PASS` or `--- FAIL` line with its
-//! seconds, then the run prints the selected, passed and failed counts; any failure exits 1.
+//! fails the run. Each test and subtest prints one `--- PASS`, `--- FAIL` or `--- SKIP` line with
+//! its seconds, then the run prints the selected, passed, skipped and failed counts; any failure
+//! exits 1.
 
+mod bring_up;
 mod cluster_smoke;
 mod containers;
 mod events;
@@ -69,7 +71,8 @@ use crate::wait::go_duration;
 
 /// The runner's lines and exit codes, as Go's `TestMain` printed them: a negative
 /// `SSE_IT_SUITE_TIMEOUT` is clamped to zero, a test that starts after the deadline still runs
-/// (its waits fail on the dead context), and a skipped test counts as passed.
+/// (its waits fail on the dead context), and a skipped test is counted apart, not as passed
+/// (`[it] <n> selected, <passed> passed, <skipped> skipped, <failed> failed`).
 const RUNNER: RunnerConfig = RunnerConfig {
     prefix: "[it]",
     usage: "usage: integration [--run <pattern>]",
@@ -77,7 +80,7 @@ const RUNNER: RunnerConfig = RunnerConfig {
     default_timeout: Duration::from_mins(12),
     timeout_rule: TimeoutRule::Clamped,
     deadline_check: false,
-    tally: TallyStyle::PassedFailed,
+    tally: TallyStyle::WithSkipped,
 };
 
 /// Every test, in the order they run.
@@ -85,6 +88,18 @@ const TESTS: &[Test] = &[
     Test {
         name: "TestHarness_Smoke",
         run: |test| Box::pin(harness::harness_smoke(test)),
+    },
+    Test {
+        name: "TestBringUp_FailedLoadRemoves",
+        run: |test| Box::pin(bring_up::failed_load_removes(test)),
+    },
+    Test {
+        name: "TestBringUp_FailedLoadKeeps",
+        run: |test| Box::pin(bring_up::failed_load_keeps(test)),
+    },
+    Test {
+        name: "TestBringUp_CancelledLoadTearsDown",
+        run: |test| Box::pin(bring_up::cancelled_load_tears_down(test)),
     },
     Test {
         name: "TestCluster_Smoke",

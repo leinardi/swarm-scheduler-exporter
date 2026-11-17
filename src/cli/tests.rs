@@ -42,7 +42,7 @@ fn summary(args: &Args) -> String {
     format!(
         "listen={} poll={} containers={} swarm={} format={:?} level={:?} time={} labels={:?} then {next}",
         args.listen_addr,
-        humantime::format_duration(args.poll_delay),
+        crate::duration::format(args.poll_delay),
         args.containers,
         args.containers_include_swarm,
         args.log_format,

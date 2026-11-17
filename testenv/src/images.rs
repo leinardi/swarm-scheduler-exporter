@@ -37,8 +37,7 @@ use tokio::io::AsyncWriteExt as _;
 use tokio_util::io::ReaderStream;
 
 use crate::Error;
-use crate::cluster::Node;
-use crate::dind::{IMAGE_TRANSFER_TIMEOUT, ensure_host_image};
+use testenv_core::dind::{IMAGE_TRANSFER_TIMEOUT, Node, ensure_host_image};
 
 /// The one image every test service runs. It is digest-pinned so every run loads the same
 /// bytes, and it is pulled only on the host: the nodes receive it through an image load and

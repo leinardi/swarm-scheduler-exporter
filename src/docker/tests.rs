@@ -523,3 +523,49 @@ async fn an_unreachable_engine_fails_the_call_and_is_retried() {
     assert_eq!(first.kind(), ErrorKind::Unavailable, "{first}");
     assert!(client.node_list().await.is_err());
 }
+
+/// A port nothing listens on: bound, then released.
+fn closed_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
+}
+
+/// A refused TCP dial is worded as moby's client words it, naming the daemon host, whether it is
+/// the version negotiation's (docker-client's own call) or a bollard call's once the version is
+/// pinned (`DOCKER_API_VERSION`, no negotiation).
+#[tokio::test]
+async fn a_refused_tcp_dial_names_the_daemon_host() {
+    for pin in [None, Some("1.51")] {
+        let host = format!("tcp://127.0.0.1:{}", closed_port());
+        let getenv = |name: &str| match name {
+            "DOCKER_HOST" => Some(host.clone()),
+            "DOCKER_API_VERSION" => pin.map(str::to_owned),
+            _ => None,
+        };
+        let client = Client::new(settings_from_env(getenv).unwrap()).unwrap();
+        let error = client.service_list().await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Unavailable, "{pin:?}: {error}");
+        assert_eq!(
+            error.to_string(),
+            format!("Cannot connect to the Docker daemon at {host}. Is the docker daemon running?"),
+            "{pin:?}"
+        );
+    }
+}
+
+/// A unix socket that is not there yet does not stop the client from being built (it may appear
+/// later); each call fails with moby's text for that dial until it does.
+#[tokio::test]
+async fn a_missing_socket_fails_each_call_with_moby_s_text() {
+    let path = "/nonexistent/sse/docker.sock";
+    let client = Client::new(Config::unix(path).api_version("1.51").unwrap()).unwrap();
+    let error = client.node_list().await.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "failed to connect to the docker API at unix://{path}; check if the path is correct \
+             and if the daemon is running: dial unix {path}: connect: no such file or directory"
+        )
+    );
+}

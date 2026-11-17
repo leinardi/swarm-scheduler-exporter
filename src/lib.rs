@@ -27,6 +27,7 @@
 pub mod cli;
 pub mod collector;
 pub mod docker;
+pub mod duration;
 pub mod healthcheck;
 pub mod host_port;
 pub mod labels;

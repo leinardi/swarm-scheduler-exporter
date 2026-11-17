@@ -97,8 +97,10 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
     collector and builder (families built whole per poll and swapped in at once), `ScrapeGauge`,
     and `render` (OpenMetrics text). The fixed families use prometheus-client's counters and
     histogram directly.
-- `testenv/` — the DinD Swarm harness: the cluster, its bring-up and teardown and the suite's
-  names (`config.rs`) over testenv-core, with bollard behind its `integration` feature (the
+- `testenv/` — the DinD Swarm harness: testenv-core's `dind` Swarm (bring-up, teardown, the
+  keep-aware sweep) with the suite's names and keep label (`config.rs`), its `SSE_IT_*` spec
+  (`cluster.rs`) and the workload image load, its one setup step inside the bring-up's cleanup
+  boundary (`images.rs`), with bollard behind its `integration` feature (the
   exporter package names none of testenv, testenv-core and bollard in any table;
   `meta/tests/docker_boundary.rs` checks it),
   and the integration suite's runner and tests under `testenv/tests/integration`.
@@ -123,7 +125,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v1.1.0"`, with `version = "1.1"`) in
+dependency pinned by the release tag (`tag = "v2.0.0"`, with `version = "2.0"`) in
 `[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
@@ -163,7 +165,8 @@ meta-tests' checks). The exporter keeps only what is its own.
 
 ## Invariants
 
-The full list, with what counts as a finding, is in `.agents/skills/adversarial-review/SKILL.md` §3.
+The full list, with what counts as a finding, is in `.agents/skills/adversarial-review/SKILL.md`,
+"Repository invariants".
 The ones to keep in mind while writing code:
 
 - **Read-only against Docker, enforced in code.** A `:ro` socket bind does not make the API
@@ -192,8 +195,12 @@ The ones to keep in mind while writing code:
 - **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `Zoned::now`,
   `SystemTime::now` and `std::time::Instant::now`; the time comes from the `Clock` trait, so tests
   drive it with tokio's paused clock. The time comes only through `clock::Clock`; the one
-  wall-clock read is clock's `SystemClock`, in rust-common, so this repository has no
-  `disallowed_methods` exemption.
+  wall-clock read is clock's `SystemClock`, in rust-common, so the exporter has no
+  `disallowed_methods` exemption for it.
+- **No child process.** `clippy.toml` also bans `std::process::Command::new` and
+  `tokio::process::Command::new`: the exporter spawns nothing. The tests, meta-tests and harness
+  functions that run a program carry an `#[expect(clippy::disallowed_methods, reason = "...")]`
+  each.
 - **Health means published data.** The health snapshot is evaluated at scrape time; nothing marks
   health from the poller itself.
 

@@ -62,7 +62,7 @@ impl fmt::Display for ListenerStopped {
                 formatter,
                 "event listener canceled during backoff: backoff of {} interrupted: context \
                  canceled",
-                humantime::format_duration(*backoff)
+                crate::duration::format(*backoff)
             ),
         }
     }
