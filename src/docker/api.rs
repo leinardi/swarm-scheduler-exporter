@@ -182,7 +182,7 @@ impl Client {
     /// retried by every call): an unreadable certificate, a `User-Agent` no header can carry.
     pub fn new(config: Config) -> Result<Self, ConnectError> {
         match connect(config.clone()) {
-            Ok(_) | Err(ConnectError::Client(BollardError::SocketNotFoundError(_))) => {}
+            Ok(_) | Err(ConnectError::Dial { .. }) => {}
             Err(error) => return Err(error),
         }
         Ok(Self {
@@ -210,7 +210,11 @@ impl Client {
         self.docker
             .get_or_try_init(|| async {
                 let docker = connect(self.config.clone()).map_err(|error| match error {
-                    ConnectError::Client(error) => engine_error(error),
+                    ConnectError::Client(error) => self.engine_error(error),
+                    // A unix socket that is not there (yet): moby's text for that dial.
+                    dial @ ConnectError::Dial { .. } => {
+                        Error::new(ErrorKind::Unavailable, dial.to_string())
+                    }
                     other @ (ConnectError::Invalid(_) | ConnectError::Unsupported(_)) => {
                         Error::new(ErrorKind::Other, other.to_string())
                     }
@@ -227,15 +231,17 @@ impl Client {
                         );
                         Ok((docker, self.config.clone()))
                     }
-                    Err(error) => Err(Error::from(error)),
+                    Err(error) => Err(Error::from(error.at_host(self.config.daemon_host()))),
                 }
             })
             .await
     }
-}
 
-fn engine_error(error: BollardError) -> Error {
-    Error::from(docker_client::Error::from(error))
+    /// A failed bollard call as the exporter reports it: a dial that failed is worded as moby's
+    /// client words it, naming the configured daemon host (docker-client's `Error::at_host`).
+    fn engine_error(&self, error: BollardError) -> Error {
+        Error::from(docker_client::Error::from(error).at_host(self.config.daemon_host()))
+    }
 }
 
 /// moby's `trimID`: surrounding whitespace dropped, an empty ID refused.
@@ -262,7 +268,7 @@ impl DockerApi for Client {
                 .await?
                 .list_services(None::<ListServicesOptions>)
                 .await
-                .map_err(engine_error)?;
+                .map_err(|error| self.engine_error(error))?;
             list.into_iter().map(convert::service).collect()
         })
         .await
@@ -275,7 +281,7 @@ impl DockerApi for Client {
                 .await?
                 .list_nodes(None::<ListNodesOptions>)
                 .await
-                .map_err(engine_error)?;
+                .map_err(|error| self.engine_error(error))?;
             Ok(list.into_iter().map(convert::node).collect())
         })
         .await
@@ -289,7 +295,7 @@ impl DockerApi for Client {
                 .await?
                 .inspect_service(id, None)
                 .await
-                .map_err(engine_error)?;
+                .map_err(|error| self.engine_error(error))?;
             convert::service(service)
         })
         .await
@@ -302,7 +308,7 @@ impl DockerApi for Client {
                 .await?
                 .list_tasks(None::<ListTasksOptions>)
                 .await
-                .map_err(engine_error)?;
+                .map_err(|error| self.engine_error(error))?;
             list.into_iter().map(convert::task).collect()
         })
         .await
@@ -316,7 +322,7 @@ impl DockerApi for Client {
                 .await?
                 .list_containers(Some(options))
                 .await
-                .map_err(engine_error)?;
+                .map_err(|error| self.engine_error(error))?;
             Ok(list.into_iter().map(convert::container_summary).collect())
         })
         .await
@@ -330,7 +336,7 @@ impl DockerApi for Client {
                 .await?
                 .inspect_container(id, None)
                 .await
-                .map_err(engine_error)?;
+                .map_err(|error| self.engine_error(error))?;
             Ok(convert::container_inspect(inspect))
         })
         .await
