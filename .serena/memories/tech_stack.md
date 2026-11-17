@@ -6,7 +6,7 @@
   arm64 via cargo-zigbuild and zig (`make rust-release-binaries`; pins recorded in the Makefile,
   copied by the Dockerfile and the workflows' gh-composite-actions `setup-zigbuild` steps); version
   strings from `SWARM_SCHEDULER_EXPORTER_{VERSION,COMMIT,DATE}` at compile time.
-- Libraries: humantime (durations), ipnet (CIDR), tokio, hyper + hyper-util (healthcheck client),
+- Libraries: ipnet (CIDR), tokio, hyper + hyper-util (healthcheck client),
   axum (routes), clap, jiff, serde, prometheus-client (registry and OpenMetrics encoder). From
   leinardi/rust-common (git, pinned by release tag): docker-client (Docker connection over bollard,
   rustls with ring), tracing-setup (logger subscriber),

@@ -31,8 +31,9 @@ The README "Migrating" section lists the intended differences from 1.x (Go) and 
     `exporter_metrics.rs`.
 - `src/labels.rs` (custom label keys), `src/server.rs` (`/metrics`, `/healthz`: an axum
   router on service-kit's http server). Metrics are prometheus-client's (OpenMetrics text,
-  `src/metrics.rs`), the logger tracing-setup's (`tracing` macros, clap-parsed flags); durations
-  are humantime's, CIDRs ipnet's, `host_port.rs` and `text.rs` are the exporter's own.
+  `src/metrics.rs`), the logger tracing-setup's (`tracing` macros, clap-parsed flags); CIDRs
+  are ipnet's; `duration.rs` (humantime 2.4.0's duration syntax, ported), `host_port.rs` and
+  `text.rs` are the exporter's own.
 - `tests/`: `engine_wire.rs` (fake Engine replaying `tests/testdata/engine_wire/`),
   `metrics.rs` (inventory, values, buckets, removal, atomicity), `run.rs` (lifecycle, flags).
 - `testenv/`: the DinD Swarm harness over testenv-core; bollard and every Docker-driving module

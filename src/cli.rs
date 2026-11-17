@@ -31,7 +31,7 @@
 //! clap alone would read `-unknown` as the short cluster `-u` and print the help for `-hx`.
 //! Kept from Go: the names, defaults and help texts, last value wins, `--containers=false`, a
 //! repeatable `--label` refusing an empty value, and exit 2 on a parse error. Bool flags take
-//! `true` or `false` only and `--poll-delay` takes humantime durations (see the README, Q17).
+//! `true` or `false` only and `--poll-delay` takes humantime's durations (`crate::duration`; see the README, Q17).
 
 use std::ffi::OsString;
 use std::fmt;
@@ -130,7 +130,7 @@ pub struct Args {
     #[arg(
         long,
         default_value = "10s",
-        value_parser = humantime::parse_duration,
+        value_parser = crate::duration::parse,
         allow_hyphen_values = true,
         value_name = "duration",
         help = "How often to poll tasks (e.g. 10s, 1m, 1m30s). Minimum 1s."
@@ -353,7 +353,7 @@ pub struct PollDelayTooShort;
 impl fmt::Display for PollDelayTooShort {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("poll-delay must be >= ")?;
-        formatter.write_str(&humantime::format_duration(MIN_POLL_DELAY).to_string())
+        formatter.write_str(&crate::duration::format(MIN_POLL_DELAY))
     }
 }
 
