@@ -6,10 +6,11 @@ A Prometheus exporter for Docker Swarm's scheduler: desired and running replicas
 accurate eligibility for `global` services), live task state, service update/rollback state, node
 availability and, opt-in, container state. It only ever reads from the Docker API. A Rust
 workspace (edition 2024, toolchain pinned in `rust-toolchain.toml`) since 2.0; 1.x was written in
-Go, and the README's "Migrating" section lists every behaviour that changed since. The metrics,
+Go, and `docs/migration.md` lists every behaviour that changed since. The metrics,
 flags and health rules are the contract; Go 1.x is history, not an authority. Fork of
 [akerouanton/swarm-tasks-exporter](https://github.com/akerouanton/swarm-tasks-exporter). The README
-is the user-facing story; the metrics it lists are the public contract.
+and `docs/` are the user-facing story; the metrics in `docs/metrics.md` are the public
+contract.
 
 ## Common commands
 
@@ -117,7 +118,9 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   [`docs/release.md`](docs/release.md)), `scheduled-scan.yaml` and `pre-commit-warmup.yaml`. Shared
   steps come from [gh-composite-actions](https://github.com/leinardi/gh-composite-actions), pinned
   by SHA. `.trivyignore.yaml` holds the scans' accepted findings.
-- `docs/release.md` — how a release is cut and recovered, and what CI proves for it.
+- `docs/` — the user-facing reference the README links to (`metrics.md`, `configuration.md`,
+  `deployment.md`, `operations.md`, `alerts.md`, `migration.md`), and `release.md`: how a release
+  is cut and recovered, and what CI proves for it.
 - `scripts/` — the licence-header check, `image-test.sh` (the image tests in three tiers: CI's full
   amd64 and reduced arm64 suites, and the release's smoke test), the make-common bootstrap and the
   Claude Code `rustfmt` hook (`scripts/hooks/rustfmt-on-edit.sh`, wired in `.claude/settings.json`).
@@ -137,7 +140,7 @@ meta-tests' checks). The exporter keeps only what is its own.
 - A fix to shared code lands in rust-common first; this repository then moves its pin: change
   the `tag` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
   `git diff Cargo.lock` touches only the rust-common lines.
-- The parameters this exporter passes (the README's Migrating section lists what differs from 1.x
+- The parameters this exporter passes (`docs/migration.md` lists what differs from 1.x
   and 2.x):
   the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
   `process-metrics`; Q2); the server's header-read (5s) and write-stall (15s) timeouts and the
@@ -178,8 +181,9 @@ The ones to keep in mind while writing code:
   its own, the calls are only reads whose sections the shipped socket-proxy allowlist grants, and
   bollard (which the harness creates and removes things with) is declared directly only by the
   harness, outside the exporter package.
-- **Metrics are the public contract.** A renamed metric or a changed label set updates the README's
-  Metrics section (and any alert example) in the same change. No label fed by an unbounded value.
+- **Metrics are the public contract.** A renamed metric or a changed label set updates
+  `docs/metrics.md` (and any alert example in `docs/alerts.md`) in the same change. No label fed
+  by an unbounded value.
 - **Series lifecycle.** A removed resource's series are deleted, never set to 0; known state sets
   are emitted exhaustively; snapshot families are built whole and swapped in one step.
 - **One owner for Swarm state.** Only the reconciler task writes the caches and derived gauges;

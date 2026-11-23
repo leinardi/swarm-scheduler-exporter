@@ -31,7 +31,7 @@
 //! clap alone would read `-unknown` as the short cluster `-u` and print the help for `-hx`.
 //! Kept from Go: the names, defaults and help texts, last value wins, `--containers=false`, a
 //! repeatable `--label` refusing an empty value, and exit 2 on a parse error. Bool flags take
-//! `true` or `false` only and `--poll-delay` takes humantime's durations (`crate::duration`; see the README, Q17).
+//! `true` or `false` only and `--poll-delay` takes humantime's durations (`crate::duration`; see `docs/migration.md`, Q17).
 
 use std::ffi::OsString;
 use std::fmt;

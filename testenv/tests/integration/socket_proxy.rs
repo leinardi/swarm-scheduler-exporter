@@ -89,8 +89,8 @@ fn repo_file(relative: &str) -> std::path::PathBuf {
 /// Go: `TestSocketProxy_ExampleAllowlist`. Runs the real, pinned tecnativa/docker-socket-proxy
 /// image with the example's socket-proxy.env in front of the test Swarm's manager: the exporter
 /// must work through it, what the allowlist leaves off must be refused, and the breadth the
-/// README states for `CONTAINERS=1` must hold. The in-process fault proxy of the other tests
-/// forwards everything, so it says nothing about this ACL.
+/// `docs/deployment.md` states for `CONTAINERS=1` must hold. The in-process fault proxy of the
+/// other tests forwards everything, so it says nothing about this ACL.
 pub async fn example_allowlist(test: TestHandle) -> TestResult {
     let image = socket_proxy_image(&test)?;
     let allowlist = read_socket_proxy_env(&test)?;
@@ -159,9 +159,9 @@ async fn denied(
     Ok(())
 }
 
-/// The breadth the README states: every enabled section forwards every GET under its prefix,
-/// logs included. The exporter runs as a host process, so there is no exporter container to read
-/// from: IDs that do not exist show whether the proxy forwards the request (a 404 from the
+/// The breadth `docs/deployment.md` states: every enabled section forwards every GET under its
+/// prefix, logs included. The exporter runs as a host process, so there is no exporter container to
+/// read from: IDs that do not exist show whether the proxy forwards the request (a 404 from the
 /// daemon) or refuses it (its own 403).
 async fn scope(test: &TestHandle, proxy: &SocketProxy) -> TestResult {
     for path in [
@@ -184,7 +184,7 @@ async fn scope(test: &TestHandle, proxy: &SocketProxy) -> TestResult {
         if status != 404 || message.is_empty() {
             test.error(format!(
                 "GET {path} = {status} {:?}, want the daemon's 404 with a JSON message: the \
-                 proxy forwards every GET under an enabled section, as the README states",
+                 proxy forwards every GET under an enabled section, as docs/deployment.md states",
                 String::from_utf8_lossy(&body)
             ));
         }

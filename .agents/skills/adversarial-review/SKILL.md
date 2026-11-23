@@ -99,9 +99,9 @@ change to `socket-proxy.env` without the test still passing are findings.
 ### Metrics are the public contract
 
 Dashboards and alerts key on metric names and label sets. A renamed metric, or a label
-added, removed or renamed, is a finding unless the README's Metrics section (and any alert
-example that uses it) changes in the same diff — and even then, call out the break for
-existing users. A label fed by an unbounded value (container or task IDs, timestamps,
+added, removed or renamed, is a finding unless `docs/metrics.md` (and any alert
+example in `docs/alerts.md` that uses it) changes in the same diff — and even then, call out the
+break for existing users. A label fed by an unbounded value (container or task IDs, timestamps,
 free-form strings) is a cardinality finding.
 
 ### Series lifecycle
@@ -206,8 +206,8 @@ The health snapshot (`src/collector/health.rs`) is evaluated at scrape time, by 
 the `swarm_exporter_health` `GaugeFunc` alike. It is unhealthy until the first resync completes,
 until a poll has been published, when the last published poll is older than `max(3 × poll delay,
 30s)`, and when a requested resync has been outstanding for longer than that window. A health signal
-set by the poller itself, a timestamp moved on a failed or partial publish, or a README reason
-string that no longer matches the code is a finding.
+set by the poller itself, a timestamp moved on a failed or partial publish, or a reason string
+in `docs/operations.md` that no longer matches the code is a finding.
 
 ### Endpoint and image hardening
 
@@ -264,10 +264,10 @@ image hardening" (including its reference) and "Bounded work" items against it.
 
 A diff that removes a user-visible surface — a metric, a label, a flag, an environment
 variable, a health behavior — and in the same breath rewrites that surface's test to assert it
-is *absent* must cite the specification line that retired it. The specification here is the
-README: its Metrics, Configuration (Flags, Environment) and Health sections. A commit message is
-not a specification, and a README that still documents the surface means the removal is
-unspecified.
+is *absent* must cite the specification line that retired it. The specification here is
+`docs/metrics.md`, `docs/configuration.md` (Flags, Environment) and the Health section of
+`docs/operations.md`. A commit message is not a specification, and a page that still documents
+the surface means the removal is unspecified.
 
 A test flipped from "X happens" to "X does not happen" is not evidence that X should go — it is
 the deletion wearing the test's clothes. Ask, in order: which spec line retires this surface, and
@@ -299,10 +299,10 @@ rule drift apart, and the one the reviewer did not read is the one that keeps th
 The configuration and metrics contracts are written down more than once and can disagree
 silently.
 
-- A flag added or changed in `src/cli.rs` needs its entry in the README's Flags section (clap's
-  `--help` output), with the same name, default and meaning.
-- The same holds for the Docker client environment variables in the README's Environment
-  section and for the metric list in its Metrics section.
+- A flag added or changed in `src/cli.rs` needs its entry in the Flags section of
+  `docs/configuration.md` (clap's `--help` output), with the same name, default and meaning.
+- The same holds for the Docker client environment variables in its Environment
+  section and for the metric list in `docs/metrics.md`.
 
 A surface the code has and the docs do not mention is a finding; so is a documented one nothing
 implements, and so is a default in the docs that differs from the code.
