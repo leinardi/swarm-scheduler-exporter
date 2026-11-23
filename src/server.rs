@@ -236,7 +236,19 @@ pub async fn serve_until_done(
     router: Router,
     deadline: impl FnOnce() -> Instant,
 ) -> i32 {
-    let (deadline, failure) = match bind(address).await {
+    serve_bound(root, workers, bind(address).await, router, deadline).await
+}
+
+/// [`serve_until_done`] past the bind, on the bind's result. A test passes a listener it already
+/// bound on port 0, so no other process or test can take its port before the server listens.
+async fn serve_bound(
+    root: &CancellationToken,
+    workers: impl Future<Output = ()>,
+    listener: Result<TcpListener, ListenError>,
+    router: Router,
+    deadline: impl FnOnce() -> Instant,
+) -> i32 {
+    let (deadline, failure) = match listener {
         Err(error) => (deadline(), Some(error.to_string())),
         Ok(listener) => serve_listener(root, listener, router, deadline).await,
     };
