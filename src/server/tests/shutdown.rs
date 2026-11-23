@@ -28,6 +28,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::routing::get;
+use tokio::sync::Notify;
 
 use super::*;
 use crate::test_support::capture_logs;
@@ -36,29 +37,55 @@ use tracing::level_filters::LevelFilter;
 /// How long a test waits for something that should happen at once.
 const BOUND: Duration = Duration::from_secs(5);
 
-/// The exporter's routes plus a `/slow` one, which waits `duration` before it answers.
-fn slow_app(duration: Duration) -> Router {
-    healthy_app().route(
+/// The exporter's routes plus a `/slow` one, which signals its arrival and then waits `duration`
+/// before it answers.
+fn slow_app(duration: Duration) -> (Router, Arc<Notify>) {
+    let arrived = Arc::new(Notify::new());
+    let signal = Arc::clone(&arrived);
+    let app = healthy_app().route(
         "/slow",
-        get(move || async move {
-            tokio::time::sleep(duration).await;
-            "slow done\n"
+        get(move || {
+            let signal = Arc::clone(&signal);
+            async move {
+                signal.notify_one();
+                tokio::time::sleep(duration).await;
+                "slow done\n"
+            }
         }),
-    )
+    );
+    (app, arrived)
 }
 
-/// A free loopback address: bound, then released.
-fn free_address() -> SocketAddr {
-    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    free.local_addr().unwrap()
+/// A listener on a port the system chose. It stays bound from here on, so the port cannot be taken
+/// before the server serves on it, and a connection made now waits in the backlog.
+async fn listening() -> (TcpListener, SocketAddr) {
+    let listener = bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    (listener, address)
 }
 
-async fn wait_listening(address: SocketAddr) {
+/// Asserts that nothing listens on `address` any more, by binding it: a listening socket refuses
+/// that even with `SO_REUSEADDR`. A connection would not show it, because another test can already
+/// listen on the released port, and for the same reason a refused bind is retried.
+async fn assert_released(address: SocketAddr) {
     let deadline = Instant::now() + BOUND;
-    while TcpStream::connect(address).await.is_err() {
-        assert!(Instant::now() < deadline, "never listened");
+    while bind(&address.to_string()).await.is_err() {
+        assert!(Instant::now() < deadline, "{address} is still listening");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// Sends a request to `/slow` and returns once its handler is running.
+async fn request_slow(address: SocketAddr, arrived: &Notify) -> TcpStream {
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+        .await
+        .unwrap();
+    tokio::time::timeout(BOUND, arrived.notified())
+        .await
+        .expect("the request never reached its handler");
+    stream
 }
 
 /// An accept error that is not transient stops the server at once, with the caller's stop still
@@ -79,10 +106,7 @@ async fn a_fatal_accept_error_stops_the_server_at_once() {
     .await
     .expect("serve did not return after the accept error");
     assert!(matches!(outcome, Outcome::ListenerFailed(_)), "{outcome:?}");
-    assert_eq!(
-        TcpStream::connect(address).await.unwrap_err().kind(),
-        std::io::ErrorKind::ConnectionRefused
-    );
+    assert_released(address).await;
 }
 
 /// Go: `TestServeUntilDone_ListenFailure`: a busy port is exit code 1, logged, and the workers
@@ -125,53 +149,55 @@ async fn serve_until_done_fails_on_a_busy_port() {
 /// A requested shutdown exits 0, and the server stops listening.
 #[tokio::test]
 async fn serve_until_done_stops_on_cancellation() {
-    let address = free_address();
+    let (listener, address) = listening().await;
     let root = CancellationToken::new();
     let serving = {
         let root = root.clone();
         tokio::spawn(async move {
-            serve_until_done(&root, async {}, &address.to_string(), healthy_app(), || {
+            serve_bound(&root, async {}, Ok(listener), healthy_app(), || {
                 Instant::now() + Duration::from_secs(10)
             })
             .await
         })
     };
-    wait_listening(address).await;
+    // An answer shows the server is running, so the cancellation stops a live server.
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(BOUND, stream.read_to_end(&mut answer))
+        .await
+        .expect("no answer")
+        .unwrap();
+    assert!(answer.starts_with(b"HTTP/1.1 200 OK\r\n"), "{answer:?}");
     root.cancel();
     let exit_code = tokio::time::timeout(BOUND, serving)
         .await
         .expect("serve_until_done did not return after cancellation")
         .unwrap();
     assert_eq!(exit_code, 0);
-    assert!(TcpStream::connect(address).await.is_err());
+    assert_released(address).await;
 }
 
 /// A request in flight at the stop is answered before the deadline, with nothing warned.
 #[tokio::test]
 async fn a_request_in_flight_finishes_within_the_drain() {
-    let address = free_address();
+    let (listener, address) = listening().await;
     let root = CancellationToken::new();
     let logs = capture_logs(LevelFilter::INFO);
+    let (app, arrived) = slow_app(Duration::from_millis(300));
     let serving = {
         let root = root.clone();
         tokio::spawn(async move {
-            serve_until_done(
-                &root,
-                async {},
-                &address.to_string(),
-                slow_app(Duration::from_millis(300)),
-                || Instant::now() + Duration::from_secs(5),
-            )
+            serve_bound(&root, async {}, Ok(listener), app, || {
+                Instant::now() + Duration::from_secs(5)
+            })
             .await
         })
     };
-    wait_listening(address).await;
-    let mut stream = TcpStream::connect(address).await.unwrap();
-    stream
-        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut stream = request_slow(address, &arrived).await;
     root.cancel();
     let mut answer = Vec::new();
     tokio::time::timeout(BOUND, stream.read_to_end(&mut answer))
@@ -191,29 +217,20 @@ async fn a_request_in_flight_finishes_within_the_drain() {
 /// and the request that did not finish gets no answer.
 #[tokio::test]
 async fn serve_until_done_warns_about_a_drain_past_the_deadline() {
-    let address = free_address();
+    let (listener, address) = listening().await;
     let root = CancellationToken::new();
     let logs = capture_logs(LevelFilter::INFO);
+    let (app, arrived) = slow_app(Duration::from_secs(30));
     let serving = {
         let root = root.clone();
         tokio::spawn(async move {
-            serve_until_done(
-                &root,
-                async {},
-                &address.to_string(),
-                slow_app(Duration::from_secs(30)),
-                || Instant::now() + Duration::from_millis(200),
-            )
+            serve_bound(&root, async {}, Ok(listener), app, || {
+                Instant::now() + Duration::from_millis(200)
+            })
             .await
         })
     };
-    wait_listening(address).await;
-    let mut stream = TcpStream::connect(address).await.unwrap();
-    stream
-        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut stream = request_slow(address, &arrived).await;
     let cancelled = Instant::now();
     root.cancel();
     let exit_code = tokio::time::timeout(BOUND, serving).await.unwrap().unwrap();
@@ -245,28 +262,24 @@ async fn serve_until_done_warns_about_a_drain_past_the_deadline() {
 /// more time, so the whole takes the budget once, not twice.
 #[tokio::test(start_paused = true)]
 async fn the_worker_wait_shares_the_deadline() {
-    let address = free_address();
+    let (listener, address) = listening().await;
     let root = CancellationToken::new();
+    let (app, arrived) = slow_app(Duration::from_secs(300));
     let serving = {
         let root = root.clone();
         tokio::spawn(async move {
-            serve_until_done(
+            serve_bound(
                 &root,
                 std::future::pending::<()>(),
-                &address.to_string(),
-                slow_app(Duration::from_secs(300)),
+                Ok(listener),
+                app,
                 || Instant::now() + Duration::from_secs(10),
             )
             .await
         })
     };
-    wait_listening(address).await;
-    let mut stream = TcpStream::connect(address).await.unwrap();
-    stream
-        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Held open: the request stays in flight.
+    let _stream = request_slow(address, &arrived).await;
     let stopped = Instant::now();
     root.cancel();
     let exit_code = serving.await.unwrap();
@@ -288,22 +301,19 @@ async fn an_accept_failure_drains_within_the_deadline() {
     let address = listener.local_addr().unwrap();
     let breaker = socket2::Socket::from(listener.as_fd().try_clone_to_owned().unwrap());
     let root = CancellationToken::new();
+    let (app, arrived) = slow_app(Duration::from_secs(30));
     let serving = tokio::spawn({
         let root = root.clone();
         async move {
             // The server's own drain allows the shutdown budget; the deadline allows 300ms.
-            serve_listener(&root, listener, slow_app(Duration::from_secs(30)), || {
+            serve_listener(&root, listener, app, || {
                 Instant::now() + Duration::from_millis(300)
             })
             .await
         }
     });
-    let mut stream = TcpStream::connect(address).await.unwrap();
-    stream
-        .write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Held open: the request stays in flight.
+    let _stream = request_slow(address, &arrived).await;
     let failed = Instant::now();
     breaker.shutdown(std::net::Shutdown::Read).unwrap();
     let (at, failure) = tokio::time::timeout(BOUND, serving)
