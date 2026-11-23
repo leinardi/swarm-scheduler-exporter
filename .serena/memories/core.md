@@ -8,7 +8,7 @@ since moved onto shared crates.
 
 AGENTS.md (repo root) is the authoritative contract: layout, commands, invariants, validation
 matrix, commit types. Read it before any change; memories below only add what it does not say.
-The README "Migrating" section lists the intended differences from 1.x (Go) and 2.x (Q1-Q17).
+`docs/migration.md` lists the intended differences from 1.x (Go) and 2.x (Q1-Q17).
 
 ## Source map
 
@@ -41,7 +41,7 @@ The README "Migrating" section lists the intended differences from 1.x (Go) and 
   the release binary (`SSE_IT_BINARY`).
 - `meta/`: meta-tests over the repository, repo-meta's checks with this repository's parameters
   (toolchain pins, Dockerfile) plus the local Docker SDK boundary, no Docker needed.
-- User-facing contract: the README Metrics section (and alert examples).
+- User-facing contract: `docs/metrics.md` (and the alert examples in `docs/alerts.md`).
 
 ## Non-obvious anchors
 

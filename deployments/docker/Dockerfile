@@ -159,7 +159,7 @@ EXPOSE 8888
 # The image has no shell or curl, so the binary probes its own /healthz. The start period covers
 # the first resync, including its retry backoff. The probe uses the default --listen-addr: a
 # deployment that changes --listen-addr must override this check and pass the same address (see
-# the README Health section). An exporter that stays unhealthy is stuck, and Swarm replacing the
+# docs/operations.md, Health). An exporter that stays unhealthy is stuck, and Swarm replacing the
 # unhealthy task is the intended remedy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD ["/usr/local/bin/swarm-scheduler-exporter", "--healthcheck"]

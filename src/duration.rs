@@ -38,7 +38,8 @@
 
 //! The `--poll-delay` spellings and the way a delay prints: humantime 2.4.0's `parse_duration`
 //! and `format_duration`, ported because humantime is unmaintained (RUSTSEC-2026-0542). What it
-//! accepts, how it refuses and what it prints are the README's Q17 and stay byte for byte.
+//! accepts, how it refuses and what it prints are Q17 in `docs/migration.md` and stay byte for
+//! byte.
 //!
 //! A duration is one or more spans, each a whole or decimal number and a unit, with any
 //! whitespace between them and none required (`1m30s`, `1m 30s`, `1.5s`); a lone `0` is zero.

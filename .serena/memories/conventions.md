@@ -16,8 +16,8 @@ repeatedly bite:
 Suppressions: only `#[expect(lint, reason = "...")]`. The reason says why the fix does not apply,
 not which lint fired.
 
-Behaviour changes: any change to the metrics, flags, health rules or logs that the README's
-"Migrating" section does not list is a defect. Rust sources never name a Go source file.
+Behaviour changes: any change to the metrics, flags, health rules or logs that
+`docs/migration.md` does not list is a defect. Rust sources never name a Go source file.
 
 Tests: paused tokio clock for time; integration waits poll (`eventually`, `consistently`), never
 sleep. Every `.rs` file carries the MIT `/* */` header.
