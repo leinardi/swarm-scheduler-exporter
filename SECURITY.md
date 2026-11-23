@@ -33,7 +33,7 @@ still worth reporting here if the weekly scheduled scan has not caught it.
   interface that exposes nothing else. Mounting the socket with `:ro` does not make the API
   read-only, and access to the Docker socket is equivalent to root on the host. To enforce read-only
   access at runtime, put a socket proxy in front of the Docker API: the tested example in [Behind a
-  socket proxy](README.md#-behind-a-socket-proxy-recommended) makes the API read-only, not
+  socket proxy](docs/deployment.md#behind-a-socket-proxy-recommended) makes the API read-only, not
   least-privilege: its sections match by path prefix, so the `SERVICES` and `TASKS` the exporter
   needs also allow service and task logs, and `CONTAINERS=1` allows every `GET` under `/containers`.
   See also [Security & Permissions](README.md#-security--permissions).
