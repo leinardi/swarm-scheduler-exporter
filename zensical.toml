@@ -1,0 +1,133 @@
+# The Swarm Scheduler Exporter documentation site, for Zensical 0.1.3 (from the repo-docs-toolkit
+# zensical-site skill). Build it with make docs-build, which runs Zensical from tools/docs/uv.lock;
+# docs.yaml builds into site/ on CI.
+
+[project]
+site_name = "Swarm Scheduler Exporter"
+site_url = "https://leinardi.github.io/swarm-scheduler-exporter/"  # needed for instant navigation and the sitemap
+site_description = "Prometheus exporter for Docker Swarm focused on task state visibility, accurate desired replicas, and operability at scale."
+repo_url = "https://github.com/leinardi/swarm-scheduler-exporter"
+edit_uri = "edit/master/docs/"
+copyright = "Copyright &copy; 2025 Roberto Leinardi"
+
+# Maintainer-only pages live in docs/internal/ and are never published.
+exclude_docs = """
+internal/
+"""
+
+# The landing page stylesheet (as shipped) and the project's brand colour.
+extra_css = ["stylesheets/home.css", "stylesheets/brand.css"]
+
+nav = [
+  { "Home" = "index.md" },
+  { "Getting started" = "getting-started.md" },
+  { "Guides" = [{ "Deployment" = "deployment.md" }, { "Example alerts" = "alerts.md" }, { "Verifying releases" = "verifying-releases.md" }, { "Migration" = "migration.md" }] },
+  { "Reference" = [{ "Configuration" = "configuration.md" }, { "Metrics" = "metrics.md" }, { "Operations" = "operations.md" }] },
+]
+
+[project.theme]
+custom_dir = "overrides"  # holds home.html, the landing page template
+# The brand icon on its tile (docs/assets/icon.svg), which reads on both schemes, and its
+# heavier-stroked small variant as the favicon. Both are copies from the brand kit.
+logo = "assets/icon.svg"
+favicon = "assets/favicon.svg"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "content.tabs.link",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.tabs",
+  "navigation.top",
+  "search.highlight",
+  # Do not add search.suggest or search.share: Zensical 0.1.3 ignores both.
+  # navigation.indexes does not work with toc.integrate; navigation.prune not with navigation.expand.
+]
+
+# Three palette entries (system, light, dark) with one accent. primary = "custom" takes the
+# colour from stylesheets/brand.css; a named colour ("indigo", "teal", ...) works too.
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.plugins.search]
+
+# GitHub alerts (> [!NOTE]) render as admonitions, so a page reads the same on GitHub and on the site.
+[project.plugins.gh-admonitions]
+
+# Redirects keep old URLs working after a page moves; anchors work too ("old.md#a" = "new.md#b").
+# docstool plan apply adds entries here for the pages a restructure moves.
+# [project.plugins.redirects.redirect_maps]
+# "old-page.md" = "guide/new-page.md"
+
+# Setting markdown_extensions replaces Zensical's defaults, so this list is complete on purpose.
+[project.markdown_extensions.abbr]
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.def_list]
+[project.markdown_extensions.footnotes]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.tables]
+
+# GitHub-compatible anchors: the same #slug works on GitHub and on the site.
+[project.markdown_extensions.toc]
+permalink = true
+slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } }
+
+[project.markdown_extensions."pymdownx.betterem"]
+[project.markdown_extensions."pymdownx.caret"]
+[project.markdown_extensions."pymdownx.details"]
+[project.markdown_extensions."pymdownx.emoji"]
+emoji_index = "zensical.extensions.emoji.twemoji"
+emoji_generator = "zensical.extensions.emoji.to_svg"
+[project.markdown_extensions."pymdownx.highlight"]
+anchor_linenums = true
+line_spans = "__span"
+pygments_lang_class = true
+[project.markdown_extensions."pymdownx.inlinehilite"]
+[project.markdown_extensions."pymdownx.keys"]
+[project.markdown_extensions."pymdownx.magiclink"]
+[project.markdown_extensions."pymdownx.mark"]
+# fractions stays off: it turns "1/2" in prose into a vulgar fraction.
+[project.markdown_extensions."pymdownx.smartsymbols"]
+fractions = false
+
+# Snippets: --8<-- "compose.yaml" includes a repository file; a missing one fails the build.
+[project.markdown_extensions."pymdownx.snippets"]
+base_path = ["."]
+check_paths = true
+
+# Mermaid diagrams in ```mermaid fences.
+[project.markdown_extensions."pymdownx.superfences"]
+custom_fences = [{ name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }]
+
+[project.markdown_extensions."pymdownx.tabbed"]
+alternate_style = true
+combine_header_slug = true
+[project.markdown_extensions."pymdownx.tasklist"]
+custom_checkbox = true
+[project.markdown_extensions."pymdownx.tilde"]
+
+# Link and anchor checks in the build (the Zensical 0.1.3 defaults, written out).
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true
