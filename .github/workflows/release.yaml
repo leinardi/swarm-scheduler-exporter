@@ -106,7 +106,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-    uses: leinardi/gh-reusable-workflows/.github/workflows/dependabot-release.yaml@de01bef0599aae3ab1d10e74c51b0031788b6d11 # v1.7.0
+    uses: leinardi/gh-reusable-workflows/.github/workflows/dependabot-release.yaml@2635363c6cdbba761accc2a3d4a756787d1f911d # v1.8.0
     with:
       ecosystems: docker cargo
 
@@ -306,7 +306,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -491,7 +491,7 @@ jobs:
       # The base, dhi.io/static, needs a login; the prebuilt target pulls nothing else from dhi.io.
       - name: Log in to Docker Hardened Images (dhi.io)
         if: steps.mode.outputs.build == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: dhi.io
           username: leinardi
