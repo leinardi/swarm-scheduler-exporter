@@ -36,7 +36,8 @@
 //!   [`query::MAX_API_VERSION`]; without a pin
 //!   the version is negotiated with the first call.
 //! - [`Client`] is the crate's client behind [`DockerApi`] alone, with the `User-Agent`
-//!   `swarm-scheduler-exporter/<version>` and a [`RESPONSE_HEADER_TIMEOUT`] of 30s.
+//!   `swarm-scheduler-exporter/<version>`, a [`RESPONSE_HEADER_TIMEOUT`] of 30s and the read
+//!   [`LIMITS`].
 //! - Every call is bounded by the caller with the bare `context deadline exceeded`
 //!   ([`with_docker_timeout`], [`with_bare_timeout`], [`with_bare_deadline`]); bollard's own
 //!   timeout stops at the response headers, so the bound is what cuts a body that stalls.
@@ -60,7 +61,31 @@ pub use error::{
 };
 pub use query::{Filters, since_parameter};
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
+
+use docker_client::Limits;
+
+/// The most of one whole body docker-client reads for the exporter: only the refusal of an
+/// `/events` request. Every list and inspect goes through bollard, which these limits do not
+/// bound.
+const RESPONSE_BODY: NonZeroUsize = NonZeroUsize::new(1024 * 1024).unwrap();
+
+/// The most of one `/events` record, every byte before its newline counted: the limit
+/// `docs/operations.md` gave, now enforced. A longer record ends the stream as
+/// [`StreamErrorKind::TooLarge`], and the listener resubscribes to live events only.
+const EVENT_RECORD: NonZeroUsize = NonZeroUsize::new(1024 * 1024).unwrap();
+
+/// The most of one frame of multiplexed output. Unused: the exporter attaches to nothing and reads
+/// no logs or exec output.
+const OUTPUT_FRAME: NonZeroUsize = NonZeroUsize::new(16 * 1024 * 1024).unwrap();
+
+/// What docker-client's own calls may buffer from the engine, for every client of the exporter.
+pub const LIMITS: Limits = Limits {
+    response_body: RESPONSE_BODY,
+    event_record: EVENT_RECORD,
+    output_frame: OUTPUT_FRAME,
+};
 
 /// The Go exporter's `dockerResponseHeaderTimeout`: from the request written to the response
 /// headers, so a daemon that accepts a connection and never answers cannot hold the event stream
@@ -111,8 +136,8 @@ impl From<query::UnsupportedApiVersion> for SettingsError {
     }
 }
 
-/// The client settings: `docker_client::Config::from_env` with `getenv` for `os.Getenv`, the
-/// exporter's `User-Agent` and the [`RESPONSE_HEADER_TIMEOUT`], and a pinned API version checked
+/// The client settings: `docker_client::Config::from_env` with `getenv` for `os.Getenv` and the
+/// read [`LIMITS`], the exporter's `User-Agent` and the [`RESPONSE_HEADER_TIMEOUT`], and a pinned API version checked
 /// against [`query::MIN_API_VERSION`].
 ///
 /// # Errors
@@ -131,7 +156,7 @@ pub fn settings_from_env(getenv: impl Fn(&str) -> Option<String>) -> Result<Conf
     if let Some(pin) = getenv("DOCKER_API_VERSION").filter(|pin| !pin.is_empty()) {
         query::validate_client_api_version(&pin)?;
     }
-    Ok(Config::from_env(getenv)?
+    Ok(Config::from_env(getenv, LIMITS)?
         .user_agent(user_agent(crate::version::VERSION))
         .response_header_timeout(RESPONSE_HEADER_TIMEOUT))
 }

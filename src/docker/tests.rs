@@ -64,7 +64,7 @@ fn the_user_agent_is_the_program_and_its_version() {
 fn settings_from_env_carry_the_user_agent_and_the_header_timeout() {
     assert_eq!(RESPONSE_HEADER_TIMEOUT, Duration::from_secs(30));
     let getenv = env(&[("DOCKER_HOST", "tcp://127.0.0.1:2375")]);
-    let want = Config::from_env(&getenv)
+    let want = Config::from_env(&getenv, LIMITS)
         .unwrap()
         .user_agent(format!(
             "swarm-scheduler-exporter/{}",
@@ -139,7 +139,7 @@ fn filters_are_terms_with_sorted_values() {
 }
 
 fn client(engine: &FakeEngine) -> Client {
-    let config = Config::unix(engine.socket().to_string_lossy())
+    let config = Config::unix(engine.socket().to_string_lossy(), LIMITS)
         .api_version("1.51")
         .unwrap()
         .user_agent("swarm-scheduler-exporter/test");
@@ -268,7 +268,7 @@ async fn the_api_version_is_negotiated_once_unless_pinned() {
         ("/nodes", Reply::ok("[]")),
     ])
     .unwrap();
-    let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy(), LIMITS)).unwrap();
     client.node_list().await.unwrap();
     client.node_list().await.unwrap();
     assert_eq!(
@@ -285,7 +285,7 @@ async fn events_send_since_and_filters() {
     let since = Timestamp::from_nanosecond(1_789_902_299_700_000_000).unwrap();
     let filters = Filters::new().add("type", &["service", "node"]);
     let mut stream = client
-        .events(since, &filters, &CancellationToken::new())
+        .events(Some(since), &filters, &CancellationToken::new())
         .await
         .unwrap();
     let event = stream.next().await.unwrap();
@@ -317,7 +317,7 @@ async fn a_closed_stream_ends_with_eof_after_its_events() {
     let client = client(&engine);
     let mut stream = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -333,7 +333,7 @@ async fn a_closed_stream_ends_with_eof_after_its_events() {
     let client = self::client(&engine);
     let mut stream = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -350,7 +350,7 @@ async fn a_refused_events_request_yields_no_stream() {
     let client = client(&engine);
     let error = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -367,7 +367,7 @@ async fn a_quiet_stream_is_connected_once_the_headers_are_in() {
     let client = client(&engine);
     let mut stream = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -386,7 +386,7 @@ async fn a_daemon_that_never_answers_is_a_failed_connect() {
     let started = tokio::time::Instant::now();
     let error = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -401,7 +401,7 @@ async fn a_daemon_that_never_answers_is_a_failed_connect() {
 async fn a_cancelled_events_request_is_cancelled_not_a_timeout() {
     let engine = FakeEngine::start(&[("/events", Reply::Silent)]).unwrap();
     let client = Client::new(
-        Config::unix(engine.socket().to_string_lossy())
+        Config::unix(engine.socket().to_string_lossy(), LIMITS)
             .api_version("1.51")
             .unwrap(),
     )
@@ -413,7 +413,7 @@ async fn a_cancelled_events_request_is_cancelled_not_a_timeout() {
         canceller.cancel();
     });
     let error = client
-        .events(Timestamp::UNIX_EPOCH, &Filters::new(), &cancel)
+        .events(Some(Timestamp::UNIX_EPOCH), &Filters::new(), &cancel)
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
@@ -424,7 +424,7 @@ async fn a_cancelled_events_request_is_cancelled_not_a_timeout() {
 #[tokio::test]
 async fn a_cancel_interrupts_the_negotiation_of_the_first_events_call() {
     let engine = FakeEngine::start(&[("/version", Reply::Silent)]).unwrap();
-    let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy(), LIMITS)).unwrap();
     let cancel = CancellationToken::new();
     let canceller = cancel.clone();
     tokio::spawn(async move {
@@ -433,7 +433,7 @@ async fn a_cancel_interrupts_the_negotiation_of_the_first_events_call() {
     });
     let started = tokio::time::Instant::now();
     let error = client
-        .events(Timestamp::UNIX_EPOCH, &Filters::new(), &cancel)
+        .events(Some(Timestamp::UNIX_EPOCH), &Filters::new(), &cancel)
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
@@ -445,13 +445,13 @@ async fn a_cancel_interrupts_the_negotiation_of_the_first_events_call() {
 #[tokio::test]
 async fn a_silent_negotiation_is_bounded_by_the_events_timeout() {
     let engine = FakeEngine::start(&[("/version", Reply::Silent)]).unwrap();
-    let client = Client::new(Config::unix(engine.socket().to_string_lossy()))
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy(), LIMITS))
         .unwrap()
         .with_events_timeout(Duration::from_millis(300));
     let started = tokio::time::Instant::now();
     let error = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -479,10 +479,10 @@ async fn events_carry_the_negotiated_version() {
         ("/events", Reply::events(&[EVENT])),
     ])
     .unwrap();
-    let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy(), LIMITS)).unwrap();
     let mut stream = client
         .events(
-            Timestamp::UNIX_EPOCH,
+            Some(Timestamp::UNIX_EPOCH),
             &Filters::new(),
             &CancellationToken::new(),
         )
@@ -506,7 +506,7 @@ async fn a_refused_negotiation_keeps_the_default_version() {
         ("/nodes", Reply::ok("[]")),
     ])
     .unwrap();
-    let client = Client::new(Config::unix(engine.socket().to_string_lossy())).unwrap();
+    let client = Client::new(Config::unix(engine.socket().to_string_lossy(), LIMITS)).unwrap();
     assert!(client.node_list().await.unwrap().is_empty());
     assert!(client.node_list().await.unwrap().is_empty());
     assert_eq!(wire(&engine), ["GET /version", "GET /nodes", "GET /nodes"]);
@@ -518,7 +518,7 @@ async fn an_unreachable_engine_fails_the_call_and_is_retried() {
     let dir = std::env::temp_dir().join(format!("sse-no-socket-{}", std::process::id()));
     let socket = dir.join("docker.sock");
     // `Client::new` accepts a socket that is not there yet, as a daemon not up at startup.
-    let client = Client::new(Config::unix(socket.to_string_lossy())).unwrap();
+    let client = Client::new(Config::unix(socket.to_string_lossy(), LIMITS)).unwrap();
     let first = client.node_list().await.unwrap_err();
     assert_eq!(first.kind(), ErrorKind::Unavailable, "{first}");
     assert!(client.node_list().await.is_err());
@@ -558,7 +558,7 @@ async fn a_refused_tcp_dial_names_the_daemon_host() {
 #[tokio::test]
 async fn a_missing_socket_fails_each_call_with_moby_s_text() {
     let path = "/nonexistent/sse/docker.sock";
-    let client = Client::new(Config::unix(path).api_version("1.51").unwrap()).unwrap();
+    let client = Client::new(Config::unix(path, LIMITS).api_version("1.51").unwrap()).unwrap();
     let error = client.node_list().await.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
     assert_eq!(

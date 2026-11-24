@@ -157,7 +157,7 @@ impl DockerApi for LifecycleDocker {
 
     fn events(
         &self,
-        _since: Timestamp,
+        _since: Option<Timestamp>,
         _filters: &Filters,
         _cancel: &CancellationToken,
     ) -> impl Future<Output = Result<Quiet, Error>> + Send {

@@ -156,7 +156,7 @@ impl DockerApi for FakeDocker {
 
     fn events(
         &self,
-        _since: Timestamp,
+        _since: Option<Timestamp>,
         _filters: &Filters,
         _cancel: &tokio_util::sync::CancellationToken,
     ) -> impl Future<Output = Result<FakeEvents, Error>> + Send {
