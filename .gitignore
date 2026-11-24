@@ -27,3 +27,7 @@ desktop.ini
 .claude/*
 !.claude/settings.json
 !.claude/skills
+
+# Zensical docs site: build output and the uv environment of tools/docs
+/site/
+tools/docs/.venv/

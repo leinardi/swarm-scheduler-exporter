@@ -1,0 +1,10 @@
+# The documentation site's Python dependencies, from the repo-docs-toolkit zensical-site skill
+# (references/config.md). Copy to tools/docs/pyproject.toml and lock it with
+#   uv lock --project tools/docs
+# then commit both files. Not a package (no build system): uv installs only the dependencies,
+# into tools/docs/.venv (gitignore it), from uv.lock, hashes included.
+[project]
+name = "docs"
+version = "0"
+requires-python = ">=3.11"
+dependencies = ["zensical==0.1.3"]

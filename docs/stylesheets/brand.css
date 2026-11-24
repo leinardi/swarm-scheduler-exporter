@@ -1,0 +1,23 @@
+/*
+ * The "Hive" brand colour (docs/assets/icon.svg's palette): amber-700 for links and buttons on the
+ * light scheme, amber-300 on the dark one. Checked with: docstool contrast #9A5800 --slate #F7C26B
+ * This file is the only one a project edits; home.css and home.html stay as shipped.
+ */
+
+:root > * {
+  --md-primary-fg-color: #9a5800;
+  --md-primary-fg-color--light: #9a5800;
+  --md-primary-fg-color--dark: #9a5800;
+  --md-accent-fg-color: #9a5800;
+  --md-typeset-a-color: #9a5800;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #f7c26b;
+  --md-primary-fg-color--light: #f7c26b;
+  --md-primary-fg-color--dark: #f7c26b;
+  --md-primary-bg-color: #0b0c0f;
+  --md-accent-fg-color: #f7c26b;
+  --md-accent-bg-color: #0b0c0f;
+  --md-typeset-a-color: #f7c26b;
+}

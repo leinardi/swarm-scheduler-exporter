@@ -158,9 +158,9 @@ meta-tests' checks). The exporter keeps only what is its own.
 
 ### Generated or vendored: never hand-edit
 
-- `.mk/{docker,help,password,pre-commit,rust,rust-release,image}.mk`, `.mk/.mk-common-version` and
-  `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh them with
-  `make mk-common-update` and port a change upstream.
+- `.mk/{docker,help,password,pre-commit,rust,rust-release,image,zensical}.mk`,
+  `.mk/.mk-common-version` and `scripts/bootstrap-mk-common.sh`: fetched from make-common; refresh
+  them with `make mk-common-update` and port a change upstream.
 - `tests/testdata/**` and `testenv/tests/integration/testdata/**`: Engine API fixtures (captured
   from a daemon) and golden files (the metrics golden was captured from the Go 1.3.2 exporter and
   is kept as a regression pin on values, not as a parity target). The integration golden file is
@@ -263,7 +263,8 @@ Shared by every `leinardi/*` repository.
 - **Jobs:** every job sets `timeout-minutes` (a composite action cannot time out its own steps).
   Every checkout that pushes nothing sets `persist-credentials: false`; the release's checkout
   sets it too, and its tag push passes the token to that one `git push`. Every job that holds a
-  write permission or `id-token` runs in the `release` environment.
+  write permission or `id-token` runs in the `release` environment, except the Pages deploy
+  (`docs.yaml`), which runs in `github-pages`, held to `master` the same way.
 - **Concurrency:** CI (and `integration.yaml`) groups a pull request's runs by
   `${{ github.workflow }} @ <head label>` and cancels the older one; every other run (a push to
   the default branch, a dispatch) gets its own group, `${{ github.run_id }}`, because GitHub keeps

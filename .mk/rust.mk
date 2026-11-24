@@ -70,6 +70,12 @@ RUST_FEATURES ?= --all-features
 # cargo-deny's scope; --workspace checks every member's graph, not only the root package's.
 RUST_DENY_ARGS ?= --workspace
 
+# The shipped graphs rust-deny-shipped checks the bans of, each on its own: a space-separated list
+# of <manifest>:<config> pairs, a crate's Cargo.toml and the cargo-deny config its shipped graph is
+# held to (crates/agent/Cargo.toml:deny-shipped-agent.toml). Neither may hold a space or a colon.
+# Empty by default; rust-deny-shipped refuses an empty list rather than pass on nothing.
+RUST_DENY_SHIPPED ?=
+
 # rust-run's binary, for a package with more than one; empty lets cargo pick the only one.
 RUST_RUN_BIN ?=
 
@@ -138,6 +144,21 @@ rust-doc: ## Check the Rust documentation, warnings as errors
 .PHONY: rust-deny
 rust-deny: ## Check the Rust dependencies with cargo-deny (advisories, licences, bans, sources; network)
 	$(CARGO) deny $(RUST_DENY_ARGS) check
+
+# One rust-deny-shipped recipe line per pair, so make stops at the first that fails.
+define _RUST_DENY_SHIPPED_LINE
+	$(CARGO) deny --manifest-path "$(word 1,$(subst :, ,$(1)))" --config "$(word 2,$(subst :, ,$(1)))" check bans
+
+endef
+
+# The pairs that are not exactly <manifest>:<config>.
+_rust_deny_shipped_bad = $(foreach p,$(RUST_DENY_SHIPPED),$(if $(filter 2,$(words $(subst :, ,$(p)))),,$(p)))
+
+.PHONY: rust-deny-shipped
+rust-deny-shipped: ## Check each shipped graph's bans with cargo-deny (RUST_DENY_SHIPPED)
+	@test -n "$(strip $(RUST_DENY_SHIPPED))" || { echo "RUST_DENY_SHIPPED is empty; list the <manifest>:<config> pairs whose bans to check" >&2; exit 1; }
+	@test -z "$(strip $(_rust_deny_shipped_bad))" || { echo "RUST_DENY_SHIPPED: not <manifest>:<config>: $(strip $(_rust_deny_shipped_bad))" >&2; exit 1; }
+	$(foreach pair,$(RUST_DENY_SHIPPED),$(call _RUST_DENY_SHIPPED_LINE,$(pair)))
 
 .PHONY: rust-clean-stale
 rust-clean-stale: ## Remove build artifacts unused for RUST_SWEEP_DAYS (7) days or from removed toolchains (cargo-sweep)

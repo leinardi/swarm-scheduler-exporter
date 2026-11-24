@@ -39,6 +39,22 @@ updates:
         patterns:
           - "*"
 
+  # tools/docs: the Zensical that builds the documentation site (make docs-build, uv mode). chore,
+  # not fix: the site is not part of the shipped binary or image.
+  - package-ecosystem: "uv"
+    directory: "/tools/docs"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      docs:
+        patterns:
+          - "*"
+
   # The Dockerfile's dhi.io bases, each pinned by an explicit tag in one literal FROM (Dependabot
   # does not read ARG defaults), deliberately not by digest: dhi.io rebuilds its tags too often.
   # Dependabot moves the tags, such as a newer dhi.io/static date tag. The runtime base,
