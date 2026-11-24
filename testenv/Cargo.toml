@@ -36,7 +36,7 @@ integration = [
 # binary.
 # The wall clock the harness and its logs read.
 clock.workspace = true
-jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 # The generic half of the harness (rust-common): Go's -run filter, the envid, the sweep rules and
 # the owner labels, the error type, and (with integration) Go's context and testing packages, the
 # redacting logger and the host daemon's sweep and cleanup. Its features follow integration, so a
