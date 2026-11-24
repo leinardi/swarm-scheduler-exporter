@@ -128,7 +128,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v2.0.0"`, with `version = "2.0"`) in
+dependency pinned by the release tag (`tag = "v3.0.0"`, with `version = "3.0"`) in
 `[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP

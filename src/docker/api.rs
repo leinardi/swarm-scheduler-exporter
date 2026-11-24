@@ -27,8 +27,8 @@
 //!
 //! The requests: `GET /services`, `GET /nodes` and `GET /tasks` without filters,
 //! `GET /services/{id}`, `GET /containers/json?all=true`, `GET /containers/{id}/json`, and
-//! `GET /events` with `filters` (`{"type":["node","service"]}`) and `since`
-//! (`<seconds>.<9 digits>`). bollard's models are mapped to the exporter's [`types`](super::types)
+//! `GET /events` with `filters` (`{"type":["node","service"]}`) and, unless only live events are
+//! asked for, `since` (`<seconds>.<9 digits>`). bollard's models are mapped to the exporter's [`types`](super::types)
 //! by [`convert`](super::convert).
 
 use std::future::Future;
@@ -95,12 +95,13 @@ pub trait DockerApi: Send + Sync {
         id: &str,
     ) -> impl Future<Output = Result<ContainerInspect, Error>> + Send;
 
-    /// `GET /events` from `since` with `filters`: resolves once the engine has answered the
+    /// `GET /events` from `since` (live events only, with no replay, when none) with `filters`:
+    /// resolves once the engine has answered the
     /// request's headers with a 2xx (Q6), however quiet the stream is after, and fails without a
     /// stream otherwise (`ErrorKind::Cancelled` when `cancel` fires first).
     fn events(
         &self,
-        since: Timestamp,
+        since: Option<Timestamp>,
         filters: &Filters,
         cancel: &CancellationToken,
     ) -> impl Future<Output = Result<Self::Events, Error>> + Send;
@@ -136,15 +137,18 @@ impl EventStream for ClientEventStream {
 }
 
 /// How a bollard error ended the stream: a body that is not an event is a decode failure, a
-/// connection that broke or timed out is Go's unexpected EOF.
+/// record over the `event_record` limit is too large, a connection that broke or timed out is
+/// Go's unexpected EOF.
 fn stream_error(error: &docker_client::Error) -> StreamError {
-    let kind = if matches!(
-        error.engine(),
-        Some(BollardError::JsonDataError { .. } | BollardError::JsonSerdeError { .. })
-    ) {
-        StreamErrorKind::Decode
-    } else {
-        StreamErrorKind::UnexpectedEof
+    let kind = match error.engine() {
+        Some(BollardError::JsonDataError { .. } | BollardError::JsonSerdeError { .. }) => {
+            StreamErrorKind::Decode
+        }
+        // docker-client ends an `/events` stream with a `DockerStreamError` for one thing only,
+        // a record over the `event_record` limit ("event record exceeds … bytes"): its body
+        // errors are hyper's and its decode errors serde's. `tests/engine_wire.rs` pins all three.
+        Some(BollardError::DockerStreamError { .. }) => StreamErrorKind::TooLarge,
+        _ => StreamErrorKind::UnexpectedEof,
     };
     StreamError::new(kind, error.to_string())
 }
@@ -344,7 +348,7 @@ impl DockerApi for Client {
 
     async fn events(
         &self,
-        since: Timestamp,
+        since: Option<Timestamp>,
         filters: &Filters,
         cancel: &CancellationToken,
     ) -> Result<ClientEventStream, Error> {
@@ -362,8 +366,11 @@ impl DockerApi for Client {
             }
         };
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let since = since_parameter(since);
-        let mut options = EventsOptionsBuilder::new().since(&since);
+        let since = since.map(since_parameter);
+        let mut options = EventsOptionsBuilder::new();
+        if let Some(since) = &since {
+            options = options.since(since);
+        }
         if !filters.is_empty() {
             options = options.filters(&filters.to_map());
         }

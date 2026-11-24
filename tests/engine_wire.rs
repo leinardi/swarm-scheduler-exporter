@@ -60,7 +60,9 @@ use swarm_scheduler_exporter::collector::reconciler::{
     poll_and_publish_replicas_state,
 };
 use swarm_scheduler_exporter::collector::types::CustomLabels;
-use swarm_scheduler_exporter::docker::{Client, since_parameter};
+use swarm_scheduler_exporter::docker::{
+    Client, DockerApi as _, EventStream as _, Filters, LIMITS, StreamErrorKind, since_parameter,
+};
 use swarm_scheduler_exporter::labels::validate_and_sanitize_label_names;
 use swarm_scheduler_exporter::run::{Metrics, MetricsOptions, register_metrics};
 
@@ -142,7 +144,7 @@ fn engine_answering_events(set: &str, events: Reply) -> FakeEngine {
 }
 
 fn client(engine: &FakeEngine) -> Arc<Client> {
-    let config = Config::unix(engine.socket().to_string_lossy())
+    let config = Config::unix(engine.socket().to_string_lossy(), LIMITS)
         .api_version("1.51")
         .or_panic();
     Arc::new(Client::new(config).or_panic())
@@ -660,7 +662,7 @@ async fn run_listener_against(
     settle: impl FnMut(&EventsRun) -> bool,
 ) -> EventsRun {
     let engine = engine_answering_events(FIXTURE_SETS[1], events);
-    let config = Config::unix(engine.socket().to_string_lossy())
+    let config = Config::unix(engine.socket().to_string_lossy(), LIMITS)
         .api_version("1.51")
         .or_panic();
     let client = Arc::new(
@@ -778,4 +780,83 @@ async fn a_refused_events_request_is_not_connected() {
         assert!(run.reconnects() >= 1, "{status}");
         assert_eq!(count(&run.engine, "/services"), 1, "{status}: no resync");
     }
+}
+
+/// A valid `/events` record.
+const WIRE_EVENT: &str = r#"{"Type":"service","Action":"update","Actor":{"ID":"svc-api"},"time":1789902300,"timeNano":1789902300200000000}"#;
+
+/// How the first items of the stream `events` answers end, through the exporter's adapter:
+/// each an event's action, or the kind and text of the error.
+async fn stream_items(
+    events: Reply,
+    count: usize,
+) -> Vec<Result<String, (StreamErrorKind, String)>> {
+    let engine = FakeEngine::start(&[("/events", events)]).or_panic();
+    let client = client(&engine);
+    let mut stream = client
+        .events(None, &Filters::new(), &CancellationToken::new())
+        .await
+        .or_panic();
+    let mut items = Vec::new();
+    for _ in 0..count {
+        let item = tokio::time::timeout(TEST_TIMEOUT, stream.next())
+            .await
+            .unwrap_or_else(|_| panic!("timed out"));
+        items.push(
+            item.map(|event| event.action)
+                .map_err(|error| (error.kind(), error.to_string())),
+        );
+    }
+    items
+}
+
+/// A record over the client's `event_record` limit is `TooLarge`, which the listener answers with
+/// a subscription to live events only, and ends the stream: the next item is a clean end, not the
+/// event after it.
+#[tokio::test]
+async fn an_events_record_over_the_limit_is_too_large_and_ends_the_stream() {
+    let oversized = format!(
+        r#"{{"Type":"service","Action":"update","Actor":{{"ID":"svc-api","Attributes":{{"name":"{}"}}}},"time":1789902300,"timeNano":1789902300200000000}}"#,
+        "x".repeat(LIMITS.event_record.get())
+    );
+    let items = stream_items(Reply::events(&[&oversized, WIRE_EVENT]), 2).await;
+    assert_eq!(
+        items,
+        [
+            Err((
+                StreamErrorKind::TooLarge,
+                format!(
+                    "Docker stream error: event record exceeds {} bytes",
+                    LIMITS.event_record
+                )
+            )),
+            Err((StreamErrorKind::Eof, "EOF".to_owned())),
+        ]
+    );
+}
+
+/// A record that does not decode stays `Decode`, not `TooLarge`, and the client's stream goes on
+/// to the next record.
+#[tokio::test]
+async fn an_events_record_that_does_not_decode_stays_a_decode_error() {
+    let items = stream_items(Reply::events(&[r#"{"Type": [not json"#, WIRE_EVENT]), 2).await;
+    assert!(
+        matches!(&items[0], Err((StreamErrorKind::Decode, _))),
+        "{items:?}"
+    );
+    assert_eq!(items[1], Ok("update".to_owned()));
+}
+
+/// A connection cut inside a record stays `UnexpectedEof`, not `TooLarge`.
+#[tokio::test]
+async fn a_cut_events_connection_stays_an_unexpected_eof() {
+    let mut body =
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+            .to_vec();
+    body.extend_from_slice(b"40\r\n{\"Type\":\"service\"");
+    let items = stream_items(Reply::Raw(body), 1).await;
+    assert!(
+        matches!(&items[0], Err((StreamErrorKind::UnexpectedEof, _))),
+        "{items:?}"
+    );
 }

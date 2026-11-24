@@ -224,8 +224,8 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clock"
-version = "2.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
+version = "3.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
 dependencies = [
  "jiff",
  "tokio",
@@ -306,8 +306,8 @@ dependencies = [
 
 [[package]]
 name = "docker-client"
-version = "2.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
+version = "3.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
 dependencies = [
  "bollard",
  "bytes",
@@ -319,6 +319,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
+ "serde",
  "serde_json",
  "serde_urlencoded",
  "socket2",
@@ -1068,8 +1069,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-meta"
-version = "2.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
+version = "3.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
 dependencies = [
  "regex",
  "serde-saphyr",
@@ -1293,8 +1294,8 @@ dependencies = [
 
 [[package]]
 name = "service-kit"
-version = "2.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
+version = "3.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
 dependencies = [
  "bytes",
  "hyper",
@@ -1485,8 +1486,8 @@ dependencies = [
 
 [[package]]
 name = "testenv-core"
-version = "2.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
+version = "3.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
 dependencies = [
  "bollard",
  "futures-util",
@@ -1686,8 +1687,8 @@ dependencies = [
 
 [[package]]
 name = "tracing-setup"
-version = "2.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v2.0.0#2907baef99248113a9b6784c7df1679a32c1afcb"
+version = "3.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
 dependencies = [
  "serde_json",
  "tracing",

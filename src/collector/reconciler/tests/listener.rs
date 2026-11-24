@@ -178,7 +178,10 @@ async fn since_has_nanosecond_precision() {
         Timestamp::new(1_700_000_000, 123_456_789).unwrap(),
     );
     wait_opened(&fixture.docker, 1).await;
-    let since = fixture.docker.since(0);
+    let since = fixture
+        .docker
+        .since(0)
+        .expect("the first stream has a since");
     assert_eq!(
         since,
         Timestamp::new(1_699_999_999, 623_456_789).unwrap(),
@@ -346,7 +349,7 @@ async fn a_reconnect_resumes_from_the_last_event_and_requests_a_resync() {
     let want_since = last_seen.checked_sub(EVENTS_SINCE_MARGIN).unwrap();
     assert_eq!(
         fixture.docker.since(1),
-        want_since,
+        Some(want_since),
         "the last seen event minus the margin"
     );
     wait_resyncs_requested(
@@ -359,7 +362,7 @@ async fn a_reconnect_resumes_from_the_last_event_and_requests_a_resync() {
     // A connection that saw no event keeps the resume point, and still requests a resync.
     fixture.docker.send(1, Err(closed_body()));
     wait_opened(&fixture.docker, 3).await;
-    assert_eq!(fixture.docker.since(2), want_since);
+    assert_eq!(fixture.docker.since(2), Some(want_since));
     wait_resyncs_requested(
         &fixture.handle,
         before + 2,
@@ -367,6 +370,86 @@ async fn a_reconnect_resumes_from_the_last_event_and_requests_a_resync() {
     )
     .await;
     assert_eq!(Some(fixture.reconnects()), Some(2.0));
+    listening.stop().await;
+}
+
+/// A record over the client's `event_record` limit, as docker-client reports one.
+fn too_large() -> StreamError {
+    StreamError::new(
+        StreamErrorKind::TooLarge,
+        "event record exceeds 1048576 bytes",
+    )
+}
+
+/// A stream that an oversized record ended is followed by a subscription to live events only, with
+/// no `since`, so the record is not replayed (resuming from the event before it would read it
+/// again), and by a resync, which covers the skipped window. The subscriptions stay without a
+/// `since` until an event is seen, which sets the resume point again.
+#[tokio::test(start_paused = true)]
+async fn an_oversized_record_resubscribes_to_live_events_and_requests_a_resync() {
+    let fixture = listener_fixture().await;
+    let before = resyncs_requested(&fixture.handle);
+    let listening = Listening::start(&fixture, anchor());
+    wait_opened(&fixture.docker, 1).await;
+    fixture
+        .docker
+        .send(0, Ok(node_update(1_700_000_000_987_654_321)));
+    fixture.docker.send(0, Err(too_large()));
+    wait_opened(&fixture.docker, 2).await;
+    assert_eq!(
+        fixture.docker.since(1),
+        None,
+        "the reconnect after an oversized record asks for live events only"
+    );
+    wait_resyncs_requested(
+        &fixture.handle,
+        before + 1,
+        "a resync requested after the oversized record",
+    )
+    .await;
+    assert_eq!(
+        fixture.reconnect_lines(),
+        ["level=WARN event stream ended; will reconnect \
+          err=\"events stream error: event record exceeds 1048576 bytes\" backoff=500ms \
+          next_since=none"]
+    );
+
+    // A connection that saw no event keeps asking for live events only.
+    fixture.docker.send(1, Err(closed_body()));
+    wait_opened(&fixture.docker, 3).await;
+    assert_eq!(fixture.docker.since(2), None);
+
+    // The next event seen sets the resume point again.
+    let seen = Timestamp::new(1_700_000_100, 0).unwrap();
+    fixture
+        .docker
+        .send(2, Ok(node_update(1_700_000_100_000_000_000)));
+    fixture.docker.send(2, Err(closed_body()));
+    wait_opened(&fixture.docker, 4).await;
+    assert_eq!(
+        fixture.docker.since(3),
+        Some(seen.checked_sub(EVENTS_SINCE_MARGIN).unwrap())
+    );
+    listening.stop().await;
+}
+
+/// The recovery subscription does not depend on this process's clock: with the clock far behind
+/// the daemon's event times, a subscription from this clock's "now" would still replay the
+/// oversized record, so the listener sends no `since` at all.
+#[tokio::test(start_paused = true)]
+async fn an_oversized_record_is_not_replayed_when_the_clock_is_behind_the_daemon() {
+    let fixture = listener_fixture().await;
+    fixture
+        .clock
+        .set(Timestamp::from_second(1_000_000_000).unwrap());
+    let listening = Listening::start(&fixture, anchor());
+    wait_opened(&fixture.docker, 1).await;
+    fixture
+        .docker
+        .send(0, Ok(node_update(1_767_225_700_000_000_000)));
+    fixture.docker.send(0, Err(too_large()));
+    wait_opened(&fixture.docker, 2).await;
+    assert_eq!(fixture.docker.since(1), None);
     listening.stop().await;
 }
 
@@ -621,7 +704,7 @@ async fn a_failed_connect_is_not_a_connection() {
         &*fixture.docker,
         &fixture.handle,
         &super::super::listener::event_filters(),
-        anchor(),
+        Some(anchor()),
         true,
         &CancellationToken::new(),
     )
@@ -657,7 +740,7 @@ async fn a_cancelled_connect_is_a_cancellation_not_a_failed_connect() {
         &*fixture.docker,
         &fixture.handle,
         &super::super::listener::event_filters(),
-        anchor(),
+        Some(anchor()),
         true,
         &CancellationToken::new(),
     )
@@ -676,7 +759,7 @@ async fn a_cancelled_connect_is_a_cancellation_not_a_failed_connect() {
         &*fixture.docker,
         &fixture.handle,
         &super::super::listener::event_filters(),
-        anchor(),
+        Some(anchor()),
         true,
         &cancel,
     )
@@ -750,7 +833,7 @@ async fn the_backoff_resets_after_a_quiet_stream() {
     for index in 0..4 {
         assert_eq!(
             fixture.docker.since(index),
-            anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap()
+            Some(anchor().checked_sub(EVENTS_SINCE_MARGIN).unwrap())
         );
     }
     listening.stop().await;

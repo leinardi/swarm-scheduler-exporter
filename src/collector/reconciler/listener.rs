@@ -89,6 +89,12 @@ impl StreamEnd {
     pub fn is_eof(&self) -> bool {
         matches!(self, Self::Failed(error) if error.is_eof())
     }
+
+    /// Whether a record over the client's `event_record` limit ended the stream.
+    #[must_use]
+    pub fn is_too_large(&self) -> bool {
+        matches!(self, Self::Failed(error) if error.kind() == StreamErrorKind::TooLarge)
+    }
 }
 
 impl fmt::Display for StreamEnd {
@@ -145,6 +151,13 @@ fn next_backoff(delay: Duration) -> Duration {
 /// connect still counts as a reconnect. And the backoff resets after every stream that connected,
 /// not only after one that carried an event, while the resume point still moves only with an
 /// event seen (Q7).
+///
+/// A stream that a record over the client's `event_record` limit ended is followed by a
+/// subscription to live events only, with no `since`: resuming from the last event seen would
+/// read the same record again, and end the stream again, for as long as the daemon keeps it in
+/// its history. Asking for no replay at all, rather than for the events since this process's
+/// "now", does not depend on this clock agreeing with the daemon's. The reconnect's resync covers
+/// what the skipped window held, and the next event seen sets the resume point again.
 pub async fn listen_swarm_events(
     docker: &impl DockerApi,
     handle: &ReconcilerHandle,
@@ -154,7 +167,7 @@ pub async fn listen_swarm_events(
     let filters = event_filters();
     let shared = &handle.shared;
     let mut backoff = BACKOFF_INITIAL_DELAY;
-    let mut since = with_margin(anchor);
+    let mut since = Some(with_margin(anchor));
     let mut reconnect = false;
     loop {
         if cancel.is_cancelled() {
@@ -166,7 +179,10 @@ pub async fn listen_swarm_events(
             backoff = BACKOFF_INITIAL_DELAY;
         }
         if let Some(last_seen) = outcome.last_seen {
-            since = with_margin(last_seen);
+            since = Some(with_margin(last_seen));
+        }
+        if outcome.end.is_too_large() {
+            since = None;
         }
         // Shutting down is not a reconnect: neither counted nor logged as one.
         if cancel.is_cancelled() {
@@ -178,7 +194,7 @@ pub async fn listen_swarm_events(
         // else is worth a warning. The reconnect resyncs either way: a clean close looks the same
         // whether a proxy timed out or the daemon restarted, only the restart loses event
         // history, and the resync is just two list calls.
-        let next_since = rfc3339_nano(since);
+        let next_since = since_text(since);
         if outcome.end.is_eof() {
             info!(
                 error = %outcome.end,
@@ -210,6 +226,12 @@ fn rfc3339_nano(timestamp: Timestamp) -> String {
     timestamp.to_string()
 }
 
+/// The `since` of a subscription as it is logged: [`rfc3339_nano`], or `none` for live events
+/// only.
+fn since_text(since: Option<Timestamp>) -> String {
+    since.map_or_else(|| "none".to_owned(), rfc3339_nano)
+}
+
 /// Opens one event stream connection and dispatches its events until it ends. The connection
 /// has no deadline: the stream is long-lived, so the request deadline of the other calls would
 /// cut it. It is dropped, which releases the connection, when it ends before a reconnect and when
@@ -220,7 +242,7 @@ pub async fn follow_event_stream<D: DockerApi>(
     docker: &D,
     handle: &ReconcilerHandle,
     filters: &Filters,
-    since: Timestamp,
+    since: Option<Timestamp>,
     reconnect: bool,
     cancel: &CancellationToken,
 ) -> StreamOutcome {
@@ -243,7 +265,7 @@ pub async fn follow_event_stream<D: DockerApi>(
         .metrics
         .timestamps()
         .mark_events_connected(shared.clock.now());
-    info!(since = rfc3339_nano(since), "event stream connected");
+    info!(since = since_text(since), "event stream connected");
     if reconnect {
         handle.request_resync("event stream reconnected");
     }

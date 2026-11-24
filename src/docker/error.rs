@@ -97,6 +97,9 @@ pub enum StreamErrorKind {
     UnexpectedEof,
     /// A value that is not an event.
     Decode,
+    /// A record longer than the client's `event_record` limit ([`LIMITS`](super::LIMITS)): the
+    /// stream is over, and resuming from the last event seen would read the same record again.
+    TooLarge,
     /// The source of the events went away without saying why: Go's `ErrEventsStreamClosed`, the
     /// closed channel of a test double.
     Closed,

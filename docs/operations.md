@@ -43,5 +43,8 @@ To turn it off, set `healthcheck: disable: true` in compose or a stack file, or 
   logged at info, any other stream end at warn. A socket proxy cutting an idle stream (HAProxy does
   so after its client timeout, about 10 minutes, on a quiet cluster) ends it without the chunked
   body's terminating chunk, so that is logged at warn too, followed by the reconnect.
-  Individual event JSON records are limited to 1 MiB, excluding leading whitespace and JSON-sequence
-  record separators. An oversized record ends the stream at warn, followed by a reconnect and resync.
+  An event record may hold up to 1 MiB, every byte before its newline counted, leading whitespace
+  and JSON-sequence record separators included. A longer record ends the stream at warn, and the
+  reconnect then subscribes to live events only, with no `since` (logged as `next_since=none`), so
+  the record is skipped rather than replayed; the reconnect's resync covers the skipped window, and
+  the next event seen restores the usual resume point.

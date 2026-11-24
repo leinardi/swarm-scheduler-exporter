@@ -216,7 +216,7 @@ struct DockerState {
 /// events, and whether the stream is still held by its reader. Go's `streamDocker` records the
 /// stream's context; dropping the stream is what cancelling that context is here.
 struct StreamRecord {
-    since: Timestamp,
+    since: Option<Timestamp>,
     sender: mpsc::UnboundedSender<FakeEvent>,
     live: Arc<AtomicBool>,
 }
@@ -342,7 +342,7 @@ impl TestDocker {
         self.lock().streams.len()
     }
 
-    fn since(&self, index: usize) -> Timestamp {
+    fn since(&self, index: usize) -> Option<Timestamp> {
         self.lock().streams[index].since
     }
 
@@ -467,7 +467,7 @@ impl DockerApi for TestDocker {
 
     fn events(
         &self,
-        since: Timestamp,
+        since: Option<Timestamp>,
         _filters: &Filters,
         _cancel: &CancellationToken,
     ) -> impl Future<Output = Result<TestStream, Error>> + Send {
