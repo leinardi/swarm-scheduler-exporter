@@ -43,7 +43,7 @@ updates:
   # does not read ARG defaults), deliberately not by digest: dhi.io rebuilds its tags too often.
   # Dependabot moves the tags, such as a newer dhi.io/static date tag. The runtime base,
   # dhi.io/static, is what the image ships, so its bumps are fix(deps) and release a patch. dhi.io
-  # needs a login: the dhi registry above reads the Dependabot secret DHI_TOKEN (docs/release.md,
+  # needs a login: the dhi registry above reads the Dependabot secret DHI_TOKEN (docs/internal/release.md,
   # "One-time setup").
   - package-ecosystem: "docker"
     directory: "/deployments/docker"

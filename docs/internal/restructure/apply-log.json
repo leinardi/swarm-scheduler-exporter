@@ -1,0 +1,70 @@
+{
+ "paths": {
+  ".agents/skills/adversarial-review/SKILL.md": {
+   "post": "3eb12e88c4c40e5d45f74399cdd9fe8079606731a2d66f180061e918037f25df",
+   "pre": "d9241cb97d0c7aaec64c755ad3456f72b741ff5cf8fd5f55542ea2217fccded3"
+  },
+  ".agents/skills/adversarial-review/references/release-and-image.md": {
+   "post": "f7b4f21045f24a04063da5bc3fbf2341f325a9e6c9dcf0cf3e47e18fddea5cc1",
+   "pre": "94c7d83760fe3475e02d178733a8f0340f758107d93f33f948e515b669e62b9d"
+  },
+  ".github/dependabot.yml": {
+   "post": "d77d8ccbf3eda7749c9a36e27237929dd728177925c6533fc8b9d180e2229ea8",
+   "pre": "14de609cc597616e5c090754118860e146aac82cb7efc2e17efe82a15851c3c9"
+  },
+  ".github/workflows/ci.yaml": {
+   "post": "7d58232a8250846a4cbe1606bbd7ae8c13e6fec0e8ac384f1e700e2e26f22b44",
+   "pre": "38c9ca980e6b4973cfc6d9f0cbc62a72ed2494edeb8132630a42b16ff8825e91"
+  },
+  ".github/workflows/release.yaml": {
+   "post": "4e141d7462bf438c5565f5a53c5e358736aed53a937512ddaeff471bc743c82a",
+   "pre": "f75484e79073cdb6128303a8cb4ed7a9b2ca84eda7a5925af2a6cea938d68de8"
+  },
+  ".serena/memories/task_completion.md": {
+   "post": "ef582bdbad6b3e1a4eb9fadbbf6473a83d02ca4e91aa32230a7a9e95f31a4166",
+   "pre": "5d46ab825da78aa6483d69d23c54632e549e88d3012cc883a016103f8872514e"
+  },
+  ".serena/memories/tech_stack.md": {
+   "post": "7c7f9d385336819c15a8edc5161f605082ea1670d93c4ba0efb08d945179765f",
+   "pre": "532abdbfd0cf8380b4be0ba76cab8101e3979eeebc4a30cbf47007000e580e34"
+  },
+  "AGENTS.md": {
+   "post": "cca831c594c1292dadd87d79368a23567c584577fda566fb358d9ab7c1e84069",
+   "pre": "db732d72d6b116eb4e70c661721780a28e3291dae958776451a8e3ab600d1eb4"
+  },
+  "CONTRIBUTING.md": {
+   "post": "e824a6458bc5b10b092230e674197ed56a2070d35832f0764e8a79e6c7442a27",
+   "pre": "c2b3bbb02da3f2b555ee1d63f6af12d9232d2c862ca1fd0463a313797e283856"
+  },
+  "README.md": {
+   "post": "1018acad9f140c506d9915393b4d4073be6d9720f70afa35f658a8eab78b7ca7",
+   "pre": "f07373a079099445171f3d7d7b4c7aa1f042de56a5a2e6075e5e02e7dbc6b845"
+  },
+  "SECURITY.md": {
+   "post": "cbdd40181bd7a7872f0159307330f7838f342acfc203eed2b5281c6eea3e0c34",
+   "pre": "85ea10a4d6ef1cfbe526f4a8b7d3abeca24e9d1af35b92fa11df17e357c3f428"
+  },
+  "deployments/docker/Dockerfile": {
+   "post": "8eee523ffe4af12e306d7717f82255e10708b237b7e752ada3ab04f70375e315",
+   "pre": "36e9fa6adad77e63575f4be4e926b8fd0b22caace516bcbcbfe2a38ce3f1b112"
+  },
+  "docs/internal/history/go-releases.md": {
+   "post": "f915baabfadfa1c259cb68f672d4315902dd62df3775482a56d4ffaa1f09aa7f",
+   "pre": null
+  },
+  "docs/internal/release.md": {
+   "post": "d93e16015bdb09f0206ec35bf4cbb14930d0e7663bce455f5f25547db8336844",
+   "pre": null
+  },
+  "docs/release.md": {
+   "post": null,
+   "pre": "059a2f64bf26ac708d87a71024f5521afddda6307f2c1fb7a0b302bd6611ae72"
+  },
+  "meta/tests/dockerfiles.rs": {
+   "post": "e05eb47f56a948c1b14409a9081cd5425868aa22e964eb185388967346516828",
+   "pre": "01e7e9ee38960438acf39b3f79f1ca2fe66a86e8c042c252ba4507c4c1af8240"
+  }
+ },
+ "plan_sha256": "2568b04c8790e346308d3dc21ad2b57d738a9e684ec1abe4b01d02b4cf304418",
+ "status": "completed"
+}

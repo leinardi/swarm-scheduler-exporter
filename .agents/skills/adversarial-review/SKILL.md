@@ -56,7 +56,7 @@ as merge commits, so every commit in the range counts. A change to the binary or
 users should receive typed `chore`, `docs`, `perf` or `refactor` never ships; tooling typed `fix`
 or `feat` cuts a release with nothing in it; a stray `!` cuts a major; and a word ending in `fix`
 or `feat` right before a colon anywhere in a subject counts as that type (`AGENTS.md`,
-`docs/release.md`).
+`docs/internal/release.md`).
 
 ### Read-only against Docker — enforced in code, not at runtime
 
@@ -221,8 +221,9 @@ in `docs/operations.md` that no longer matches the code is a finding.
 - The image runs the static base as an explicit non-root `USER`, with every dhi.io base pinned by
   tag; the release job publishes only the digest it smoke-tested and scanned. If the diff touches
   the Dockerfile, the compose files, `.trivyignore.yaml`, a workflow, `scripts/image-test.sh` or
-  `docs/release.md`, read [references/release-and-image.md](references/release-and-image.md) and
-  walk its items: they are part of this section.
+  `docs/internal/release.md`, read
+  [references/release-and-image.md](references/release-and-image.md) and walk its items: they are
+  part of this section.
 
 ### Meta-tests must not pass on nothing
 
