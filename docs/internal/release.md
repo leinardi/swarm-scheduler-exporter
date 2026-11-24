@@ -2,7 +2,7 @@
 
 How a swarm-scheduler-exporter release is versioned, built and published, what to do when one fails
 halfway, and what has to be set up by hand for all of it to hold. The pipeline is
-[`.github/workflows/release.yaml`](../.github/workflows/release.yaml), built from the shared
+[`.github/workflows/release.yaml`](../../.github/workflows/release.yaml), built from the shared
 actions of [gh-composite-actions](https://github.com/leinardi/gh-composite-actions)
 (`release-version`, `require-ci-green`, `release-mode`, `toolchain-record`, `toolchain-recover`,
 `check-pinned-bases`, `trivy-gate`, `binary-attestation-status`); this page is why it is shaped that
@@ -25,7 +25,7 @@ way.
   identity. Before the version was tagged, CI had passed on the commit (the full image suite on
   amd64 and the reduced one on arm64, [What CI proves](#what-ci-proves)), and both platform images
   passed the release's short smoke test and a [Trivy](https://trivy.dev/) scan with no fixable
-  `HIGH` or `CRITICAL` vulnerability outside [`.trivyignore.yaml`](../.trivyignore.yaml).
+  `HIGH` or `CRITICAL` vulnerability outside [`.trivyignore.yaml`](../../.trivyignore.yaml).
 - The moving image tags `:<major>` and `:latest`, and the GitHub "Latest" release marker, when the
   version is the highest released one.
 - A GitHub release whose notes name the Rust toolchain the binaries were built with and the base
@@ -90,7 +90,7 @@ dispatch, which shows as cancelled; dispatch it again.
 
 Semantic versioning, derived from
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) by
-[`svu`](https://github.com/caarlos0/svu), as [AGENTS.md](../AGENTS.md#commit-messages) describes:
+[`svu`](https://github.com/caarlos0/svu), as [AGENTS.md](../../AGENTS.md#commit-messages) describes:
 
 - `feat` is a minor;
 - `fix` is a patch;
@@ -289,7 +289,7 @@ of scanning at release time.
 The base's findings count the same as the image's own: a fixable finding in `dhi.io/static` fails
 the release too. Its fix is usually dhi.io's next rebuild of the tag, which the next release picks
 up by itself, or a newer tag, which Dependabot proposes; until it ships, a
-reviewed entry in [`.trivyignore.yaml`](../.trivyignore.yaml) is the only way past the gate, scoped
+reviewed entry in [`.trivyignore.yaml`](../../.trivyignore.yaml) is the only way past the gate, scoped
 to the paths or purls it was found in, with a statement saying why and an expiry date Trivy
 enforces. When an entry expires, bump what carries the fix if it is out, otherwise extend the date
 with a fresh reason.
@@ -403,7 +403,7 @@ docker buildx imagetools create -t "$IMAGE:latest" -t "$IMAGE:<major>" "$IMAGE@$
 ## Scheduled scan
 
 A release is scanned once, when it is built, but vulnerabilities keep being published.
-[`.github/workflows/scheduled-scan.yaml`](../.github/workflows/scheduled-scan.yaml) runs every
+[`.github/workflows/scheduled-scan.yaml`](../../.github/workflows/scheduled-scan.yaml) runs every
 Monday, and on demand from the Actions tab. It resolves `:latest` to its index digest once and scans
 the `linux/amd64` and `linux/arm64` images by their own digests with the release's gate
 (`trivy-gate`, the latest Trivy, the same ignore file), and runs `make rust-deny` over `master`'s
@@ -475,8 +475,8 @@ protection rules.
    - CI's **`image` job**, which runs on pull requests and pushes outside the environment: a
      repository Actions secret (`gh secret set DHI_TOKEN`);
    - **Dependabot**, which does not see Actions secrets: both to update the base (the `dhi`
-     registry in [`.github/dependabot.yml`](../.github/dependabot.yml)) and for CI's `image` job on
-     its pull requests (`gh secret set DHI_TOKEN -a dependabot`).
+     registry in [`.github/dependabot.yml`](../../.github/dependabot.yml)) and for CI's `image` job
+     on its pull requests (`gh secret set DHI_TOKEN -a dependabot`).
 
    The `DHI_USERNAME` variable is no longer read.
 
@@ -542,10 +542,10 @@ names its own toolchain.
 ## Commit messages are checked on every pull request
 
 Every commit must be a Conventional Commit with a scope (see
-[CONTRIBUTING.md](../CONTRIBUTING.md#commit-messages)). The local `commit-msg` hook only runs where
+[CONTRIBUTING.md](../../CONTRIBUTING.md#commit-messages)). The local `commit-msg` hook only runs where
 somebody ran `make pre-commit-install`, so a commit made without it would otherwise reach `master`
 unchecked. The `conventional-commits` job in
-[`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) closes that gap: on every pull request
+[`.github/workflows/ci.yaml`](../../.github/workflows/ci.yaml) closes that gap: on every pull request
 it runs the repository's own `conventional-pre-commit` hook, `--force-scope` included, over every
 commit between the pull request's base and head. Merge commits are skipped.
 
@@ -556,17 +556,4 @@ the title becomes the commit subject, and a pull-request title check has to be a
 
 ## Historical notes: the Go releases (1.x)
 
-Releases up to and including `v1.3.2` were built from the Go implementation, which the 2.0 cutover
-replaced. What differed then, for anyone recovering or auditing one of them:
-
-- The binaries were built by `go build` with `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`,
-  the version stamped through `-ldflags -X`, and the Go version taken from `go.mod`; the image's
-  build stage was `dhi.io/golang`.
-- The `test` job ran `make go-vet` and `go test -race ./...`, and the `audit` job ran govulncheck;
-  CI's required `ci-result` also needed `repo-gates`, `go-test` and `go-vulncheck`.
-- `svu` was installed with `go install`, and the Go module and build caches were restored by
-  `actions/setup-go`.
-- Dependabot's `gomod` updates were the dependency bumps committed as `fix(deps)`.
-
-A recovery of a 1.x release runs on that release's commit, whose workflows still describe all of
-this, so nothing in this section is needed to run one.
+Moved to [Historical notes: the Go releases (1.x)](history/go-releases.md).

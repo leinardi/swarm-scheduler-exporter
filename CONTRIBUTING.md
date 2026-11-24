@@ -29,7 +29,7 @@ make rust-build       # cargo build of the whole workspace, every target and fea
 make rust-test        # cargo test --workspace, the meta-tests in meta/ included
 make rust-fmt         # format the code (rust-fmt-check only checks)
 make rust-clippy      # clippy over the workspace, warnings as errors
-make verify           # rust-build, rust-fmt-check, rust-clippy and rust-test in one go
+make verify           # rust-build, rust-fmt-check, rust-clippy, rust-test and rust-doc in one go
 make rust-run ARGS="--containers --log-level debug"  # run against the local Docker daemon, version-stamped
 make audit-deps       # cargo-deny against the RustSec advisories (network required)
 make rust-deny        # every cargo-deny check: advisories, licences, bans, sources (network required)
@@ -79,13 +79,14 @@ a top-level `|` separating whole alternatives (`'^TestNode_Drain$|^TestService_'
 selects no test fails the run instead of passing it, so a typo cannot certify coverage, and the run
 prints how many tests it selected. Each test and subtest prints a `--- PASS`, `--- FAIL` or
 `--- SKIP` line with its duration, then the run prints the selected, passed, skipped and failed
-counts (`[it] 22 selected, 22 passed, 0 skipped, 0 failed`): a skipped test is not counted as
+counts (`[it] 21 selected, 21 passed, 0 skipped, 0 failed`): a skipped test is not counted as
 passed. `SSE_IT_BINARY` names another binary to test instead of the release build.
 
-- `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails, and prints
-  the manager's address (`DOCKER_HOST=tcp://127.0.0.1:<port> docker node ls`) and the command that
-  removes it. Every resource of such a run carries `swarm-scheduler-exporter.it.keep=true`, so no
-  later run's sweep removes it: only that command or `make sweep-test-leaks` does.
+- `SSE_IT_KEEP_ON_FAILURE=true` keeps the cluster running when bring-up or a test fails. A test
+  failure prints the manager's address and the command that removes the cluster; a bring-up failure
+  prints the error and that command. Every resource of such a run carries
+  `swarm-scheduler-exporter.it.keep=true`, so no later run's sweep removes it: only that command or
+  `make sweep-test-leaks` does.
 - `SSE_IT_WORKERS` changes the number of workers, `SSE_IT_DIND_IMAGE` the `docker:dind` image, and
   `SSE_IT_SUITE_TIMEOUT` (default `12m`) the deadline after which every waiting test fails and
   teardown runs.
@@ -126,7 +127,7 @@ Mark breaking changes with `!` before the colon or a `BREAKING CHANGE: <descript
 The release version is derived from these types: since the last release, any `feat` makes the next
 release a minor, any `fix` a patch, and `!` or a `BREAKING CHANGE:` footer a major; `build`,
 `chore`, `ci`, `docs`, `perf`, `refactor`, `revert`, `style` and `test` bump nothing. See
-[`docs/release.md`](docs/release.md).
+[`docs/internal/release.md`](docs/internal/release.md).
 
 Pick the type by whether the change should ship, not by what kind of change it is. A performance
 improvement, a refactor or a revert that changes the shipped binary or image and that users should

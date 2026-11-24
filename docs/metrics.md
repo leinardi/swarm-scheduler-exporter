@@ -203,15 +203,19 @@ the exporter can expose **container state** metrics when started with `--contain
   Emits an **info-style one-hot series** per container across all known states.
   Exactly one time series per container has `1`, the rest are `0`.
 
-  - `project` / `service` — from Compose labels (`com.docker.compose.*`), if present
+  - `project` / `service` — from Compose labels (`com.docker.compose.*`), if present; without a
+    Compose service label, `service` is the Swarm service name without its `<stack>_` prefix
   - `stack` — from Swarm labels (`com.docker.stack.namespace`), if present
   - `container` — the container's first name without its leading `/`, as Docker reports it (not
     sanitized)
   - `orchestrator` — `compose`, `swarm`, or `none`
-  - `display_name` — friendly name (`stack service` or `stack` if identical)
+  - `display_name` — friendly name: `<group> <service>`, or `<group>` if the two are identical,
+    where the group is the Compose project, else the stack; the container name when there is no
+    group or no service
   - `state` — one of `created`, `restarting`, `running`, `removing`, `paused`, `exited`, `dead`,
       `healthy`, `unhealthy`, `health_starting`
-  - `exit_code` — string exit code (only when `state="exited"`, otherwise empty)
+  - `exit_code` — string exit code of an exited container, carried by all of that container's
+    `state` series (the `0` ones too); empty for any other container
 
 > ℹ️ The container list does not say which containers have a healthcheck, so the exporter inspects
 > **every running container** (to read its health state, if any) and **every exited container** (to

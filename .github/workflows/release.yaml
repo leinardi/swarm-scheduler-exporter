@@ -12,7 +12,7 @@ name: Release swarm-scheduler-exporter
 # job-local registry, and smoke-tested and scanned there; only that digest is copied to GHCR, after
 # the tag. Everything after the tag push reuses what is already published only once it is proven to
 # be this run's, and never replaces it, so a re-run with the same explicit version finishes a failed
-# publish. docs/release.md is the prose version of this, with the recovery procedure and why the
+# publish. docs/internal/release.md is the prose version of this, with the recovery procedure and why the
 # full image tests run in CI only.
 on:
   workflow_dispatch:
@@ -91,7 +91,7 @@ jobs:
   #
   # The ruleset cannot express this: tag protection stops a tag moving, not a tag being created
   # from the wrong commit. The second line of defence is the `release` environment, whose
-  # deployment branch rule is configured by hand - docs/release.md.
+  # deployment branch rule is configured by hand - docs/internal/release.md.
   #
   # Then the version: explicit, or derived by svu from the commits, and in both cases higher than
   # every release, unless it is the recovery of this exact tag on this commit (release-version).
@@ -182,7 +182,7 @@ jobs:
   # to master. Its ci-result needs the rust job (fmt, clippy, the
   # tests, the docs, cargo-deny) and the image job, which on a push to master always builds the
   # release binaries with this workflow's make target and the image's prebuilt target from them,
-  # and runs the full image suite on amd64 and the reduced one on arm64 (docs/release.md, "What CI
+  # and runs the full image suite on amd64 and the reduced one on arm64 (docs/internal/release.md, "What CI
   # proves").
   ci-green:
     needs: guard
@@ -254,7 +254,7 @@ jobs:
       CARGO_TERM_COLOR: always
     # Created on first run with no protection rules, which changes nothing by itself. Add a
     # deployment branch rule limiting it to `master`, and required reviewers if a release should need
-    # a second pair of eyes - docs/release.md.
+    # a second pair of eyes - docs/internal/release.md.
     environment: release
     permissions:
       contents: write # push the tag, create the release, upload assets
@@ -351,7 +351,7 @@ jobs:
       #
       # Per platform: image and asset published, they must be the same bytes; image only, the asset
       # is extracted from it; asset only, the image is built with it; neither, the binary is
-      # rebuilt. docs/release.md describes each mode.
+      # rebuilt. docs/internal/release.md describes each mode.
       - name: Decide the release mode
         id: mode
         uses: leinardi/gh-composite-actions/release-mode@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
@@ -726,7 +726,7 @@ jobs:
         run: |
           set -euo pipefail
           if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$TAG" 2>&1); then
-            echo "$IMAGE_REPO:$TAG appeared while this run was building. Nothing was pushed; release a higher version - docs/release.md." >&2
+            echo "$IMAGE_REPO:$TAG appeared while this run was building. Nothing was pushed; release a higher version - docs/internal/release.md." >&2
             exit 1
           elif ! grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
             echo "Could not tell whether $IMAGE_REPO:$TAG exists: $OUT" >&2
@@ -764,7 +764,7 @@ jobs:
 
       # The audit runs alongside this job rather than before it, so the build does not wait for
       # the advisories; nothing is published until it has passed in this run attempt (an earlier
-      # attempt's pass never counts, so a recovery uses "Re-run all jobs" - docs/release.md). A dry
+      # attempt's pass never counts, so a recovery uses "Re-run all jobs" - docs/internal/release.md). A dry
       # run waits for it too, so it reports the audit a real run would face.
       - name: Require the audit to have passed
         uses: leinardi/gh-composite-actions/require-job-success@addc113a34e0a96ca2e08218380fdecad2fdd230 # v1.4.2
@@ -928,7 +928,7 @@ jobs:
           # Checked again right before tagging: a version tag that appeared since
           # the checks above is never overwritten.
           if OUT=$(docker buildx imagetools inspect "$IMAGE_REPO:$TAG" 2>&1); then
-            echo "$IMAGE_REPO:$TAG appeared while this run was publishing. It was not overwritten: re-run to verify it, or hand it to a human - docs/release.md." >&2
+            echo "$IMAGE_REPO:$TAG appeared while this run was publishing. It was not overwritten: re-run to verify it, or hand it to a human - docs/internal/release.md." >&2
             exit 1
           elif ! grep -qiE 'not found|manifest unknown' <<<"$OUT"; then
             echo "Could not tell whether $IMAGE_REPO:$TAG exists: $OUT" >&2
@@ -1042,7 +1042,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # The moving pointers go last, each after its own fresh look at the remote: a version that is
-      # no longer the highest does not take them. Best-effort, not atomic - docs/release.md.
+      # no longer the highest does not take them. Best-effort, not atomic - docs/internal/release.md.
       - name: Move the image major and latest tags
         id: pointers
         if: ${{ !inputs.dry_run }}
@@ -1112,7 +1112,7 @@ jobs:
             | sort -V \
             | tail -n1)
           if [ "$MOVED" = "true" ] && [ "$HIGHEST_REMOTE" != "$TAG" ]; then
-            echo "::warning::$HIGHEST_REMOTE was tagged while $TAG was publishing. The image :latest and :$MAJOR may point at $TAG while GitHub marks another release Latest. Fix: re-dispatch $HIGHEST_REMOTE, whose own late checks repoint them; if that tag was created outside this workflow and has no image, retag by hand as docs/release.md describes."
+            echo "::warning::$HIGHEST_REMOTE was tagged while $TAG was publishing. The image :latest and :$MAJOR may point at $TAG while GitHub marks another release Latest. Fix: re-dispatch $HIGHEST_REMOTE, whose own late checks repoint them; if that tag was created outside this workflow and has no image, retag by hand as docs/internal/release.md describes."
           fi
 
       - name: Summarize the release

@@ -4,8 +4,9 @@ This page covers the two jumps: **2.x to 3.0** (the Rust exporter moves onto sha
 libraries and stops reproducing Go's behaviour byte for byte) and, below it, **1.x (Go) to Rust**.
 Either way every `swarm_*` metric keeps its name, type, help text, labels and values, `/metrics`
 and `/healthz` keep their paths, and the Docker access stays read-only. The metric names, types
-and label names are pinned by a committed inventory taken from the 1.3.2 exposition (minus the
-`go_*` and `promhttp_*` families), and the values the Docker fixtures feed are checked by tests.
+and label names are pinned by a committed inventory that started from the 1.3.2 exposition (minus
+the `go_*` and `promhttp_*` families) and has since gained the `swarm_node_*` and
+`swarm_service_restart_policy` families. The values the Docker fixtures feed are checked by tests.
 
 ## Upgrading from 2.x to 3.0
 
@@ -24,7 +25,7 @@ Before you roll it out:
   `deployments/docker/socket-proxy.env` is updated.
 - **Log parsers.** Logs are `tracing` lines: text (`level`, `message`, then `key=value` fields) or
   JSON (`level`, `message`, the fields, `target`), timestamps in UTC (`TZ` has no effect), the error
-  field is `error` (it was `err`), and durations print as `500ms`, `1m 30s`.
+  field is `error` (it was `err`), and durations print as `500ms`, `90s`, `1.5s`.
   `--log-format plain` and `--log-level fatal|panic` are refused (exit 2); `warning` is still an
   alias of `warn`.
 - **Flag values.** A bool flag takes `true` or `false` only: `--containers=1`, `=t`, `=TRUE`, `=0`
@@ -39,7 +40,8 @@ Before you roll it out:
   where 2.x passed it on as text.
 - **HTTP edge cases.** Any other path is a bodyless 404, a method other than GET or HEAD is 405, and
   a listen error reads `http listen: listen tcp <address>: <system error>` (Q13). The listener is
-  dual-stack on `:port`.
+  dual-stack on any wildcard host (`:port`, `[::]:port` and the default `0.0.0.0:8888`): it binds
+  `[::]`, so it is reachable over IPv6 too, and binds IPv4 only on a host without IPv6.
 
 The rows that changed since 2.x are Q1, Q2, Q3, Q4, Q6, Q11, Q13, Q15, Q16 and Q17 in the table
 below.
@@ -59,8 +61,8 @@ What to change when upgrading from 1.x, besides the 3.0 list above:
   `test: [ "CMD", "/usr/local/bin/swarm-scheduler-exporter", "--healthcheck" ]`. The image's own
   `HEALTHCHECK` and the compose examples in `deployments/docker/` already do.
 - **Dashboards or alerts on `go_*` metrics** have nothing to read: use `process_*` instead.
-- **`DOCKER_CERT_PATH` without `DOCKER_TLS_VERIFY`** no longer connects without verifying the
-  daemon's certificate: set `DOCKER_TLS_VERIFY=1`.
+- **`DOCKER_CERT_PATH` without `DOCKER_TLS_VERIFY`** on a `tcp://` host no longer connects without
+  verifying the daemon's certificate: set `DOCKER_TLS_VERIFY=1`.
 - **A TCP `DOCKER_HOST` reached through `HTTP_PROXY` or `HTTPS_PROXY`** is now dialled directly.
   If the daemon is reachable only through that proxy, point `DOCKER_HOST` at a proxy that forwards
   to it (a socket proxy). A unix socket was never proxied.
@@ -74,7 +76,7 @@ read as written here):
 | Q2 | `/metrics` formats | Negotiated from `Accept`: protobuf (delimited, text, compact) or text 0.0.4; gzip by `Accept-Encoding` | Always OpenMetrics text (`application/openmetrics-text; version=1.0.0; charset=utf-8`), never compressed; a counter's family has no `_total` (its sample has); `?name[]=` filtering is gone |
 | Q3 | CLI | Go's `flag`: `-x` and `--x` both work, trailing positional arguments are ignored (`-containers false` meant `true`), `-h` printed usage to standard error | `--x` only; a single-dash flag and any positional argument are refused (exit 2); `-h`/`--help` print to standard output and exit 0. Kept: names, defaults, last value wins, `--containers=false`, repeatable `--label`, exit 2 on parse errors. See Q17 for the value spellings |
 | Q4 | Log flags | An unknown `-log-level` or `-log-format` silently fell back to `info` / `text` | Refused (exit 2), the message naming the accepted values; `plain` (format) and `fatal`, `panic` (level) are no longer accepted, `warning` stays an alias of `warn` |
-| Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | Startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |
+| Q5 | Docker TLS | `DOCKER_CERT_PATH` with an empty `DOCKER_TLS_VERIFY` meant TLS without verifying the daemon | With a `tcp://` host, startup fails (`docker client init failed`, exit 1) and asks for `DOCKER_TLS_VERIFY=1`; trust roots stay the system pool plus `ca.pem` |
 | Q6 | Events connect | `event stream connected` was logged, and a reconnect's resync requested, even when the connect failed | Both happen only once the engine has answered the events request's headers with a 2xx, however quiet the stream is after: a refused request (non-2xx, no connection) or headers that do not arrive within 15s (the request timeout) is a failed connect and goes straight to the warn path |
 | Q7 | Reconnect backoff | The 500ms backoff reset only after a stream that carried an event, so a quiet cluster behind a proxy backed off to 30s | It resets after any stream that connected |
 | Q8 | Shutdown | 10s for the HTTP drain, then an unbounded wait for the workers | One 10s budget from the signal to exit, covering the drain and the workers |
@@ -86,7 +88,7 @@ read as written here):
 | Q14 | Docker proxy variables | A TCP `DOCKER_HOST` went through `HTTP_PROXY` / `HTTPS_PROXY` (honouring `NO_PROXY` and skipping loopback), as Go's `http.ProxyFromEnvironment` decides | The client dials `DOCKER_HOST` directly and reads no proxy variable; unix sockets are unaffected |
 | Q15 | Log output | slog text/JSON/plain lines, timestamps in the local zone (`TZ`) | `tracing` text or JSON lines (`level`, `message`, then the fields; JSON adds `target`), timestamps in UTC; the fields keep their names except `err`, now `error`, and durations print as Rust writes them (`500ms`, `1s`) |
 | Q16 | Docker client | moby client v0.6.0 over its own HTTP/1 transport; every state a string; `DOCKER_API_VERSION` within 1.40–1.56 | bollard through `docker-client`: a state or type the daemon documents is decoded, one a newer daemon invents fails the call that carries it (a decode error, logged by the collector); requests carry the `/v<major>.<minor>` prefix of the pinned or negotiated version (none before negotiation, or after a refused one); the container list asks `all=true&size=false`; a pin must be `<major>.<minor>` within 1.40–1.56 |
-| Q17 | Value spellings | Bool flags took every `strconv.ParseBool` spelling (`1`, `t`, `T`, `TRUE`, `True`, `0`, `f`, `F`, `FALSE`, `False`); `--poll-delay` took Go durations, a leading sign included; a `node.ip` CIDR took a prefix length with leading zeros (`10.0.0.0/024`); constraints and container labels folded case by Go's simple folding; custom-label errors quoted values with `%q` | Bool flags take `true` or `false` only (exit 2 otherwise); `--poll-delay` takes humantime durations (`10s`, `500ms`, `1m30s`, `1m 30s`, `1.5s`, `5µs`, and now `2d`), but no sign: `-5s` is a parse error (exit 2, where Go's reached the exit-1 minimum check), and a bare number needs a unit as before; a CIDR prefix has no leading zeros (the constraint never matches); constraint keys and values compare by Unicode lowercase, so U+017F (long s) no longer equals `s`; custom-label errors quote with `{:?}`; a poll delay prints as `10s`, `1h 2m`, `1s 500ms` |
+| Q17 | Value spellings | Bool flags took every `strconv.ParseBool` spelling (`1`, `t`, `T`, `TRUE`, `True`, `0`, `f`, `F`, `FALSE`, `False`); `--poll-delay` took Go durations, a leading sign included; a `node.ip` CIDR took a prefix length with leading zeros (`10.0.0.0/024`); constraints and container labels folded case by Go's simple folding; custom-label errors quoted values with `%q` | Bool flags take `true` or `false` only (exit 2 otherwise); `--poll-delay` takes humantime durations (`10s`, `500ms`, `1m30s`, `1m 30s`, `1.5s`, `5µs`, and now `2d`), but no sign: `-5s` is a parse error (exit 2, where Go's reached the exit-1 minimum check), and a bare number needs a unit as before; a CIDR prefix has no leading zeros (the constraint never matches); constraint keys and values compare by Unicode lowercase, so U+017F (long s) no longer equals `s`; custom-label errors quote with `{:?}`; a poll delay in a log field prints as Rust's `Debug` writes it (`10s`, `3720s`, `1.5s`) |
 | Q18 | Event records | moby's decoder read an `/events` record whole, whatever its size | A record over 1 MiB, every byte before its newline counted, ends the stream at warn; the reconnect subscribes to live events only, with no `since` (`next_since=none`), so the record is skipped rather than replayed, and the reconnect's resync covers the skipped window |
 
 ## Addressed vs Original Project
@@ -113,5 +115,6 @@ read as written here):
 - **SLO helpers**: `swarm_service_running_replicas` and `swarm_service_at_desired` for direct
   alerting/dashboards.
 - **Footprint**: since 2.0 a static Rust binary on a distroless base, with a smaller image and
-  binary than the Go 1.x releases (see [Resource usage](../README.md#-resource-usage)), and a
+  binary than the Go 1.x releases (see
+  [Resource usage](https://github.com/leinardi/swarm-scheduler-exporter#-resource-usage)), and a
   Docker client that can only send read requests.

@@ -70,7 +70,7 @@ fn shipped() -> String {
 
 /// Go: `TestSyntaxDirectiveIsPinned`. The `BuildKit` frontend that reads the Dockerfile is a
 /// literal docker/dockerfile reference pinned by tag and digest: a bare docker/dockerfile:1.7 is a
-/// tag that can be moved under a build, and Dependabot never updates the line (docs/release.md).
+/// tag that can be moved under a build, and Dependabot never updates the line (docs/internal/release.md).
 #[test]
 fn syntax_directive_is_pinned() {
     let problems = syntax_problems(SHIPPED_DOCKERFILE, &shipped(), true);

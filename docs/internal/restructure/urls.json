@@ -1,0 +1,227 @@
+{
+ "kind": "source",
+ "routes": {},
+ "anchor_redirects": {},
+ "sitemap": [],
+ "github": {
+  ".agents/skills/adversarial-review/SKILL.md": [
+   "a-endpoint-and-image",
+   "a-panic-costs-a-step-not-the-process",
+   "adversarial-passes",
+   "adversarial-review--swarm-scheduler-exporter",
+   "always-on-passes",
+   "authority",
+   "b-deletion-smell",
+   "bounded-work",
+   "c-a-new-suppression-has-to-show-its-work",
+   "commit-type-matches-whether-it-ships",
+   "d-cross-file-duplication",
+   "e-docs-drift",
+   "endpoint-and-image-hardening",
+   "gates",
+   "health-means-published-data",
+   "meta-tests-must-not-pass-on-nothing",
+   "metrics-are-the-public-contract",
+   "one-owner-for-swarm-state",
+   "poll-consistency",
+   "read-only-against-docker--enforced-in-code-not-at-runtime",
+   "report",
+   "repository-invariants-check-on-every-review-whatever-changed",
+   "scope",
+   "series-lifecycle",
+   "the-clock-is-injected"
+  ],
+  ".agents/skills/adversarial-review/references/release-and-image.md": [
+   "image-release-and-ci-invariants--swarm-scheduler-exporter",
+   "release-and-ci",
+   "the-image"
+  ],
+  ".github/ISSUE_TEMPLATE/bug_report.md": [
+   "error--log-output",
+   "expected-results",
+   "observed-results",
+   "relevant-code-configuration-or-data",
+   "step-1-are-you-in-the-right-place",
+   "step-2-describe-your-environment",
+   "step-3-describe-the-problem",
+   "steps-to-reproduce"
+  ],
+  ".github/ISSUE_TEMPLATE/feature_request.md": [
+   "1-summary",
+   "2-problem--motivation",
+   "3-proposed-solution",
+   "4-alternatives-considered",
+   "5-impact-and-scope",
+   "6-additional-context",
+   "7-optional-pseudo-code--configuration-sketch",
+   "step-1-is-this-the-right-place"
+  ],
+  ".github/ISSUE_TEMPLATE/question.md": [
+   "1-question",
+   "2-context",
+   "3-what-youve-tried",
+   "4-environment-if-relevant",
+   "5-additional-details",
+   "step-1-is-this-the-right-place"
+  ],
+  ".github/PULL_REQUEST_TEMPLATE.md": [
+   "pull-request-checklist",
+   "summary",
+   "type-of-changes"
+  ],
+  ".serena/memories/conventions.md": [
+   "conventions-beyond-agentsmd"
+  ],
+  ".serena/memories/core.md": [
+   "non-obvious-anchors",
+   "source-map",
+   "swarm-scheduler-exporter--core"
+  ],
+  ".serena/memories/memory_maintenance.md": [
+   "addupdate-threshold",
+   "discovery-model",
+   "maintenance-actions",
+   "memory-maintenance",
+   "style"
+  ],
+  ".serena/memories/suggested_commands.md": [
+   "suggested-commands"
+  ],
+  ".serena/memories/task_completion.md": [
+   "task-completion"
+  ],
+  ".serena/memories/tech_stack.md": [
+   "tech-stack"
+  ],
+  "AGENTS.md": [
+   "agentsmd",
+   "commit-messages",
+   "common-commands",
+   "conventions-worth-knowing",
+   "generated-or-vendored-never-hand-edit",
+   "github-conventions",
+   "invariants",
+   "layout",
+   "licence-headers",
+   "project-skills",
+   "shared-code-rust-common",
+   "validation-matrix",
+   "what-this-is"
+  ],
+  "CONTRIBUTING.md": [
+   "building-and-testing",
+   "commit-messages",
+   "contributing",
+   "integration-tests",
+   "prerequisites",
+   "versioning"
+  ],
+  "README.md": [
+   "-acknowledgements",
+   "-addressed-vs-original-project",
+   "-alternative-tcptls-no-socket-mount",
+   "-behind-a-socket-proxy-recommended",
+   "-contributing",
+   "-docker-compose-example",
+   "-docker-single-host",
+   "-documentation",
+   "-example-alerts",
+   "-example-prometheus-scrape-config",
+   "-finding-the-correct-socket-group",
+   "-health",
+   "-metrics",
+   "-migrating",
+   "-quick-checks",
+   "-quick-start",
+   "-requirements",
+   "-resource-usage",
+   "-security--permissions",
+   "-swarm-service-socket-mount",
+   "-what-is-swarm-scheduler-exporter",
+   "-what-this-exporter-does",
+   "cluster--node-visibility",
+   "coming-from-1x-go",
+   "container-level-opt-in",
+   "custom-label-guardrails",
+   "environment-docker-client",
+   "exporter-self-metrics",
+   "flags",
+   "node-level",
+   "runtime-metrics",
+   "service-level",
+   "service-updaterollback-info-style",
+   "swarm-scheduler-exporter",
+   "upgrading-from-2x-to-30",
+   "️-configuration"
+  ],
+  "SECURITY.md": [
+   "reporting-a-vulnerability",
+   "scope",
+   "security-model",
+   "security-policy",
+   "supported-versions",
+   "verifying-a-release"
+  ],
+  "docs/alerts.md": [
+   "example-alerts"
+  ],
+  "docs/configuration.md": [
+   "configuration",
+   "custom-label-guardrails",
+   "environment-docker-client",
+   "flags"
+  ],
+  "docs/deployment.md": [
+   "alternative-tcptls-no-socket-mount",
+   "behind-a-socket-proxy-recommended",
+   "deployment",
+   "docker-compose-example",
+   "docker-single-host",
+   "finding-the-correct-socket-group",
+   "swarm-service-socket-mount"
+  ],
+  "docs/metrics.md": [
+   "cluster--node-visibility",
+   "container-level-opt-in",
+   "exporter-self-metrics",
+   "metrics",
+   "node-level",
+   "runtime-metrics",
+   "service-level",
+   "service-updaterollback-info-style"
+  ],
+  "docs/migration.md": [
+   "addressed-vs-original-project",
+   "coming-from-1x-go",
+   "migrating",
+   "upgrading-from-2x-to-30"
+  ],
+  "docs/operations.md": [
+   "event-stream-and-refresh",
+   "health",
+   "operations"
+  ],
+  "docs/release.md": [
+   "bumping-the-rust-toolchain",
+   "commit-messages-are-checked-on-every-pull-request",
+   "dependabot-releases",
+   "dry-runs",
+   "environment-and-credentials",
+   "historical-notes-the-go-releases-1x",
+   "how-to-release",
+   "one-time-setup",
+   "recovering-a-failed-publish",
+   "recovery-guarantees",
+   "release",
+   "required-checks",
+   "scheduled-scan",
+   "stray-local-tags",
+   "the-scan-gate",
+   "versioning",
+   "what-a-release-produces",
+   "what-ci-proves",
+   "what-the-workflows-trust",
+   "why-the-build-happens-before-the-tag"
+  ]
+ }
+}

@@ -81,7 +81,7 @@ For a single host, a socket mount, TCP/TLS, Compose or the socket group, see
 - [Operations](docs/operations.md): health checks and the event stream's behaviour.
 - [Example alerts](docs/alerts.md): Prometheus alert rules to start from.
 - [Migrating](docs/migration.md): upgrading from 2.x or 1.x, and changes from the original project.
-- [Releasing](docs/release.md): how a release is cut and recovered.
+- [Releasing](docs/internal/release.md): how a release is cut and recovered.
 - [Contributing](CONTRIBUTING.md): the hook setup and the commit-message rules.
 
 ## 🧪 Quick checks
@@ -107,7 +107,8 @@ scrape_configs:
   resources. To enforce read-only access, put a socket proxy in front of the Docker API: see [Behind
   a socket proxy](docs/deployment.md#behind-a-socket-proxy-recommended) for a tested example,
   and its scope note (read-only, not least-privilege).
-- Must run on a **manager** node in Swarm to receive cluster-wide events and inspect services.
+- Needs the Docker API of a **manager** node to receive cluster-wide events and inspect services:
+  run it on a manager, or reach one through the socket proxy, as the recommended stack does.
 - Avoid exposing the exporter to untrusted networks; it exposes metrics only, but your scrape
   endpoint should be internal.
 

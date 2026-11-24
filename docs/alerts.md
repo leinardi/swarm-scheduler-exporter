@@ -14,7 +14,7 @@ Prometheus Alert rule:
   for: 5m
   labels:
     severity: warning
-    service: swarm
+    component: swarm
   annotations:
     summary: "Service {{ $labels.stack }}/{{ $labels.service }} not at desired replicas"
     description: |
@@ -29,23 +29,23 @@ Prometheus Alert rule:
 - alert: SwarmServiceRollbackOngoing
   expr: |
     sum by (stack, service, display_name) (
-      swarm_service_update_state_info{state=~"rollback_(started|completed)"}
+      swarm_service_update_state_info{state="rollback_started"}
     ) > 0
   for: 1m
   labels:
     severity: warning
-    service: swarm
+    component: swarm
   annotations:
     summary: "Service rollback detected for {{ $labels.display_name }}"
     description: |
-      The Swarm service {{ $labels.display_name }} is in a rollback state
-      (rollback_started or rollback_completed).
+      The Swarm service {{ $labels.display_name }} is rolling back
+      (rollback_started).
       Investigate the deployment history and task failures.
 
 # ─────────────────────────────────────────────────────────────
 # Containers in an unhealthy / failed state (Compose/standalone)
 #   - Includes: unhealthy, exited, dead
-#   - Excludes: one-shot containers that exited/dead with exit_code=0
+#   - Excludes: one-shot containers that exited with exit_code=0
 # ─────────────────────────────────────────────────────────────
 - alert: ContainerUnhealthy
   expr: |
@@ -62,7 +62,7 @@ Prometheus Alert rule:
       sum by (display_name, stack, service) (
         swarm_container_state{
           orchestrator=~"compose|none",
-          state=~"exited|dead",
+          state="exited",
           exit_code="0"
         }
       ) > 0
@@ -70,7 +70,7 @@ Prometheus Alert rule:
   for: 5m
   labels:
     severity: warning
-    service: containers
+    component: containers
   annotations:
     summary: "Container unhealthy or failed: {{ $labels.display_name }}"
     description: |
@@ -86,7 +86,7 @@ Prometheus Alert rule:
   for: 5m
   labels:
     severity: warning
-    service: swarm
+    component: swarm
   annotations:
     summary: "Swarm cluster has node(s) not ready"
     description: |

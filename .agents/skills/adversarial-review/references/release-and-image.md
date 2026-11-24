@@ -3,7 +3,7 @@
 Back to [SKILL.md](../SKILL.md). These items belong to its "Endpoint and image hardening" invariants.
 Walk them when the diff touches `deployments/docker/**`, `.trivyignore.yaml`,
 `.github/workflows/**`, `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings, the
-shared `.mk/rust-release.mk` or `.mk/image.mk`, or `docs/release.md`.
+shared `.mk/rust-release.mk` or `.mk/image.mk`, or `docs/internal/release.md`.
 
 ## The image
 
@@ -30,8 +30,8 @@ group (`--group-add`, `user: "65532:<gid>"`), not by running as root.
 
 ## Release and CI
 
-`docs/release.md` is the contract; `.github/workflows/release.yaml` implements it. Tags here are
-immutable, so the order of the release job is the safety property:
+`docs/internal/release.md` is the contract; `.github/workflows/release.yaml` implements it. Tags
+here are immutable, so the order of the release job is the safety property:
 
 - The mode is decided from two fail-closed lookups before anything is pushed: the Git tag on the
   remote and `ghcr.io/…:<version>`. Only "not found" may read as absent; a lookup whose error is
@@ -39,9 +39,9 @@ immutable, so the order of the release job is the safety property:
 - The release runs no test suite of its own: `ci-green` (`require-ci-green`) gates on CI's
   `ci-result` and on `integration.yaml`'s `integration` for the push of the exact commit; CI's
   `image` job builds the release binaries with `make rust-release-binaries` and the `prebuilt`
-  target from them, and runs the full image suite on amd64 and the reduced one on arm64 (`docs/release.md`,
-  "What CI proves"). A change that weakens CI's `image` or `rust` job, or the integration suite,
-  or lets one skip on a push, weakens the release and is a finding.
+  target from them, and runs the full image suite on amd64 and the reduced one on arm64
+  (`docs/internal/release.md`, "What CI proves"). A change that weakens CI's `image` or `rust` job,
+  or the integration suite, or lets one skip on a push, weakens the release and is a finding.
 - The `audit` job (cargo-deny) runs alongside the release job's build; `require-job-success`
   waits for it before the first step that publishes. A publishing step moved above that wait, or
   the wait made conditional, is a finding.

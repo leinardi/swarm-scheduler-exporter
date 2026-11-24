@@ -27,4 +27,4 @@
   `deployments/docker/socket-proxy.env`).
 - Release: gh-composite-actions (release-version with svu, require-ci-green, release-mode,
   trivy-gate at the latest Trivy); cosign keyless signing + provenance attestations (see
-  `docs/release.md`).
+  `docs/internal/release.md`).

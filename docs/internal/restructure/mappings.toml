@@ -1,0 +1,131 @@
+[[rewritten]]
+id = "m1"
+blocks = ["1dcb24bf50f7a9a9"]
+to = "CONTRIBUTING.md"
+heading = "Building and testing"
+
+[[rewritten]]
+id = "m2"
+blocks = ["2f359af76b7a5a2a"]
+to = "CONTRIBUTING.md"
+heading = "Integration tests"
+
+[[rewritten]]
+id = "m3"
+blocks = ["43bf6a1ba07162c1"]
+to = "CONTRIBUTING.md"
+heading = "Integration tests"
+
+[[rewritten]]
+id = "m4"
+blocks = ["f41e9af1f121206f"]
+to = "README.md"
+heading = "🔐 Security & Permissions"
+
+[[rewritten]]
+id = "m5"
+blocks = ["31c2181da2f84e90"]
+to = "SECURITY.md"
+heading = "Supported versions"
+
+[[rewritten]]
+id = "m6"
+blocks = ["f60179e7a3c77c45"]
+to = "SECURITY.md"
+heading = "Security model"
+
+[[rewritten]]
+id = "m7"
+blocks = ["810726b0af009cb8"]
+to = "docs/configuration.md"
+heading = "Flags"
+
+[[rewritten]]
+id = "m8"
+blocks = ["1d232bccc926fef4"]
+to = "docs/configuration.md"
+heading = "Environment (Docker client)"
+
+[[rewritten]]
+id = "m9"
+blocks = ["ad80f9fd6feb6240"]
+to = "docs/metrics.md"
+heading = "Container-level (opt-in)"
+
+[[rewritten]]
+id = "m10"
+blocks = ["c3d5e89b73e7d23f"]
+to = "docs/metrics.md"
+heading = "Container-level (opt-in)"
+
+[[rewritten]]
+id = "m11"
+blocks = ["4bed0e08667a63d7"]
+to = "docs/metrics.md"
+heading = "Container-level (opt-in)"
+
+[[rewritten]]
+id = "m12"
+blocks = ["ea412bbbb8bec908"]
+to = "docs/migration.md"
+heading = "Migrating"
+
+[[rewritten]]
+id = "m13"
+blocks = ["565136d20b4d28a4"]
+to = "docs/migration.md"
+heading = "Upgrading from 2.x to 3.0"
+
+[[rewritten]]
+id = "m14"
+blocks = ["6a4becf850749b70"]
+to = "docs/migration.md"
+heading = "Upgrading from 2.x to 3.0"
+
+[[rewritten]]
+id = "m15"
+blocks = ["b2f0fd2fabcd7d86"]
+to = "docs/migration.md"
+heading = "Coming from 1.x (Go)"
+
+[[rewritten]]
+id = "m16"
+blocks = ["f17f174987a0e769"]
+to = "docs/migration.md"
+heading = "Coming from 1.x (Go)"
+
+[[rewritten]]
+id = "m17"
+blocks = ["fb1878bf7de89871"]
+to = "docs/migration.md"
+heading = "Coming from 1.x (Go)"
+
+[[rewritten]]
+id = "m18"
+blocks = ["8f837ca4e16d627f"]
+to = "docs/operations.md"
+heading = "Event stream and refresh"
+
+[[rewritten]]
+id = "m19"
+blocks = ["bd79b26cd5632072"]
+to = "AGENTS.md"
+heading = "Layout"
+
+[[rewritten]]
+id = "m20"
+blocks = ["aeebdd1552ae096e"]
+to = "docs/alerts.md"
+heading = "Example Alerts"
+
+[[github_loss]]
+id = "m21"
+path = "docs/release.md"
+page = true
+reason = "moved to docs/internal/release.md; its Go release history moved to docs/internal/history/go-releases.md"
+
+[[rewritten]]
+id = "m22"
+blocks = ["0db0db8388e7bd4e"]
+to = "AGENTS.md"
+heading = "Shared code: rust-common"

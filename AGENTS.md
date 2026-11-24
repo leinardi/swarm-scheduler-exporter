@@ -90,7 +90,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
   - `src/labels.rs` — sanitizing and validating custom label keys; `src/version.rs` — the build
     stamps (`service_kit::buildinfo!`).
   - `tests/` — the black-box tests: the Engine API wire captures (`engine_wire.rs`, against
-    `tests/support/fake_engine.rs`), the metrics (`tests/metrics.rs`: the inventory against
+    `docker_client::test_util::FakeEngine`), the metrics (`tests/metrics.rs`: the inventory against
     `tests/testdata/metrics/inventory.txt`, values, buckets, removal, scrape atomicity), the run
     lifecycle. The unit tests capture logs with `test_support::capture_logs` (a scoped
     `tracing_setup` subscriber).
@@ -115,11 +115,12 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 - `.github/workflows/` — `ci.yaml` (`pre-commit-all`, `rust`, `image`, `conventional-commits` and
   the `ci-result` aggregator; the reviewdog jobs on pull requests), `integration.yaml` (the DinD
   Swarm suite, required by name), `release.yaml` (`guard`, `ci-green`, `audit`, `release`;
-  [`docs/release.md`](docs/release.md)), `scheduled-scan.yaml` and `pre-commit-warmup.yaml`. Shared
-  steps come from [gh-composite-actions](https://github.com/leinardi/gh-composite-actions), pinned
-  by SHA. `.trivyignore.yaml` holds the scans' accepted findings.
+  [`docs/internal/release.md`](docs/internal/release.md)), `scheduled-scan.yaml` and
+  `pre-commit-warmup.yaml`. Shared steps come from
+  [gh-composite-actions](https://github.com/leinardi/gh-composite-actions), pinned by SHA.
+  `.trivyignore.yaml` holds the scans' accepted findings.
 - `docs/` — the user-facing reference the README links to (`metrics.md`, `configuration.md`,
-  `deployment.md`, `operations.md`, `alerts.md`, `migration.md`), and `release.md`: how a release
+  `deployment.md`, `operations.md`, `alerts.md`, `migration.md`), and `internal/release.md`: how a release
   is cut and recovered, and what CI proves for it.
 - `scripts/` — the licence-header check, `image-test.sh` (the image tests in three tiers: CI's full
   amd64 and reduced arm64 suites, and the release's smoke test), the make-common bootstrap and the
@@ -242,9 +243,9 @@ Run before considering an edit done. `make check` applies to every row.
 | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml` | `make verify`; after `testenv/**` or anything the integration suite exercises, `make test-integration` (Docker) |
 | `Cargo.toml`, `Cargo.lock`, `deny.toml`, a rust-common `tag` bump | `make rust-deny`, which needs the network (cargo also fetches the git dependency) |
 | `deployments/docker/Dockerfile`, `droast.toml`, `deployments/docker/Dockerfile.dockerignore` | `cargo test -p meta --test dockerfiles --test toolchain` (droast runs in `make check`); gh-composite-actions' `check-pinned-bases/check-pinned-bases.sh --tag-only dhi.io deployments/docker/Dockerfile`; `make rust-release-binaries`, then `make image-build-test`, and with QEMU `make image-build-test IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced`; `make docker-build` (all need a `dhi.io` login) |
-| `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings | `make rust-release-binaries`, then `make image-build-test` (and the arm64 run above); keep `docs/release.md#what-ci-proves` true |
+| `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings | `make rust-release-binaries`, then `make image-build-test` (and the arm64 run above); keep `docs/internal/release.md#what-ci-proves` true |
 | `.trivyignore.yaml` | every entry scoped to paths or purls, with a statement and an `expired_at`; scan the prebuilt image with the latest Trivy as `trivy-gate` runs it (`--ignore-unfixed --severity HIGH,CRITICAL --ignorefile .trivyignore.yaml`) |
-| `.github/workflows/**`, `.github/dependabot.yml` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles`; reason through each trigger the workflow has (pull request, fork pull request, push, dispatch, schedule); for `release.yaml`, keep `docs/release.md` in step and dispatch a dry run once CI passed on the commit; for `ci.yaml`'s `image` job, keep `docs/release.md#what-ci-proves` true |
+| `.github/workflows/**`, `.github/dependabot.yml` | `pre-commit run actionlint --all-files`, `cargo test -p meta --test toolchain --test dockerfiles`; reason through each trigger the workflow has (pull request, fork pull request, push, dispatch, schedule); for `release.yaml`, keep `docs/internal/release.md` in step and dispatch a dry run once CI passed on the commit; for `ci.yaml`'s `image` job, keep `docs/internal/release.md#what-ci-proves` true |
 | `.pre-commit-config.yaml`, `Makefile`, `.mk/**` | `cargo test -p meta --test toolchain`, `make help` |
 | `scripts/check-license-headers.sh` | `pre-commit run check-license-headers --all-files` |
 | `meta/**` | `cargo test -p meta` |
@@ -337,4 +338,4 @@ only when the commit is deliberately not meant to trigger a release on its own. 
 shipped `feat` or `fix` is itself a `fix`. `svu` matches `feat`/`fix` anywhere in the subject (e.g.
 `prefix:` counts as `fix:`), so avoid a word ending in `feat` or `fix` directly before a colon in
 other subjects. PRs land as merge commits, so every commit counts, not just the PR title. See
-[`docs/release.md`](docs/release.md).
+[`docs/internal/release.md`](docs/internal/release.md).

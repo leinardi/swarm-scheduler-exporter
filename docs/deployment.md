@@ -63,8 +63,8 @@ The exporter only reads, but whatever holds the Docker socket can do anything. P
 [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) in front of it:
 the exporter then reaches the Docker API over an internal overlay network, and the proxy refuses
 every write and every API section the allowlist leaves off. A ready Swarm stack is in
-[`deployments/docker/docker-compose.socket-proxy.yaml`](../deployments/docker/docker-compose.socket-proxy.yaml),
-with the allowlist in [`deployments/docker/socket-proxy.env`](../deployments/docker/socket-proxy.env):
+[`deployments/docker/docker-compose.socket-proxy.yaml`](https://github.com/leinardi/swarm-scheduler-exporter/blob/master/deployments/docker/docker-compose.socket-proxy.yaml),
+with the allowlist in [`deployments/docker/socket-proxy.env`](https://github.com/leinardi/swarm-scheduler-exporter/blob/master/deployments/docker/socket-proxy.env):
 
 ```bash
 cd deployments/docker
@@ -124,6 +124,7 @@ This avoids group and permission issues, relying instead on proper TLS authentic
 ## Docker Compose Example
 
 A complete Compose setup (replicated mode, manager constraint, and environment hints) is available
-at: [`deployments/docker/docker-compose.yaml`](../deployments/docker/docker-compose.yaml). The
-socket-proxy stack is in
-[`deployments/docker/docker-compose.socket-proxy.yaml`](../deployments/docker/docker-compose.socket-proxy.yaml).
+at:
+[`deployments/docker/docker-compose.yaml`](https://github.com/leinardi/swarm-scheduler-exporter/blob/master/deployments/docker/docker-compose.yaml).
+The socket-proxy stack is in
+[`deployments/docker/docker-compose.socket-proxy.yaml`](https://github.com/leinardi/swarm-scheduler-exporter/blob/master/deployments/docker/docker-compose.socket-proxy.yaml).

@@ -10,7 +10,7 @@ every row. Most common:
   `make rust-release-binaries`, then `make image-build-test` (amd64 full; arm64
   `IMAGE_PLATFORM=linux/arm64 IMAGE_TEST_TIER=reduced` under QEMU), `make docker-build`.
 - `scripts/image-test.sh`, the Makefile's `RUST_RELEASE_*` settings: the same image runs; keep
-  `docs/release.md#what-ci-proves` true.
+  `docs/internal/release.md#what-ci-proves` true.
 - `.github/**`: `pre-commit run actionlint --all-files`,
   `cargo test -p meta --test toolchain --test dockerfiles`.
 - `meta/**`: `cargo test -p meta`.

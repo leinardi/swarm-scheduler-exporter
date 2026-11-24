@@ -2,9 +2,10 @@
 
 ## Supported versions
 
-Only the latest release gets security fixes. A fix ships as a new version: released tags and image
-tags are immutable, so an existing version is never rebuilt or replaced. Upgrade to the latest
-release, or follow `ghcr.io/leinardi/swarm-scheduler-exporter:latest` or the `:<major>` tag.
+Only the latest release gets security fixes. A fix ships as a new version: release tags and version
+image tags are immutable, so an existing version is never rebuilt or replaced. Upgrade to the latest
+release, or follow `ghcr.io/leinardi/swarm-scheduler-exporter:latest` or the `:<major>` tag, the two
+image tags that move to each new highest release.
 
 ## Reporting a vulnerability
 
@@ -40,11 +41,13 @@ still worth reporting here if the weekly scheduled scan has not caught it.
 - **Unauthenticated endpoints.** `/metrics` and `/healthz` have no authentication and are meant for
   an internal scrape network. Neither takes input that turns into work: no request parameter causes
   a Docker call.
-- **Supply chain.** Every GitHub Action is pinned to a commit SHA and every image the workflows and
-  the Dockerfile use to an index digest. Each release image is scanned for `HIGH` and `CRITICAL`
-  vulnerabilities before its version is tagged, and the latest release is scanned again every week,
+- **Supply chain.** Every GitHub Action is pinned to a commit SHA. Every image the workflows and the
+  Dockerfile use is pinned to an index digest, except the `dhi.io` bases, which are pinned by tag
+  because dhi.io rebuilds its tags often; each release records the base digest it shipped. Each
+  release image is scanned for fixable `HIGH` and `CRITICAL` vulnerabilities before its version is
+  tagged, and the latest release is scanned again every week,
   together with the Rust dependencies (cargo-deny). The release process is described in
-  [docs/release.md](docs/release.md).
+  [docs/internal/release.md](docs/internal/release.md).
 
 ## Verifying a release
 

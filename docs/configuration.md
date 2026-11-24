@@ -42,17 +42,23 @@ Options:
   `json` or `text`, in any case; anything else is refused at startup (exit code `2`). Logs go to
   standard output, the timestamps (`--log-time`) are UTC RFC 3339, and a line carries its fields as
   `key=value` (text) or as JSON members (json).
-- `--poll-delay` takes a duration (`500ms`, `10s`, `1m30s`, `1m 30s`) of at least `1s` (exit code
-  `1` otherwise). A bool flag takes `true` or `false` (`--containers`, `--containers=true`).
+- `--poll-delay` takes a duration (`10s`, `1m30s`, `1m 30s`, `1.5s`) of at least `1s`. A shorter one
+  such as `500ms` parses, then exits with code `1`. A bool flag takes `true` or `false`
+  (`--containers`, `--containers=true`).
 - `-h` and `--help` print the help to standard output and exit `0`.
 
 ## Environment (Docker client)
 
 - `DOCKER_HOST` — Docker daemon URL
 - `DOCKER_CERT_PATH` — Path to TLS certs
-- `DOCKER_TLS_VERIFY` — Enable TLS verification (set to `1`)
+- `DOCKER_TLS_VERIFY` — Enable TLS for a `tcp://` host. Any non-empty value enables it, `0`
+  included; leave it unset for plain TCP
 - `DOCKER_API_VERSION` — Pin the Engine API version instead of negotiating it (`<major>.<minor>`,
   within 1.40–1.56)
+
+With TLS on, the certificates are read from `DOCKER_CERT_PATH`, or from `$HOME/.docker` when it is
+unset; with neither set, startup fails. An `https://` host always uses TLS, with or without
+`DOCKER_TLS_VERIFY`. A non-empty `DOCKER_TLS` (TLS without verification) is refused at startup.
 
 The client connects to `DOCKER_HOST` directly: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are not
 read. To go through a proxy (a socket proxy, say), point `DOCKER_HOST` at it.

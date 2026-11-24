@@ -1,0 +1,244 @@
+# Restructure 1: the release runbook moves to docs/internal/; the published pages keep their paths.
+# Format: repo-docs references/restructure.md. Rationale and classification: report.md.
+
+[meta]
+schema = 1
+base_commit = "348137da15b136b678a0127e661b6c97004fbb88"
+docs_dir = "docs"
+blocks = "docs/internal/restructure/blocks.json"
+
+[meta.sources]
+".agents/skills/adversarial-review/SKILL.md" = "d9241cb97d0c7aaec64c755ad3456f72b741ff5cf8fd5f55542ea2217fccded3"
+".agents/skills/adversarial-review/references/release-and-image.md" = "94c7d83760fe3475e02d178733a8f0340f758107d93f33f948e515b669e62b9d"
+".github/dependabot.yml" = "14de609cc597616e5c090754118860e146aac82cb7efc2e17efe82a15851c3c9"
+".github/workflows/ci.yaml" = "38c9ca980e6b4973cfc6d9f0cbc62a72ed2494edeb8132630a42b16ff8825e91"
+".github/workflows/release.yaml" = "f75484e79073cdb6128303a8cb4ed7a9b2ca84eda7a5925af2a6cea938d68de8"
+".serena/memories/task_completion.md" = "5d46ab825da78aa6483d69d23c54632e549e88d3012cc883a016103f8872514e"
+".serena/memories/tech_stack.md" = "532abdbfd0cf8380b4be0ba76cab8101e3979eeebc4a30cbf47007000e580e34"
+"AGENTS.md" = "db732d72d6b116eb4e70c661721780a28e3291dae958776451a8e3ab600d1eb4"
+"CONTRIBUTING.md" = "c2b3bbb02da3f2b555ee1d63f6af12d9232d2c862ca1fd0463a313797e283856"
+"README.md" = "f07373a079099445171f3d7d7b4c7aa1f042de56a5a2e6075e5e02e7dbc6b845"
+"SECURITY.md" = "85ea10a4d6ef1cfbe526f4a8b7d3abeca24e9d1af35b92fa11df17e357c3f428"
+"deployments/docker/Dockerfile" = "36e9fa6adad77e63575f4be4e926b8fd0b22caace516bcbcbfe2a38ce3f1b112"
+"docs/internal/restructure/blocks.json" = "290f05f48a02eb3ee4c0f3619d3575e94fe70f600a3857ff1bd123192392c390"
+"docs/release.md" = "059a2f64bf26ac708d87a71024f5521afddda6307f2c1fb7a0b302bd6611ae72"
+"meta/tests/dockerfiles.rs" = "01e7e9ee38960438acf39b3f79f1ca2fe66a86e8c042c252ba4507c4c1af8240"
+
+# The Go 1.x notes are a historical record inside a living runbook.
+[[split]]
+from = "docs/release.md"
+heading = "Historical notes: the Go releases (1.x)"
+to = "docs/internal/history/go-releases.md"
+
+# A maintainer runbook: internal by the publication policy (G3 and G10 approved by the owner).
+[[move]]
+from = "docs/release.md"
+to = "docs/internal/release.md"
+
+[[keep]]
+paths = ["docs/alerts.md", "docs/configuration.md", "docs/deployment.md", "docs/metrics.md", "docs/migration.md", "docs/operations.md", "docs/internal/"]
+
+[[reference]]
+file = ".agents/skills/adversarial-review/SKILL.md"
+line = 59
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".agents/skills/adversarial-review/SKILL.md"
+line = 224
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".agents/skills/adversarial-review/references/release-and-image.md"
+line = 6
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".agents/skills/adversarial-review/references/release-and-image.md"
+line = 33
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".agents/skills/adversarial-review/references/release-and-image.md"
+line = 42
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/dependabot.yml"
+line = 46
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/ci.yaml"
+line = 312
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/ci.yaml"
+line = 356
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 15
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 94
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 185
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 257
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 354
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 729
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 767
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 931
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 1045
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".github/workflows/release.yaml"
+line = 1115
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".serena/memories/task_completion.md"
+line = 13
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = ".serena/memories/tech_stack.md"
+line = 30
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = "AGENTS.md"
+line = 118
+old = "[`docs/release.md`]"
+new = "[`docs/internal/release.md`]"
+
+[[reference]]
+file = "AGENTS.md"
+line = 245
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = "AGENTS.md"
+line = 247
+old = "`docs/release.md#what-ci-proves`"
+new = "`docs/internal/release.md#what-ci-proves`"
+
+[[reference]]
+file = "AGENTS.md"
+line = 247
+old = "`docs/release.md`"
+new = "`docs/internal/release.md`"
+
+[[reference]]
+file = "AGENTS.md"
+line = 340
+old = "[`docs/release.md`]"
+new = "[`docs/internal/release.md`]"
+
+[[reference]]
+file = "CONTRIBUTING.md"
+line = 129
+old = "[`docs/release.md`]"
+new = "[`docs/internal/release.md`]"
+
+[[reference]]
+file = "SECURITY.md"
+line = 47
+old = "[docs/release.md]"
+new = "[docs/internal/release.md]"
+
+[[reference]]
+file = "deployments/docker/Dockerfile"
+line = 28
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = "meta/tests/dockerfiles.rs"
+line = 73
+old = "docs/release.md"
+new = "docs/internal/release.md"
+
+[[reference]]
+file = "AGENTS.md"
+line = 122
+old = "`release.md`"
+new = "`internal/release.md`"
+
+[[decision]]
+id = "d1"
+question = "Where does docs/release.md live? (G3, G10)"
+answer = "Moved to docs/internal/release.md, every citation updated. Owner, 2026-11-23."
+
+[[decision]]
+id = "d2"
+question = "How do the docs treat the removed 1 MiB event limit?"
+answer = "Docs state the current behaviour; the regression is recorded in report.md and a rust-common issue is drafted for review. No code change here. Owner, 2026-11-23."
+
+[[decision]]
+id = "d3"
+question = "When are the claims the code contradicts corrected?"
+answer = "In this stage, each rewording recorded in mappings.toml; example alert changes shown separately. Owner, 2026-11-23."
+
+[[decision]]
+id = "d4"
+question = "Which new published pages? (G2, G8)"
+answer = "Getting started, Verifying releases and the landing page. Owner, 2026-11-23."
+
+[approval]
+plan_sha256 = "2568b04c8790e346308d3dc21ad2b57d738a9e684ec1abe4b01d02b4cf304418"
+approved_by = "Roberto Leinardi"
+date = "2026-11-23"
