@@ -9,7 +9,7 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
 **Swarm Scheduler Exporter** surfaces what Docker Swarm’s **scheduler** is doing right now, and
 *why*. It reports **desired replicas** (including accurate eligibility for `global` services),
 **live task state** per service (current task per slot, or per node for `global` services),
-**service update/rollback** state + timestamps, **cluster node** availability, and now
+**service update/rollback** state + timestamps, **cluster node** availability, and
 **SLO-friendly service readiness** signals.
 
 ## 📦 What This Exporter Does
@@ -29,21 +29,18 @@ replicas**, and **operability at scale**. Fork of (and huge thanks to)
 
 ## 🪶 Resource usage
 
-Swarm Scheduler Exporter is designed to be lightweight. Measured side by side against 1.3.2 (the
-last Go release) on one single-node Swarm with `--containers`, both exporting the same 964
-`swarm_*` series:
+Swarm Scheduler Exporter is a static binary on a distroless base. Measured for 3.1.1 on one
+single-node Swarm with `--containers`, exporting 1030 `swarm_*` series:
 
-|  | 1.x (Go) | 2.x (Rust) |
+|  | linux/amd64 | linux/arm64 |
 | --- | --- | --- |
-| Binary, linux/amd64 | 11.2 MB | 4.4 MB |
-| Binary, linux/arm64 | 10.5 MB | 3.9 MB |
-| Image (linux/amd64) | 13.1 MB | 6.3 MB |
-| Idle RSS after 10 minutes | 20.1-20.6 MB | 18.6-20.4 MB |
+| Binary | 5.9 MB | 5.2 MB |
+| Image | 7.8 MB | 7.0 MB |
 
-The idle RSS was read from `VmRSS` on a 32-CPU host. The Rust exporter starts one runtime worker
-thread per available CPU, so a host with fewer CPUs, or a CPU limit, means fewer threads and less
-memory: under `--cpus 2` the same exporter idled at 15.3 MB. Exact usage depends on the platform
-and the container runtime settings.
+Idle RSS after 10 minutes, read from `VmRSS` on a 32-CPU amd64 host, was 14.4 MB, and 21.6 MB
+under `--cpus 2`. The exporter starts one runtime worker thread per available CPU, so a CPU limit
+also lowers its thread count. Exact usage depends on the platform and the container runtime
+settings.
 
 ## 📋 Requirements
 
@@ -74,6 +71,26 @@ For a single host, a socket mount, TCP/TLS, Compose or the socket group, see
 [docs/deployment.md](docs/deployment.md).
 
 ## 📚 Documentation
+
+<!-- These ids keep the anchors of the sections moved to docs/ working. -->
+<a id="-metrics"></a>
+<a id="service-level"></a>
+<a id="service-updaterollback-info-style"></a>
+<a id="cluster--node-visibility"></a>
+<a id="node-level"></a>
+<a id="exporter-self-metrics"></a>
+<a id="runtime-metrics"></a>
+<a id="container-level-opt-in"></a>
+<a id="-configuration"></a>
+<a id="flags"></a>
+<a id="environment-docker-client"></a>
+<a id="custom-label-guardrails"></a>
+<a id="-health"></a>
+<a id="-example-alerts"></a>
+<a id="-migrating"></a>
+<a id="-addressed-vs-original-project"></a>
+<a id="upgrading-from-2x-to-30"></a>
+<a id="coming-from-1x-go"></a>
 
 - [Metrics](docs/metrics.md): every metric, its labels and its semantics.
 - [Configuration](docs/configuration.md): flags, Docker client environment, custom label rules.
@@ -111,44 +128,6 @@ scrape_configs:
   run it on a manager, or reach one through the socket proxy, as the recommended stack does.
 - Avoid exposing the exporter to untrusted networks; it exposes metrics only, but your scrape
   endpoint should be internal.
-
-<!-- Moved sections: these stubs keep the old README anchors working. -->
-
-## 📊 Metrics
-
-<a id="service-level"></a>
-<a id="service-updaterollback-info-style"></a>
-<a id="cluster--node-visibility"></a>
-<a id="node-level"></a>
-<a id="exporter-self-metrics"></a>
-<a id="runtime-metrics"></a>
-<a id="container-level-opt-in"></a>
-Moved to [docs/metrics.md](docs/metrics.md).
-
-## ✅ Health
-
-Moved to [docs/operations.md](docs/operations.md).
-
-## ⚙️ Configuration
-
-<a id="flags"></a>
-<a id="environment-docker-client"></a>
-<a id="custom-label-guardrails"></a>
-Moved to [docs/configuration.md](docs/configuration.md).
-
-## 🔔 Example Alerts
-
-Moved to [docs/alerts.md](docs/alerts.md).
-
-## 🛠 Addressed vs Original Project
-
-Moved to [docs/migration.md](docs/migration.md).
-
-## 🔄 Migrating
-
-<a id="upgrading-from-2x-to-30"></a>
-<a id="coming-from-1x-go"></a>
-Moved to [docs/migration.md](docs/migration.md).
 
 ## 🤝 Contributing
 

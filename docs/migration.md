@@ -91,6 +91,21 @@ read as written here):
 | Q17 | Value spellings | Bool flags took every `strconv.ParseBool` spelling (`1`, `t`, `T`, `TRUE`, `True`, `0`, `f`, `F`, `FALSE`, `False`); `--poll-delay` took Go durations, a leading sign included; a `node.ip` CIDR took a prefix length with leading zeros (`10.0.0.0/024`); constraints and container labels folded case by Go's simple folding; custom-label errors quoted values with `%q` | Bool flags take `true` or `false` only (exit 2 otherwise); `--poll-delay` takes humantime durations (`10s`, `500ms`, `1m30s`, `1m 30s`, `1.5s`, `5µs`, and now `2d`), but no sign: `-5s` is a parse error (exit 2, where Go's reached the exit-1 minimum check), and a bare number needs a unit as before; a CIDR prefix has no leading zeros (the constraint never matches); constraint keys and values compare by Unicode lowercase, so U+017F (long s) no longer equals `s`; custom-label errors quote with `{:?}`; a poll delay in a log field prints as Rust's `Debug` writes it (`10s`, `3720s`, `1.5s`) |
 | Q18 | Event records | moby's decoder read an `/events` record whole, whatever its size | A record over 1 MiB, every byte before its newline counted, ends the stream at warn; the reconnect subscribes to live events only, with no `since` (`next_since=none`), so the record is skipped rather than replayed, and the reconnect's resync covers the skipped window |
 
+### Footprint
+
+Measured side by side against 1.3.2 (the last Go release) on one single-node Swarm with
+`--containers`, both exporting the same 964 `swarm_*` series:
+
+|  | 1.x (Go) | 2.x (Rust) |
+| --- | --- | --- |
+| Binary, linux/amd64 | 11.2 MB | 4.4 MB |
+| Binary, linux/arm64 | 10.5 MB | 3.9 MB |
+| Image (linux/amd64) | 13.1 MB | 6.3 MB |
+| Idle RSS after 10 minutes | 20.1-20.6 MB | 18.6-20.4 MB |
+
+The idle RSS was read from `VmRSS` on a 32-CPU host. The figures for the current release are in
+the README's [Resource usage](https://github.com/leinardi/swarm-scheduler-exporter#-resource-usage).
+
 ## Addressed vs Original Project
 
 - **Data races**: one reconciler task owns every cache and per-service metric write; removed
@@ -115,6 +130,5 @@ read as written here):
 - **SLO helpers**: `swarm_service_running_replicas` and `swarm_service_at_desired` for direct
   alerting/dashboards.
 - **Footprint**: since 2.0 a static Rust binary on a distroless base, with a smaller image and
-  binary than the Go 1.x releases (see
-  [Resource usage](https://github.com/leinardi/swarm-scheduler-exporter#-resource-usage)), and a
-  Docker client that can only send read requests.
+  binary than the Go 1.x releases (see [Footprint](#footprint)), and a Docker client that can only
+  send read requests.
