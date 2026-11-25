@@ -29,10 +29,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::num::from_int;
-use prometheus_client::metrics::counter::Counter;
-use prometheus_client::metrics::family::Family;
-use prometheus_client::metrics::histogram::Histogram;
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::metrics::counter::Counter;
+use service_kit::prometheus_client::metrics::family::Family;
+use service_kit::prometheus_client::metrics::histogram::Histogram;
+use service_kit::prometheus_client::registry::Registry;
 
 use crate::metrics::{self, DEF_BUCKETS, ScrapeGauge};
 

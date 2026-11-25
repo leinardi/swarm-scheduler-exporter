@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use crate::docker::types::Node;
 use crate::metrics::{self, Desc, SnapshotBuilder, SnapshotCollector, SnapshotFamily};
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 use tracing::error;
 
 /// The `role` label.

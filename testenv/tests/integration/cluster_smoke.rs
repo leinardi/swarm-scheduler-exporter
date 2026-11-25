@@ -27,12 +27,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use bollard::models::EventMessageTypeEnum;
-use bollard::query_parameters::{EventsOptions, InspectServiceOptions};
 use clock::{Clock as _, SystemClock};
 use futures_util::StreamExt as _;
 use testenv::Node;
 use testenv::metrics_text::labels;
+use testenv_core::bollard::models::EventMessageTypeEnum;
+use testenv_core::bollard::query_parameters::{EventsOptions, InspectServiceOptions};
 use testenv_core::context::Context;
 
 use crate::http::{get, scrape_metrics};

@@ -30,7 +30,7 @@ use std::fmt;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use tokio_util::sync::CancellationToken;
+use service_kit::tokio_util::sync::CancellationToken;
 
 use crate::docker::types::Event;
 use crate::docker::{

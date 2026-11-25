@@ -38,8 +38,9 @@ make docker-run           # runs the image locally (read-only, no capabilities),
 The meta-tests (`meta/tests/`, `cargo test -p meta`) check the repository rather than the exporter,
 and need no Docker: the toolchain pins and Trivy never pinned (`toolchain.rs`), the Dockerfile's
 frontend, its five stages and their tag-pinned bases (`dockerfiles.rs`), the Docker SDK boundary
-(`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), and the rust-common pins
-(`rust_common_pins.rs`).
+(`docker_boundary.rs`), the workspace lints (`workspace_lints.rs`), the rust-common pins
+(`rust_common_pins.rs`), and one package per crate at rust-common's boundary, taken through its
+re-export (`rust_common_boundary.rs`).
 
 Integration tests (a throwaway DinD Swarm on your Docker daemon, privileged containers required; see
 [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)):
@@ -101,7 +102,7 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 - `testenv/` — the DinD Swarm harness: testenv-core's `dind` Swarm (bring-up, teardown, the
   keep-aware sweep) with the suite's names and keep label (`config.rs`), its `SSE_IT_*` spec
   (`cluster.rs`) and the workload image load, its one setup step inside the bring-up's cleanup
-  boundary (`images.rs`), with bollard behind its `integration` feature (the
+  boundary (`images.rs`), with bollard (`testenv_core::bollard`) behind its `integration` feature (the
   exporter package names none of testenv, testenv-core and bollard in any table;
   `meta/tests/docker_boundary.rs` checks it),
   and the integration suite's runner and tests under `testenv/tests/integration`.
@@ -137,13 +138,18 @@ server, the `process_*` collector), testenv-core (the harness's generic half) an
 meta-tests' checks). The exporter keeps only what is its own. `make rust-pin-bump TAG=vX.Y.Z`
 moves the pin, and the line below, and checks that only rust-common moved in `Cargo.lock`.
 
-The current pin is `v3.0.0`. <!-- rust-pin-current -->
+The current pin is `v4.0.0`. <!-- rust-pin-current -->
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
-- A fix to shared code lands in rust-common first; this repository then moves its pin: change
-  the `tag` on every rust-common line, run `cargo fetch` (not `cargo update -p`), and check that
-  `git diff Cargo.lock` touches only the rust-common lines.
+- A fix to shared code lands in rust-common first; this repository then moves its pin with
+  `make rust-pin-bump TAG=vX.Y.Z`.
+- A crate whose types cross rust-common's API comes through rust-common's re-export, never a
+  declaration of its own: prometheus-client as `service_kit::prometheus_client`, tokio-util as
+  `service_kit::tokio_util`, bollard as `testenv_core::bollard`. Two copies compile apart and
+  fail at the boundary with E0277 or E0308; `meta/tests/rust_common_boundary.rs` holds each to one
+  package (CI runs it before the build). The one exception is testenv's tokio-util, for the `io`
+  feature the re-export lacks.
 - The parameters this exporter passes (`docs/migration.md` lists what differs from 1.x
   and 2.x):
   the exposition (prometheus-client's OpenMetrics text, `process_*` from service-kit's
@@ -183,8 +189,8 @@ The ones to keep in mind while writing code:
   `meta/tests/docker_boundary.rs` holds it there: no manifest enables that feature, only
   `src/docker` names the crate (and bollard, as `docker_client::bollard`) and builds no request of
   its own, the calls are only reads whose sections the shipped socket-proxy allowlist grants, and
-  bollard (which the harness creates and removes things with) is declared directly only by the
-  harness, outside the exporter package.
+  bollard (which the harness creates and removes things with) is declared directly by no
+  manifest: the harness takes it through testenv-core, outside the exporter package.
 - **Metrics are the public contract.** A renamed metric or a changed label set updates
   `docs/metrics.md` (and any alert example in `docs/alerts.md`) in the same change. No label fed
   by an unbounded value.
@@ -200,7 +206,7 @@ The ones to keep in mind while writing code:
 - **Bounded work.** Bounded dirty-key set, bounded inspects per cycle, retries with delays, every
   request under `with_docker_timeout`, and no map keyed by an external ID without an eviction
   path.
-- **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `Zoned::now`,
+- **The clock is injected.** `clippy.toml` bans `Timestamp::now`, `ZonedDateTime::now`,
   `SystemTime::now` and `std::time::Instant::now`; the time comes from the `Clock` trait, so tests
   drive it with tokio's paused clock. The time comes only through `clock::Clock`; the one
   wall-clock read is clock's `SystemClock`, in rust-common, so the exporter has no

@@ -39,7 +39,7 @@ use crate::docker::types::{Node, Placement, Task};
 use crate::docker::{DockerApi, with_docker_timeout};
 use crate::labels::{sanitize_label_names, sanitize_metric_labels};
 use crate::metrics::{self, BuildError, Desc, SnapshotBuilder, SnapshotCollector};
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 use tracing::{debug, warn};
 
 use super::desired::{node_eligible, placement_from_metadata};

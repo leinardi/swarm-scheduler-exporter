@@ -47,9 +47,9 @@ use tracing_setup::testing::Capture;
 ///
 /// A family that is not scalar.
 pub(crate) fn gather_series(
-    collector: &Arc<impl prometheus_client::collector::Collector>,
+    collector: &Arc<impl service_kit::prometheus_client::collector::Collector>,
 ) -> std::collections::BTreeMap<String, f64> {
-    let mut registry = prometheus_client::registry::Registry::default();
+    let mut registry = service_kit::prometheus_client::registry::Registry::default();
     crate::metrics::register(&mut registry, collector);
     openmetrics::parse(&crate::metrics::render(&registry)).series()
 }
@@ -65,9 +65,9 @@ pub(crate) fn count(value: u64) -> f64 {
 
 /// The series of what `register` registers, by [`openmetrics::series_id`].
 pub(crate) fn gather_registered(
-    register: impl FnOnce(&mut prometheus_client::registry::Registry),
+    register: impl FnOnce(&mut service_kit::prometheus_client::registry::Registry),
 ) -> std::collections::BTreeMap<String, f64> {
-    let mut registry = prometheus_client::registry::Registry::default();
+    let mut registry = service_kit::prometheus_client::registry::Registry::default();
     register(&mut registry);
     openmetrics::parse(&crate::metrics::render(&registry)).series()
 }

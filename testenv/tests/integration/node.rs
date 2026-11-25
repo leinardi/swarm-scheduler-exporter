@@ -27,9 +27,9 @@
 
 use std::time::Duration;
 
-use bollard::models::{NodeSpecAvailabilityEnum, TaskState};
 use testenv::Node;
 use testenv::metrics_text::labels;
+use testenv_core::bollard::models::{NodeSpecAvailabilityEnum, TaskState};
 use testenv_core::context::Context;
 
 use crate::cluster_smoke::{node_count, runs_on_every_node};

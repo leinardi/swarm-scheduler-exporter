@@ -30,15 +30,15 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use bollard::Docker;
-use bollard::models::ContainerCreateBody;
-use bollard::query_parameters::{
-    CreateContainerOptions, ListContainersOptions, ListNetworksOptions,
-};
 use clock::{Clock as _, SystemClock};
 use futures_util::future::{Either, select};
 use testenv::config::{ENV_IDS, KEEP_LABEL, LABELS};
 use testenv::{Error, NAMES, Spec, WORKLOAD_IMAGE, new_logger, up_with};
+use testenv_core::bollard::Docker;
+use testenv_core::bollard::models::ContainerCreateBody;
+use testenv_core::bollard::query_parameters::{
+    CreateContainerOptions, ListContainersOptions, ListNetworksOptions,
+};
 use testenv_core::context::Context;
 use testenv_core::dind::{self, KEEP_VALUE, poll_until};
 use testenv_core::host::process_alive;

@@ -26,8 +26,8 @@
 //! it the suite's names and keep label, the host's client and sweep rules, and the one setup
 //! step of its own, the workload image load, which runs inside the bring-up's cleanup boundary.
 
-use bollard::Docker;
 use clock::{Clock as _, SystemClock};
+use testenv_core::bollard::Docker;
 use testenv_core::context::Context;
 use testenv_core::dind::{self, IMAGE_TRANSFER_TIMEOUT, Names, OnFailure};
 use testenv_core::host;

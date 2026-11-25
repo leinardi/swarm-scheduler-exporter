@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use clock::{Clock, FakeClock};
 use jiff::Timestamp;
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::desired::labels_for_metadata;
 use swarm_scheduler_exporter::collector::exporter_metrics::ResyncResult;

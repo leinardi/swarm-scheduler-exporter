@@ -33,7 +33,7 @@ use crate::labels::{maybe_warn_high_cardinality, sanitize_label_names, sanitize_
 use crate::num::from_int;
 use crate::text::{equal_fold, to_lower, trim_space};
 use ipnet::{IpNet, Ipv4Net};
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 use std::net::IpAddr;
 
 use crate::metrics::{self, Desc, GaugeVec, LabelsMismatch};

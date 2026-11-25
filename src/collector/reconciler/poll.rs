@@ -36,9 +36,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use service_kit::tokio_util::sync::CancellationToken;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use crate::docker::DockerApi;
 use tracing::warn;

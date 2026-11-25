@@ -281,6 +281,16 @@ jobs:
           shared-key: ci
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
+      # Every locked dependency fetched first, so a dependency that cannot be fetched fails here,
+      # with cargo's own error, not inside the boundary check's cargo metadata.
+      - name: Fetch the locked dependencies
+        run: cargo fetch --locked
+
+      # Before the build: two copies of a crate at rust-common's boundary fail the build with
+      # E0277/E0308, which name neither copy; this names both and the import to use.
+      - name: Check the rust-common boundary
+        run: cargo test --locked -p meta --test rust_common_boundary
+
       - name: Check formatting
         run: cargo fmt --all --check
 

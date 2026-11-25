@@ -30,19 +30,19 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
-use bollard::errors::Error as DockerError;
-use bollard::models::{
+use jiff::Timestamp;
+use testenv::metrics_text::{Labels, labels};
+use testenv_core::bollard::errors::Error as DockerError;
+use testenv_core::bollard::models::{
     HealthConfig, NodeSpec, NodeSpecAvailabilityEnum, NodeState, ServiceSpec, ServiceSpecMode,
     ServiceSpecModeReplicated, ServiceSpecModeReplicatedJob, ServiceSpecUpdateConfig,
     ServiceUpdateStatusStateEnum, TaskSpec, TaskSpecContainerSpec, TaskSpecPlacement,
     TaskSpecRestartPolicy, TaskSpecRestartPolicyConditionEnum, TaskState,
 };
-use bollard::query_parameters::{
+use testenv_core::bollard::query_parameters::{
     InspectServiceOptions, ListNodesOptions, ListTasksOptions, UpdateNodeOptions,
     UpdateServiceOptions,
 };
-use jiff::Timestamp;
-use testenv::metrics_text::{Labels, labels};
 use testenv_core::context::{Context, Ended};
 
 use crate::testing::{Fatal, OrFatal as _, TestHandle, cluster, swarm};

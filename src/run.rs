@@ -31,9 +31,9 @@ use std::io::{self, Write as _};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use service_kit::tokio_util::sync::CancellationToken;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::cli::{self, Args};
@@ -55,8 +55,8 @@ use crate::metrics;
 use crate::server::{self, Exposition, HealthFn, MetricsFn};
 use crate::version::{COMMIT, DATE, VERSION};
 use clock::{Clock, SystemClock};
-use prometheus_client::registry::Registry;
 use service_kit::process::ProcessCollector;
+use service_kit::prometheus_client::registry::Registry;
 use service_kit::runtime::Exit;
 
 /// The time from the shutdown signal to the exit (Q8): the HTTP drain, the worker join and the

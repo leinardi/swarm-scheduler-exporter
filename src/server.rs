@@ -43,9 +43,9 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use service_kit::http::{Lifecycle, Outcome, ServerConfig};
+use service_kit::tokio_util::sync::CancellationToken;
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 /// The metrics endpoint.
