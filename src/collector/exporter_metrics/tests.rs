@@ -227,3 +227,74 @@ fn the_poll_duration_histogram_buckets_the_observation() {
     assert_eq!(value(&text, &format!("{name}_count"), &[]), Some(1.0));
     assert!((value(&text, &format!("{name}_sum"), &[]).unwrap() - 0.03).abs() < 1e-12);
 }
+
+/// The exposition as the scrape golden holds it: each family's sample lines sorted (a family keeps
+/// its series in a hash map), every line otherwise byte for byte what a scrape answers.
+fn canonical_scrape(body: &str) -> String {
+    fn flush<'line>(
+        headers: &mut Vec<&'line str>,
+        samples: &mut Vec<&'line str>,
+        out: &mut String,
+    ) {
+        samples.sort_unstable();
+        for line in headers.iter().chain(samples.iter()) {
+            out.push_str(line);
+            out.push('\n');
+        }
+        headers.clear();
+        samples.clear();
+    }
+    let mut out = String::new();
+    let mut headers: Vec<&str> = Vec::new();
+    let mut samples: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        if line == "# EOF" {
+            flush(&mut headers, &mut samples, &mut out);
+            out.push_str("# EOF\n");
+        } else if line.starts_with('#') {
+            if !samples.is_empty() {
+                flush(&mut headers, &mut samples, &mut out);
+            }
+            headers.push(line);
+        } else {
+            samples.push(line);
+        }
+    }
+    out
+}
+
+/// A scrape of the exporter's own metrics after a fixed sequence, beside a gauge vec with an
+/// escaped label, is byte for byte the committed golden (in the canonical form above), taken
+/// before the move to rust-common v4.0.0 and prometheus-client 0.26: the names, help texts,
+/// label escaping, value formatting and `# EOF` do not move with them.
+#[test]
+fn the_scrape_is_the_golden_byte_for_byte() {
+    let metrics = ExporterMetrics::new(Arc::new(Timestamps::default()));
+    metrics.inc_polls();
+    metrics.inc_polls();
+    metrics.inc_polls();
+    metrics.inc_poll_errors();
+    metrics.inc_event_reconnect();
+    metrics.inc_events_dropped();
+    metrics.inc_events_dropped();
+    metrics.inc_poll_rejections();
+    metrics.inc_resync(ResyncResult::Success);
+    metrics.inc_resync(ResyncResult::Success);
+    metrics.inc_resync(ResyncResult::Failure);
+    for millis in [3, 40, 700, 2500, 12_000] {
+        metrics.observe_poll_duration(std::time::Duration::from_millis(millis));
+    }
+    let mut registry = Registry::default();
+    metrics.register(&mut registry);
+    let vec = Arc::new(crate::metrics::GaugeVec::new(crate::metrics::Desc::new(
+        "swarm_golden_gauge",
+        "A gauge vec, \"quoted\".",
+        &["b", "a"],
+    )));
+    crate::metrics::must(vec.set(&["2", "1"], 5.0));
+    crate::metrics::must(vec.set(&["quote\" back\\slash\nnewline", "x"], 0.5));
+    crate::metrics::register(&mut registry, &vec);
+    let body = crate::metrics::render(&registry);
+    let want = include_str!("../../../tests/testdata/metrics/scrape.golden");
+    assert_eq!(canonical_scrape(&body), want);
+}
