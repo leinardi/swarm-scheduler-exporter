@@ -129,12 +129,15 @@ Three workspace members, listed explicitly in the root `Cargo.toml`, all under t
 ### Shared code: rust-common
 
 The generic code is [leinardi/rust-common](https://github.com/leinardi/rust-common)'s, a git
-dependency pinned by the release tag (`tag = "v3.0.0"`, with `version = "3.0"`) in
+dependency pinned by the release tag (`tag`, with `version` the tag's `<major>.<minor>`) in
 `[workspace.dependencies]`: clock (the `Clock` trait),
 tracing-setup (the logger's subscriber; the code logs with `tracing` macros), docker-client (the
 Docker connection, over bollard), service-kit (the runtime, the signals, the stamps, the HTTP
 server, the `process_*` collector), testenv-core (the harness's generic half) and repo-meta (the
-meta-tests' checks). The exporter keeps only what is its own.
+meta-tests' checks). The exporter keeps only what is its own. `make rust-pin-bump TAG=vX.Y.Z`
+moves the pin, and the line below, and checks that only rust-common moved in `Cargo.lock`.
+
+The current pin is `v3.0.0`. <!-- rust-pin-current -->
 
 - Where this exporter behaves differently from another project, the difference is a parameter of
   the shared crate, passed from here, never a fork of the code into this repository.
