@@ -135,6 +135,32 @@ fn integration_enables_sdk(manifest: &Table) -> usize {
         })
 }
 
+/// The harness's features other than `integration` that enable testenv-core's `bollard` or
+/// `bollard-ssl` (which bring the SDK into a plain `cargo test`): one message each.
+fn other_features_enabling_sdk(manifest: &Table) -> Vec<String> {
+    let Some(features) = manifest.get("features").and_then(Value::as_table) else {
+        return Vec::new();
+    };
+    features
+        .iter()
+        .filter(|(name, _)| name.as_str() != "integration")
+        .filter(|(_, enabled)| {
+            enabled.as_array().is_some_and(|enabled| {
+                enabled.iter().filter_map(Value::as_str).any(|feature| {
+                    feature.starts_with("testenv-core/bollard")
+                        || feature.starts_with("testenv-core?/bollard")
+                })
+            })
+        })
+        .map(|(name, _)| {
+            format!(
+                "{HARNESS_MANIFEST} [features] {name}: {HARNESS_CORE}'s {SDK} feature is enabled \
+                 only from the integration feature"
+            )
+        })
+        .collect()
+}
+
 /// The manifest rules over `(path, text)` pairs, the root manifest at `Cargo.toml`: one message
 /// per violation.
 fn manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
@@ -146,6 +172,7 @@ fn manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
             .unwrap_or_else(|error| panic!("parse {path}: {error}"));
         if *path == HARNESS_MANIFEST {
             confined += integration_enables_sdk(&manifest);
+            violations.extend(other_features_enabling_sdk(&manifest));
         }
         for dependency in dependencies(&manifest) {
             let place = format!("{path} [{}] {}", dependency.table, dependency.crate_name);
@@ -616,6 +643,19 @@ fn manifest_rules_keep_bollard_behind_testenv_core() {
                 ),
             ],
             "only behind the integration feature",
+        ),
+        (
+            "testenv-core's bollard-ssl feature from the default feature",
+            &[
+                ("Cargo.toml", ROOT_OK),
+                (
+                    HARNESS_MANIFEST,
+                    "[features]\ndefault = [\"testenv-core/bollard-ssl\"]\n\
+                     integration = [\"testenv-core/bollard\"]\n\
+                     [dependencies]\ntestenv-core = { workspace = true }\n",
+                ),
+            ],
+            "enabled only from the integration feature",
         ),
     ];
     for (name, manifests, want) in cases {
