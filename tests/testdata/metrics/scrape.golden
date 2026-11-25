@@ -1,6 +1,7 @@
 # HELP swarm_exporter_poll_duration_seconds Duration of replicas-state polling, in seconds.
 # TYPE swarm_exporter_poll_duration_seconds histogram
-swarm_exporter_poll_duration_seconds_bucket{le="+Inf"} 5
+swarm_exporter_poll_duration_seconds_sum 15.243
+swarm_exporter_poll_duration_seconds_count 5
 swarm_exporter_poll_duration_seconds_bucket{le="0.005"} 1
 swarm_exporter_poll_duration_seconds_bucket{le="0.01"} 1
 swarm_exporter_poll_duration_seconds_bucket{le="0.025"} 1
@@ -9,11 +10,10 @@ swarm_exporter_poll_duration_seconds_bucket{le="0.1"} 2
 swarm_exporter_poll_duration_seconds_bucket{le="0.25"} 2
 swarm_exporter_poll_duration_seconds_bucket{le="0.5"} 2
 swarm_exporter_poll_duration_seconds_bucket{le="1.0"} 3
-swarm_exporter_poll_duration_seconds_bucket{le="10.0"} 4
 swarm_exporter_poll_duration_seconds_bucket{le="2.5"} 4
 swarm_exporter_poll_duration_seconds_bucket{le="5.0"} 4
-swarm_exporter_poll_duration_seconds_count 5
-swarm_exporter_poll_duration_seconds_sum 15.243
+swarm_exporter_poll_duration_seconds_bucket{le="10.0"} 4
+swarm_exporter_poll_duration_seconds_bucket{le="+Inf"} 5
 # HELP swarm_exporter_polls Total number of replicas-state polls attempted.
 # TYPE swarm_exporter_polls counter
 swarm_exporter_polls_total 3
