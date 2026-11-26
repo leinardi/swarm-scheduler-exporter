@@ -69,6 +69,7 @@ struct Calls {
 #[derive(Debug)]
 struct LifecycleDocker {
     resync_failures: usize,
+    containers: Vec<ContainerSummary>,
     calls: Mutex<Calls>,
 }
 
@@ -76,8 +77,15 @@ impl LifecycleDocker {
     fn new(resync_failures: usize) -> Self {
         Self {
             resync_failures,
+            containers: Vec::new(),
             calls: Mutex::new(Calls::default()),
         }
+    }
+
+    /// The container list answers `containers`.
+    fn with_containers(mut self, containers: Vec<ContainerSummary>) -> Self {
+        self.containers = containers;
+        self
     }
 
     fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
@@ -145,7 +153,7 @@ impl DockerApi for LifecycleDocker {
     }
 
     fn container_list(&self) -> impl Future<Output = Result<Vec<ContainerSummary>, Error>> + Send {
-        std::future::ready(Ok(Vec::new()))
+        std::future::ready(Ok(self.containers.clone()))
     }
 
     fn container_inspect(
@@ -172,13 +180,18 @@ fn clock() -> Arc<dyn Clock> {
 
 /// Go's `configureMetrics`: every family registered the way `run` does, on a private registry.
 fn configure_metrics(poll_delay: Duration) -> (Arc<Registry>, Metrics) {
+    configure_metrics_with(poll_delay, false)
+}
+
+/// [`configure_metrics`], with `--containers` when `containers` is set.
+fn configure_metrics_with(poll_delay: Duration, containers: bool) -> (Arc<Registry>, Metrics) {
     let mut registry = Registry::default();
     let metrics = register_metrics(
         &mut registry,
         &MetricsOptions {
             custom_labels: CustomLabels::default(),
             poll_delay,
-            containers: ContainersConfig::new(false, false),
+            containers: ContainersConfig::new(containers, false),
             build: ["test".to_owned(), "none".to_owned(), "unknown".to_owned()],
         },
         clock(),
@@ -386,6 +399,44 @@ async fn cancel_before_first_resync_stops_poller() {
     let calls = docker.calls();
     assert_eq!(calls.task_list, 0, "the first resync never succeeded");
     assert!(calls.events <= 1, "event streams opened: {}", calls.events);
+}
+
+/// Issue #140: the containers are polled without waiting for the first resync, so a daemon whose
+/// service list keeps failing (a Swarm worker, or Swarm inactive) still gets its container state.
+#[tokio::test(flavor = "multi_thread")]
+async fn containers_poll_without_waiting_for_the_first_resync() {
+    let (registry, metrics) = configure_metrics_with(Duration::from_secs(3600), true);
+    let docker =
+        Arc::new(
+            LifecycleDocker::new(usize::MAX).with_containers(vec![ContainerSummary {
+                id: "c1".to_owned(),
+                names: vec!["/plain".to_owned()],
+                state: "running".to_owned(),
+                ..ContainerSummary::default()
+            }]),
+        );
+    let cancel = CancellationToken::new();
+    let workers = run_workers(&cancel, &docker, &metrics);
+    let running = "swarm_container_state{container=\"plain\"";
+    wait_until("the first container poll", || {
+        let mut body = String::new();
+        service_kit::prometheus_client::encoding::text::encode(&mut body, &registry)
+            .unwrap_or_else(|error| panic!("encode: {error}"));
+        body.lines().any(|line| {
+            line.starts_with(running)
+                && line.contains("state=\"running\"")
+                && line.ends_with(" 1.0")
+        })
+    })
+    .await;
+    cancel.cancel();
+    wait_workers(workers).await;
+    let calls = docker.calls();
+    assert!(!calls.resynced, "the first resync never succeeded");
+    assert_eq!(
+        calls.task_list, 0,
+        "no replicas poll before the first resync"
+    );
 }
 
 /// Go: `TestWorkers_PermanentResyncFailureIsUnhealthy`

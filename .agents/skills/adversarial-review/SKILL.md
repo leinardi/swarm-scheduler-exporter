@@ -134,9 +134,11 @@ snapshot:
 - A generation (service, node, and the epoch for resyncs) is bumped when a change is
   *queued*, not when it is applied, so a queued, unapplied change already invalidates a poll.
   Moving a bump to apply time is a finding.
-- Readiness is the first completed resync: the poller does not start and `/healthz` stays
-  `503` ("initial resync not completed") until then. A resync fetches both the service list and
-  the node list before mutating anything, and a failed one mutates nothing.
+- Readiness is the first completed resync: the replicas poller does not start and `/healthz`
+  stays `503` ("initial resync not completed") until then. The containers poller
+  (`--containers`) needs no resync and starts at once; making it wait is a finding (#140). A
+  resync fetches both the service list and the node list before mutating anything, and a failed
+  one mutates nothing.
 - A resync is requested on overflow, on retry exhaustion, on a recovered panic, on every
   event-stream reconnect and every `PERIODIC_RESYNC_INTERVAL`. Dropping any of these leaves the
   caches behind Docker with nothing to catch them up.
