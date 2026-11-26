@@ -37,11 +37,20 @@ use tokio::time::Instant;
 
 pub use docker_client::ErrorKind;
 
+/// What both of Docker's 503 wordings for a manager-only call start with, on a worker ("This node
+/// is not a swarm manager. Worker nodes can't be used to view or modify cluster state. …") and
+/// with Swarm inactive ("This node is not a swarm manager. Use \"docker swarm init\" or …").
+const NOT_MANAGER_MESSAGE: &str = "not a swarm manager";
+
 /// A failed Docker call.
 #[derive(Debug, Clone)]
 pub struct Error {
     kind: ErrorKind,
     message: String,
+    // The daemon refused a manager-only call because it is not a Swarm manager: a reading of
+    // Docker's 503 that `ErrorKind` (rust-common's, closed) has no kind for, so the kind stays
+    // `Other`.
+    not_manager: bool,
 }
 
 impl Error {
@@ -51,6 +60,17 @@ impl Error {
         Self {
             kind,
             message: message.into(),
+            not_manager: false,
+        }
+    }
+
+    /// Docker's 503 for a manager-only call on a node that is not a Swarm manager, worded as
+    /// `message`, as the test doubles answer it.
+    #[must_use]
+    pub fn not_manager(message: impl Into<String>) -> Self {
+        Self {
+            not_manager: true,
+            ..Self::new(ErrorKind::Other, message)
         }
     }
 
@@ -72,11 +92,29 @@ impl Error {
     pub fn is_not_found(&self) -> bool {
         self.kind == ErrorKind::NotFound
     }
+
+    /// Whether the engine answered 503 "This node is not a swarm manager": the daemon is a Swarm
+    /// worker, or Swarm is inactive, so the service, node and task calls cannot succeed until it
+    /// is a manager.
+    #[must_use]
+    pub fn is_not_manager(&self) -> bool {
+        self.not_manager
+    }
 }
 
 impl From<docker_client::Error> for Error {
     fn from(error: docker_client::Error) -> Self {
-        Self::new(error.kind(), error.to_string())
+        let not_manager = matches!(
+            error.engine(),
+            Some(docker_client::bollard::errors::Error::DockerResponseServerError {
+                status_code: 503,
+                message,
+            }) if message.contains(NOT_MANAGER_MESSAGE)
+        );
+        Self {
+            not_manager,
+            ..Self::new(error.kind(), error.to_string())
+        }
     }
 }
 

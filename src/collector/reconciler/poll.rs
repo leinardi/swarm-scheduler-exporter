@@ -48,7 +48,7 @@ use super::super::error::CallError;
 use super::super::metrics_ids::{SERVICE_MODE_GLOBAL, SERVICE_MODE_GLOBAL_JOB};
 use super::super::poll_snapshot::{PollService, PollSnapshot};
 use super::super::replicas_state::{ServiceCounter, poll_replicas_state};
-use super::{Reconciler, ReconcilerHandle};
+use super::{Reconciler, ReconcilerHandle, Role};
 
 /// How many polls in a row a rejected service keeps its previously published series. A service
 /// rejected more often than that has its series omitted and fails the poll, so health turns red
@@ -64,6 +64,8 @@ pub enum PollError {
     Canceled(&'static str),
     /// The reconciler was shutting down when it took the request.
     Stopping,
+    /// The daemon is not a Swarm manager: there is nothing to poll, and nothing is published.
+    NotManager,
     /// The task list failed.
     Poll(CallError),
     /// The replicas-state build failed; the previous set stays.
@@ -86,6 +88,7 @@ impl fmt::Display for PollError {
         match self {
             Self::Canceled(step) => write!(formatter, "{step}: context canceled"),
             Self::Stopping => formatter.write_str("reconciler stopping: context canceled"),
+            Self::NotManager => formatter.write_str("not a swarm manager"),
             Self::Poll(error) => fmt::Display::fmt(error, formatter),
             Self::Publish(message) => formatter.write_str(message),
             // Go's %v of a []string.
@@ -272,7 +275,13 @@ pub async fn poll_and_publish_replicas_state(
         .run_until_cancelled(poll_replicas_state(docker, &snapshot))
         .await
         .ok_or(PollError::Canceled("task list"))?
-        .map_err(PollError::Poll)?;
+        .map_err(|error| {
+            // A demotion the reconciler has not seen yet: the resync it asks for sees it.
+            if error.docker_error().is_not_manager() {
+                handle.request_resync("task list: not a swarm manager");
+            }
+            PollError::Poll(error)
+        })?;
     handle
         .submit_poll_counts(cancel, snapshot, counters)
         .await?;
@@ -331,6 +340,8 @@ impl<D: DockerApi> Reconciler<D> {
             PollRequest::Snapshot(request) => {
                 let answer = if cancel.is_cancelled() {
                     Err(PollError::Stopping)
+                } else if self.shared.lock().role == Role::NotManager {
+                    Err(PollError::NotManager)
                 } else {
                     Ok(Arc::new(self.build_poll_snapshot()))
                 };
@@ -398,12 +409,17 @@ impl<D: DockerApi> Reconciler<D> {
     /// desired count, which are current since its generation did not move. A rejected one, or
     /// one the poll has no counts for, keeps its previously published series for up to
     /// [`MAX_CARRIED_POLLS`] polls in a row if its label identity did not change; past that it
-    /// is omitted and the poll fails as a partial failure.
+    /// is omitted and the poll fails as a partial failure. Nothing is published while the daemon
+    /// is not a Swarm manager.
     pub(super) fn apply_poll_counts(
         &mut self,
         snapshot: &PollSnapshot,
         counters: &ServiceCounter,
     ) -> Result<(), PollError> {
+        // Counts made before a demotion are not published: the Swarm series are gone.
+        if self.shared.lock().role == Role::NotManager {
+            return Err(PollError::NotManager);
+        }
         let verdict = self.current_poll_verdict(snapshot);
         let mut published = ServiceCounter::with_capacity(snapshot.services.len());
         let mut rejections = HashMap::with_capacity(self.poll_rejections.len());

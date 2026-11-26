@@ -59,6 +59,7 @@ use tracing::dispatcher::DefaultGuard;
 use tracing::level_filters::LevelFilter;
 
 mod listener;
+mod not_manager;
 mod poll;
 
 /// Checks the lock rather than re-entering it, so a regression fails instead of hanging.
@@ -199,6 +200,7 @@ struct DockerState {
     tasks: Vec<Task>,
     service_list_err: Option<Error>,
     node_list_err: Option<Error>,
+    task_list_err: Option<Error>,
     inspect_err: HashMap<String, Error>,
     // Runs after the service list built its result, before it returns.
     after_service_list: Option<Hook>,
@@ -294,6 +296,10 @@ impl TestDocker {
         let mut state = self.lock();
         state.service_list_err = service_list;
         state.node_list_err = node_list;
+    }
+
+    fn set_task_list_err(&self, error: Option<Error>) {
+        self.lock().task_list_err = error;
     }
 
     fn set_inspect_err(&self, service_id: &str, error: Option<Error>) {
@@ -445,12 +451,15 @@ impl DockerApi for TestDocker {
     fn task_list(&self) -> impl Future<Output = Result<Vec<Task>, Error>> + Send {
         self.task_list_calls.fetch_add(1, Ordering::SeqCst);
         let state = self.lock();
-        let tasks = state.tasks.clone();
+        let result = state
+            .task_list_err
+            .clone()
+            .map_or_else(|| Ok(state.tasks.clone()), Err);
         let blocked = state.blocked.contains(&Call::TaskList);
         drop(state);
         async move {
             hold_if(blocked).await;
-            Ok(tasks)
+            result
         }
     }
 

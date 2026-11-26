@@ -135,13 +135,22 @@ snapshot:
   *queued*, not when it is applied, so a queued, unapplied change already invalidates a poll.
   Moving a bump to apply time is a finding.
 - Readiness is the first completed resync: the replicas poller does not start and `/healthz`
-  stays `503` ("initial resync not completed") until then. The containers poller
+  stays `503` ("initial resync not completed", or "not a swarm manager" on a non-manager) until
+  then. The containers poller
   (`--containers`) needs no resync and starts at once; making it wait is a finding (#140). A
   resync fetches both the service list and the node list before mutating anything, and a failed
   one mutates nothing.
 - A resync is requested on overflow, on retry exhaustion, on a recovered panic, on every
   event-stream reconnect and every `PERIODIC_RESYNC_INTERVAL`. Dropping any of these leaves the
   caches behind Docker with nothing to catch them up.
+- A daemon that is not a Swarm manager (Docker's 503 "This node is not a swarm manager",
+  `docker::Error::is_not_manager`) is a state, `Role::NotManager`, not a failing resync: it is
+  not counted in `resyncs_total{result="failure"}`, its transition removes every Swarm series
+  (the poller-published replicas families and the poll carry-over included) and drops the queued
+  work, and no manager-only call runs while it lasts but the backed-off resync probe: no service
+  inspect (a batch stops at the inspect that found it), no node refresh, no periodic resync, no
+  replicas poll, and no timer armed for any of them. A call that bypasses
+  `State::swarm_work_enabled`, or a poll published while `NotManager`, is a finding.
 
 ### A panic costs a step, not the process
 
@@ -207,7 +216,10 @@ are omitted and the poll fails, so health turns red. Findings:
 The health snapshot (`src/collector/health.rs`) is evaluated at scrape time, by `/healthz` and by
 the `swarm_exporter_health` `GaugeFunc` alike. It is unhealthy until the first resync completes,
 until a poll has been published, when the last published poll is older than `max(3 × poll delay,
-30s)`, and when a requested resync has been outstanding for longer than that window. A health signal
+30s)`, and when a requested resync has been outstanding for longer than that window. On a daemon
+that is not a Swarm manager (`Role::NotManager`) only two rules apply: without `--containers` it is
+unhealthy (`not a swarm manager`); with it, the container polls are checked for presence and
+freshness in the same window. A health signal
 set by the poller itself, a timestamp moved on a failed or partial publish, or a reason string
 in `docs/operations.md` that no longer matches the code is a finding.
 

@@ -46,6 +46,14 @@ Before you roll it out:
 The rows that changed since 2.x are Q1, Q2, Q3, Q4, Q6, Q11, Q13, Q15, Q16 and Q17 in the table
 below.
 
+## Changes within 3.x
+
+- **`--containers` on a worker or a host with Swarm inactive** exports the container state
+  again, as it did before 1.3.0: the container poll no longer waits for a Swarm resync that such a
+  daemon can never complete. On a daemon that is not a Swarm manager, health follows the container
+  polls with `--containers` and reads `not a swarm manager` without it; such a daemon's refusals
+  are not counted as failed resyncs (see [Health](operations.md#health)).
+
 ## Coming from 1.x (Go)
 
 2.0 is the same exporter rewritten in Rust; the flags' names and defaults, the health rules and the

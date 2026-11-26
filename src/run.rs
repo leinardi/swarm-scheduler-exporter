@@ -43,7 +43,8 @@ use crate::collector::exporter_metrics::ExporterMetrics;
 use crate::collector::health::{Health, HealthGauges, Timestamps};
 use crate::collector::nodes::{NodeMetrics, NodesByState};
 use crate::collector::reconciler::{
-    Collectors, Reconciler, ReconcilerHandle, listen_swarm_events, poll_and_publish_replicas_state,
+    Collectors, PollError, Reconciler, ReconcilerHandle, Role, listen_swarm_events,
+    poll_and_publish_replicas_state,
 };
 use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_restart::ServiceRestartPolicy;
@@ -105,7 +106,12 @@ pub fn register_metrics(
     replica_gauges.register(registry);
     let replicas_state = Arc::new(ReplicasState::new(custom));
     replicas_state.register(registry);
-    let health = Health::unbound(Arc::clone(&timestamps), options.poll_delay, clock);
+    let health = Health::unbound(
+        Arc::clone(&timestamps),
+        options.poll_delay,
+        options.containers.enabled,
+        clock,
+    );
     let [version, commit, date] = &options.build;
     HealthGauges::new(health.clone(), version, commit, date).register(registry);
     let nodes_by_state = Arc::new(NodesByState::new());
@@ -208,6 +214,8 @@ pub fn start_workers<D: DockerApi + 'static>(
         let poller = ContainersPoller {
             docker: Arc::clone(&docker),
             containers,
+            exporter_metrics: Arc::clone(&metrics.collectors.metrics),
+            clock: Arc::clone(clock),
             cancel: root.clone(),
         };
         tokio::spawn(poller.run(poll_delay))
@@ -266,16 +274,25 @@ impl<D: DockerApi> Poller<D> {
     }
 
     /// Go's `pollOnce`: the replicas state, its duration observed and the poll counted whatever
-    /// the outcome, a failure counted and logged.
+    /// the outcome, a failure counted and logged. A tick while the daemon is not a Swarm manager
+    /// is skipped: there is nothing to poll, so no call and no count.
     async fn poll_once(&self) {
+        if self.handle.role() == Role::NotManager {
+            return;
+        }
         let start = Instant::now();
         let result =
             poll_and_publish_replicas_state(&*self.docker, &self.handle, &self.cancel).await;
         self.exporter_metrics.observe_poll_duration(start.elapsed());
         self.exporter_metrics.inc_polls();
-        if let Err(error) = result {
-            self.exporter_metrics.inc_poll_errors();
-            error!(error = %error, "poll replicas state failed");
+        match result {
+            Ok(()) => {}
+            // Demoted while the poll ran: nothing was published, and the reconciler logged it.
+            Err(PollError::NotManager) => debug!("replicas poll skipped: not a swarm manager"),
+            Err(error) => {
+                self.exporter_metrics.inc_poll_errors();
+                error!(error = %error, "poll replicas state failed");
+            }
         }
     }
 }
@@ -286,6 +303,8 @@ impl<D: DockerApi> Poller<D> {
 struct ContainersPoller<D> {
     docker: Arc<D>,
     containers: Arc<ContainersState>,
+    exporter_metrics: Arc<ExporterMetrics>,
+    clock: Arc<dyn Clock>,
     cancel: CancellationToken,
 }
 
@@ -308,15 +327,20 @@ impl<D: DockerApi> ContainersPoller<D> {
         }
     }
 
-    /// One container poll: the rows published on success; a failure logged, with the previous
-    /// set kept.
+    /// One container poll: the rows published on success, and its time recorded for health; a
+    /// failure logged, with the previous set kept.
     async fn poll_once(&self) {
         match self
             .cancel
             .run_until_cancelled(self.containers.poll(&*self.docker))
             .await
         {
-            Some(Ok(rows)) => self.containers.update(&rows),
+            Some(Ok(rows)) => {
+                self.containers.update(&rows);
+                self.exporter_metrics
+                    .timestamps()
+                    .mark_containers_poll_ok(self.clock.now());
+            }
             Some(Err(error)) => warn!(error = %error, "poll containers state failed"),
             // Go's list fails at once on the cancelled context.
             None => warn!(

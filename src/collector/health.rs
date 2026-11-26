@@ -38,7 +38,7 @@ use service_kit::prometheus_client::registry::Registry;
 use crate::metrics::{self, Desc, GaugeVec, ScrapeGauge, must};
 
 use super::metrics_ids::{EXPORTER_SUBSYSTEM, NAMESPACE};
-use super::reconciler::ReconcilerHandle;
+use super::reconciler::{ReconcilerHandle, Role};
 
 /// The reason before the first resync completed.
 pub const REASON_INITIAL_RESYNC: &str = "initial resync not completed";
@@ -48,6 +48,9 @@ pub const REASON_NO_POLL: &str = "no successful poll yet";
 pub const REASON_STALE_POLL: &str = "last poll too old";
 /// The reason when a requested resync has been outstanding for longer than the window.
 pub const REASON_RESYNC_OUTSTANDING: &str = "resync outstanding";
+/// The reason when the daemon is not a Swarm manager and there are no container metrics to
+/// export instead.
+pub const REASON_NOT_MANAGER: &str = "not a swarm manager";
 
 /// The floor of the staleness window, whatever the poll delay.
 const MIN_WINDOW: Duration = Duration::from_secs(30);
@@ -64,6 +67,7 @@ pub struct Timestamps {
     poll_success: AtomicI64,
     resync_success: AtomicI64,
     events_connect: AtomicI64,
+    containers_poll_success: AtomicI64,
 }
 
 impl Timestamps {
@@ -77,6 +81,12 @@ impl Timestamps {
     /// Records the latest completed resync.
     pub fn mark_resync_ok(&self, now: Timestamp) {
         self.resync_success.store(unix_nanos(now), Ordering::SeqCst);
+    }
+
+    /// Records the latest published container poll, at the time it was published.
+    pub fn mark_containers_poll_ok(&self, now: Timestamp) {
+        self.containers_poll_success
+            .store(unix_nanos(now), Ordering::SeqCst);
     }
 
     /// Records when the event stream connected (or reconnected).
@@ -101,6 +111,12 @@ impl Timestamps {
     pub fn last_events_connect(&self) -> i64 {
         self.events_connect.load(Ordering::SeqCst)
     }
+
+    /// The latest published container poll, 0 if none.
+    #[must_use]
+    pub fn last_containers_poll_success(&self) -> i64 {
+        self.containers_poll_success.load(Ordering::SeqCst)
+    }
 }
 
 /// The health check.
@@ -111,6 +127,9 @@ pub struct Health {
     reconciler: Arc<OnceLock<ReconcilerHandle>>,
     timestamps: Arc<Timestamps>,
     poll_delay: Duration,
+    // `--containers`: on a daemon that is not a Swarm manager, the container polls are what
+    // health reads.
+    containers: bool,
     clock: Arc<dyn Clock>,
 }
 
@@ -121,21 +140,24 @@ impl std::fmt::Debug for Health {
             .field("reconciler", &self.reconciler)
             .field("timestamps", &self.timestamps)
             .field("poll_delay", &self.poll_delay)
+            .field("containers", &self.containers)
             .finish_non_exhaustive()
     }
 }
 
 impl Health {
-    /// The check of `reconciler`'s resyncs and the poll times in `timestamps`, for a poller
-    /// running every `poll_delay`, reading the time from `clock`.
+    /// The check of `reconciler`'s resyncs and the poll times in `timestamps`, for pollers
+    /// running every `poll_delay` (the containers' too when `containers` is set), reading the
+    /// time from `clock`.
     #[must_use]
     pub fn new(
         reconciler: ReconcilerHandle,
         timestamps: Arc<Timestamps>,
         poll_delay: Duration,
+        containers: bool,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        let health = Self::unbound(timestamps, poll_delay, clock);
+        let health = Self::unbound(timestamps, poll_delay, containers, clock);
         health.bind(reconciler);
         health
     }
@@ -147,14 +169,24 @@ impl Health {
     pub fn unbound(
         timestamps: Arc<Timestamps>,
         poll_delay: Duration,
+        containers: bool,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             reconciler: Arc::new(OnceLock::new()),
             timestamps,
             poll_delay,
+            containers,
             clock,
         }
+    }
+
+    /// The bound reconciler's view of the daemon's Swarm role; unknown when none is bound.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.reconciler
+            .get()
+            .map_or(Role::Unknown, ReconcilerHandle::role)
     }
 
     /// Names the reconciler whose resyncs the check reads, for this check and every clone of it;
@@ -170,6 +202,10 @@ impl Health {
     }
 
     /// Whether the exporter is healthy at `now`, and why not, checked in this order:
+    /// - a reconciler is bound;
+    /// - the daemon is not a Swarm manager: unhealthy without `--containers`; with it, healthy
+    ///   once a container poll was published no longer ago than the window below, and only
+    ///   these checks apply;
     /// - the reconciler completed its first resync, so the caches hold every service and node;
     /// - at least one poll succeeded;
     /// - that poll is no older than `max(3 × poll_delay, 30s)`;
@@ -180,19 +216,26 @@ impl Health {
         let Some(reconciler) = self.reconciler.get() else {
             return (false, REASON_INITIAL_RESYNC);
         };
+        let window = i128::try_from(self.poll_delay.saturating_mul(3).max(MIN_WINDOW).as_nanos())
+            .unwrap_or(i128::MAX);
+        let now_nanos = now.as_nanosecond();
+        if reconciler.role() == Role::NotManager {
+            if !self.containers {
+                return (false, REASON_NOT_MANAGER);
+            }
+            return fresh(
+                self.timestamps.last_containers_poll_success(),
+                now_nanos,
+                window,
+            );
+        }
         let (requested, completed, outstanding_since) = reconciler.resync_state();
         if completed == 0 {
             return (false, REASON_INITIAL_RESYNC);
         }
-        let last_poll = self.timestamps.last_poll_success();
-        if last_poll == 0 {
-            return (false, REASON_NO_POLL);
-        }
-        let window = i128::try_from(self.poll_delay.saturating_mul(3).max(MIN_WINDOW).as_nanos())
-            .unwrap_or(i128::MAX);
-        let now_nanos = now.as_nanosecond();
-        if now_nanos - i128::from(last_poll) > window {
-            return (false, REASON_STALE_POLL);
+        let freshness = fresh(self.timestamps.last_poll_success(), now_nanos, window);
+        if !freshness.0 {
+            return freshness;
         }
         // Go's zero time when none is recorded: outstanding since forever.
         let since = outstanding_since.map_or(i128::MIN / 2, Timestamp::as_nanosecond);
@@ -201,6 +244,18 @@ impl Health {
         }
         (true, "")
     }
+}
+
+/// Whether a poll last published at `last` (unix nanoseconds, 0 for never) is fresh at `now`:
+/// published at all, and no older than `window`.
+fn fresh(last: i64, now: i128, window: i128) -> (bool, &'static str) {
+    if last == 0 {
+        return (false, REASON_NO_POLL);
+    }
+    if now - i128::from(last) > window {
+        return (false, REASON_STALE_POLL);
+    }
+    (true, "")
 }
 
 fn exporter_name(name: &str) -> String {

@@ -79,6 +79,11 @@ struct Fixture {
 /// Go's `resetHealthState`: no poll yet, and a reconciler whose first resync completed, so the
 /// checks below see only the poll freshness unless they change it.
 fn fixture(poll_delay: Duration) -> Fixture {
+    fixture_with(poll_delay, false)
+}
+
+/// [`fixture`], with `--containers` when `containers` is set.
+fn fixture_with(poll_delay: Duration, containers: bool) -> Fixture {
     let reconciler = reconciler_handle();
     reconciler.set_resync_state(1, 1, None);
     let timestamps = Arc::new(Timestamps::default());
@@ -88,6 +93,7 @@ fn fixture(poll_delay: Duration) -> Fixture {
             reconciler.clone(),
             Arc::clone(&timestamps),
             poll_delay,
+            containers,
             Arc::clone(&clock) as Arc<dyn Clock>,
         ),
         reconciler,
@@ -184,6 +190,7 @@ fn health_waits_for_the_initial_resync() {
         reconciler_handle(),
         Arc::clone(&fixture.timestamps),
         Duration::from_secs(10),
+        false,
         Arc::new(FakeClock::new(now())),
     );
     fixture.timestamps.mark_poll_ok(now());
@@ -205,6 +212,7 @@ fn unbound_health_waits_for_its_reconciler() {
     let health = Health::unbound(
         Arc::clone(&fixture.timestamps),
         Duration::from_secs(10),
+        false,
         Arc::clone(&fixture.clock) as Arc<dyn Clock>,
     );
     fixture.timestamps.mark_poll_ok(now());
@@ -215,6 +223,64 @@ fn unbound_health_waits_for_its_reconciler() {
     let clone = health.clone();
     health.bind(fixture.reconciler.clone());
     assert_eq!(clone.snapshot(now()), (true, ""));
+}
+
+/// A daemon that is not a Swarm manager, without `--containers`: unhealthy for that reason,
+/// whatever the replicas poll and resync state say.
+#[test]
+fn not_a_manager_without_containers_is_unhealthy() {
+    let fixture = fixture(Duration::from_secs(10));
+    fixture.timestamps.mark_poll_ok(now());
+    fixture.timestamps.mark_containers_poll_ok(now());
+    fixture.reconciler.set_role(Role::NotManager);
+    assert_eq!(
+        fixture.health.snapshot(now()),
+        (false, "not a swarm manager")
+    );
+    // Never a manager: no resync ever completed.
+    fixture.reconciler.set_resync_state(3, 0, Some(ago(3600)));
+    assert_eq!(
+        fixture.health.snapshot(now()),
+        (false, "not a swarm manager")
+    );
+}
+
+/// A daemon that is not a Swarm manager, with `--containers`: the container polls alone decide,
+/// in the replicas poll's window; the resync state and the replicas poll are not read.
+#[test]
+fn not_a_manager_with_containers_reads_the_container_polls() {
+    let fixture = fixture_with(Duration::from_secs(10), true);
+    fixture.reconciler.set_role(Role::NotManager);
+    fixture.reconciler.set_resync_state(3, 0, Some(ago(3600)));
+    assert_eq!(
+        fixture.health.snapshot(now()),
+        (false, "no successful poll yet")
+    );
+    fixture.timestamps.mark_containers_poll_ok(ago(31));
+    assert_eq!(fixture.health.snapshot(now()), (false, "last poll too old"));
+    fixture.timestamps.mark_containers_poll_ok(ago(30));
+    assert_eq!(fixture.health.snapshot(now()), (true, ""));
+}
+
+/// With `--containers` on a manager, the container polls change nothing: the replicas checks
+/// apply as before, and an unknown role reads as the initial resync.
+#[test]
+fn a_manager_with_containers_reads_the_replicas_checks() {
+    let fixture = fixture_with(Duration::from_secs(10), true);
+    fixture.timestamps.mark_containers_poll_ok(now());
+    fixture.reconciler.set_role(Role::Manager);
+    assert_eq!(
+        fixture.health.snapshot(now()),
+        (false, "no successful poll yet")
+    );
+    fixture.timestamps.mark_poll_ok(now());
+    assert_eq!(fixture.health.snapshot(now()), (true, ""));
+    fixture.reconciler.set_role(Role::Unknown);
+    fixture.reconciler.set_resync_state(1, 0, Some(ago(1)));
+    assert_eq!(
+        fixture.health.snapshot(now()),
+        (false, "initial resync not completed")
+    );
 }
 
 /// `swarm_exporter_build_info` carries the build at 1, with Go's names and HELP texts.
@@ -260,14 +326,20 @@ fn timestamps_are_unix_nanoseconds() {
         (
             timestamps.last_poll_success(),
             timestamps.last_resync_success(),
-            timestamps.last_events_connect()
+            timestamps.last_events_connect(),
+            timestamps.last_containers_poll_success()
         ),
-        (0, 0, 0)
+        (0, 0, 0, 0)
     );
     let at = Timestamp::new(1_700_000_000, 123_456_789).unwrap();
     timestamps.mark_poll_ok(at);
     timestamps.mark_resync_ok(at);
     timestamps.mark_events_connected(at);
+    timestamps.mark_containers_poll_ok(at);
+    assert_eq!(
+        timestamps.last_containers_poll_success(),
+        1_700_000_000_123_456_789
+    );
     assert_eq!(timestamps.last_poll_success(), 1_700_000_000_123_456_789);
     assert_eq!(timestamps.last_resync_success(), 1_700_000_000_123_456_789);
     assert_eq!(timestamps.last_events_connect(), 1_700_000_000_123_456_789);

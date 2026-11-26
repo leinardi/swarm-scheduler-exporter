@@ -51,7 +51,7 @@ use tokio::time::Instant;
 use crate::docker::types::{Event, Node, Service};
 use crate::docker::{DockerApi, with_docker_timeout};
 use clock::Clock;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use super::desired::{ReplicaGauges, labels_for_metadata, replica_counts};
 use super::error::CallError;
@@ -184,10 +184,25 @@ struct DueKey {
     attempts: usize,
 }
 
+/// What the reconciler knows of the Swarm role of the daemon it reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Role {
+    /// No resync has completed, and none has found the daemon not to be a manager.
+    #[default]
+    Unknown,
+    /// The last resync completed: the daemon is a Swarm manager.
+    Manager,
+    /// A manager-only call was refused with Docker's 503 "This node is not a swarm manager" (a
+    /// worker, or Swarm inactive), and no resync has completed since. Every Swarm series is
+    /// removed and only the backed-off resync probe calls the manager-only API.
+    NotManager,
+}
+
 /// The state the event side shares with the reconciler, under [`Shared::state`].
 #[derive(Debug)]
 struct State {
     pending_cap: usize,
+    role: Role,
     // Hands out generation values, so a service removed and seen again never reuses one.
     generation_counter: u64,
     service_generation: HashMap<String, Generation>,
@@ -247,6 +262,13 @@ impl State {
         self.pending_order = Vec::new();
         self.prune_service_generations();
         self.request_resync(now);
+    }
+
+    /// Whether the manager-only work (service keys, node refreshes, periodic resyncs) may run:
+    /// after the first resync, and not while the daemon is known not to be a manager. The
+    /// requested resync is never gated: it is the probe that sees the daemon become a manager.
+    fn swarm_work_enabled(&self) -> bool {
+        self.resync_completed > 0 && self.role != Role::NotManager
     }
 }
 
@@ -395,6 +417,18 @@ impl ReconcilerHandle {
         state.resync_outstanding_since = outstanding_since;
     }
 
+    /// What the reconciler knows of the daemon's Swarm role.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.shared.lock().role
+    }
+
+    /// Sets the role, as a test of the health check sets the resync counters.
+    #[cfg(test)]
+    pub(crate) fn set_role(&self, role: Role) {
+        self.shared.lock().role = role;
+    }
+
     /// Whether the first resync completed.
     #[must_use]
     pub fn is_ready(&self) -> bool {
@@ -474,6 +508,7 @@ impl<D: DockerApi> Reconciler<D> {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 pending_cap: policy.pending_cap,
+                role: Role::Unknown,
                 generation_counter: 0,
                 service_generation: HashMap::new(),
                 node_generation: 0,
@@ -587,6 +622,11 @@ impl<D: DockerApi> Reconciler<D> {
                 self.publish_restart_policy().await;
                 return;
             }
+            // An inspect of this batch found the daemon not to be a manager: the rest of the
+            // batch is dropped, and the resync that sees it become one rebuilds it.
+            if self.shared.lock().role == Role::NotManager {
+                break;
+            }
             let step = format!("service {}", key.service_id);
             let outcome = recover(self.reconcile_service(cancel, key)).await;
             self.after_step(&step, outcome);
@@ -649,11 +689,11 @@ impl<D: DockerApi> Reconciler<D> {
     }
 
     /// Removes and returns, in FIFO order, up to [`SERVICE_KEYS_PER_CYCLE`] keys whose time has
-    /// come. Keys wait until the first resync completed: before it there is no node snapshot to
-    /// compute their counts from.
+    /// come. Keys wait until the first resync completed (before it there is no node snapshot to
+    /// compute their counts from) and while the daemon is not a manager.
     fn take_due_keys(&self, now: Instant) -> Vec<DueKey> {
         let mut state = self.shared.lock();
-        if state.resync_completed == 0 || state.pending_order.is_empty() {
+        if !state.swarm_work_enabled() || state.pending_order.is_empty() {
             return Vec::new();
         }
         let mut taken = Vec::new();
@@ -681,7 +721,7 @@ impl<D: DockerApi> Reconciler<D> {
 
     fn nodes_due(&self, now: Instant) -> bool {
         let state = self.shared.lock();
-        state.resync_completed > 0
+        state.swarm_work_enabled()
             && self
                 .node_deadline(state.nodes_dirty)
                 .is_none_or(|at| at <= now)
@@ -704,7 +744,7 @@ impl<D: DockerApi> Reconciler<D> {
 
     fn periodic_resync_due(&self, now: Instant) -> bool {
         let state = self.shared.lock();
-        state.resync_completed > 0
+        state.swarm_work_enabled()
             && state.resync_requested == state.resync_completed
             && self.next_periodic_resync.is_none_or(|at| at <= now)
     }
@@ -728,7 +768,7 @@ impl<D: DockerApi> Reconciler<D> {
         if state.resync_requested > state.resync_completed {
             consider(self.resync_not_before);
         }
-        if state.resync_completed > 0 {
+        if state.swarm_work_enabled() {
             if state.resync_requested == state.resync_completed {
                 consider(self.next_periodic_resync);
             }
@@ -757,6 +797,10 @@ impl<D: DockerApi> Reconciler<D> {
             }
             Err(error) if error.docker_error().is_not_found() => {
                 self.remove_service(&key.service_id);
+            }
+            Err(error) if error.docker_error().is_not_manager() => {
+                self.enter_not_manager(&error);
+                self.schedule_resync_retry(Instant::now());
             }
             Err(error) => self.retry_service(&key, &error),
         }
@@ -878,6 +922,10 @@ impl<D: DockerApi> Reconciler<D> {
                 }
                 self.node_list_succeeded();
             }
+            Err(error) if error.docker_error().is_not_manager() => {
+                self.enter_not_manager(&error);
+                self.schedule_resync_retry(Instant::now());
+            }
             Err(error) => {
                 if was_dirty {
                     self.shared.lock().nodes_dirty = true;
@@ -939,6 +987,13 @@ impl<D: DockerApi> Reconciler<D> {
         };
         let (services, nodes) = match listed {
             Ok(lists) => lists,
+            // Not a failure: the daemon is a worker, or Swarm is inactive. The resync is retried
+            // after the same backoff, as the probe that sees the daemon become a manager.
+            Err(error) if error.docker_error().is_not_manager() => {
+                self.enter_not_manager(&error);
+                self.schedule_resync_retry(Instant::now());
+                return;
+            }
             Err(error) => {
                 self.collectors.metrics.inc_resync(ResyncResult::Failure);
                 warn!(
@@ -966,6 +1021,52 @@ impl<D: DockerApi> Reconciler<D> {
         self.complete_resync(target, pass_start);
     }
 
+    /// Records that the daemon refused a manager-only call as not a Swarm manager. On the
+    /// transition only, it logs one warning, drops the queued work (a resync rebuilds all of it)
+    /// and removes every Swarm series: the services', the nodes', and the replicas-state families
+    /// the poller published, with the poll carry-over state. A resync stays requested; the caller
+    /// schedules it after the backoff. A repeat refusal is logged at debug.
+    fn enter_not_manager(&mut self, error: &CallError) {
+        let now = self.shared.clock.now();
+        let previous = {
+            let mut state = self.shared.lock();
+            let previous = std::mem::replace(&mut state.role, Role::NotManager);
+            // A request already outstanding is not raised again: the resync that completes it
+            // would otherwise leave one behind.
+            if state.resync_requested == state.resync_completed {
+                state.request_resync(now);
+            }
+            if previous != Role::NotManager {
+                state.pending_set = HashMap::new();
+                state.pending_order = Vec::new();
+                state.nodes_dirty = false;
+            }
+            previous
+        };
+        if previous == Role::NotManager {
+            debug!(error = %error, "still not a swarm manager");
+            return;
+        }
+        warn!(
+            error = %error,
+            "this node is not a swarm manager; swarm metrics are not exported until it is one"
+        );
+        for service_id in self.metadata.ids() {
+            self.remove_service(&service_id);
+        }
+        self.apply_nodes(&[]);
+        if let Err(error) = self
+            .collectors
+            .replicas_state
+            .update(&ServiceCounter::new())
+        {
+            error!(error = %error, "clearing the replicas state failed");
+        }
+        self.last_published = ServiceCounter::new();
+        self.poll_rejections = HashMap::new();
+        self.shared.lock().prune_service_generations();
+    }
+
     /// Records that every request up to `target` is served, and counts the resync as a success
     /// at the time it completed.
     fn complete_resync(&mut self, target: u64, pass_start: Timestamp) {
@@ -974,8 +1075,9 @@ impl<D: DockerApi> Reconciler<D> {
             .metrics
             .timestamps()
             .mark_resync_ok(self.shared.clock.now());
-        {
+        let previous_role = {
             let mut state = self.shared.lock();
+            let previous_role = std::mem::replace(&mut state.role, Role::Manager);
             state.resync_completed = state.resync_completed.max(target);
             state.resync_outstanding_since = if state.resync_requested == state.resync_completed {
                 None
@@ -983,6 +1085,10 @@ impl<D: DockerApi> Reconciler<D> {
                 // Raised during this pass, so no earlier than its start.
                 Some(pass_start)
             };
+            previous_role
+        };
+        if previous_role == Role::NotManager {
+            info!("this node is a swarm manager; swarm metrics resumed");
         }
         self.resync_backoff = self.backoff_initial;
         self.resync_not_before = None;

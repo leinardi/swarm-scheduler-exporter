@@ -29,6 +29,7 @@ use std::future::Future;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -40,6 +41,7 @@ use clock::{Clock, SystemClock};
 use service_kit::http::Lifecycle;
 use service_kit::prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
+use swarm_scheduler_exporter::collector::reconciler::Role;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
     ContainerInspect, ContainerSummary, Event, Node, ReplicatedService, Service, ServiceMode,
@@ -69,6 +71,10 @@ struct Calls {
 #[derive(Debug)]
 struct LifecycleDocker {
     resync_failures: usize,
+    // Every service list fails with Docker's 503 "This node is not a swarm manager".
+    not_manager: bool,
+    // Once set, the service, node and task lists fail with it too: a demoted manager.
+    demoted: AtomicBool,
     containers: Vec<ContainerSummary>,
     calls: Mutex<Calls>,
 }
@@ -77,8 +83,18 @@ impl LifecycleDocker {
     fn new(resync_failures: usize) -> Self {
         Self {
             resync_failures,
+            not_manager: false,
+            demoted: AtomicBool::new(false),
             containers: Vec::new(),
             calls: Mutex::new(Calls::default()),
+        }
+    }
+
+    /// A daemon that is not a Swarm manager: a worker, or Swarm inactive.
+    fn not_manager() -> Self {
+        Self {
+            not_manager: true,
+            ..Self::new(0)
         }
     }
 
@@ -102,6 +118,14 @@ impl EventStream for Quiet {
     }
 }
 
+/// Docker's 503 on a worker.
+fn not_manager_error() -> Error {
+    Error::not_manager(
+        "This node is not a swarm manager. Worker nodes can't be used to view or modify cluster \
+         state.",
+    )
+}
+
 fn one_service() -> Vec<Service> {
     vec![Service {
         id: "svc1".to_owned(),
@@ -123,7 +147,9 @@ impl DockerApi for LifecycleDocker {
     fn service_list(&self) -> impl Future<Output = Result<Vec<Service>, Error>> + Send {
         let mut calls = self.calls();
         calls.service_list += 1;
-        let result = if calls.service_list <= self.resync_failures {
+        let result = if self.not_manager || self.demoted.load(Ordering::SeqCst) {
+            Err(not_manager_error())
+        } else if calls.service_list <= self.resync_failures {
             // Any error: the reconciler retries every failure alike.
             Err(Error::deadline_exceeded())
         } else {
@@ -135,7 +161,11 @@ impl DockerApi for LifecycleDocker {
     }
 
     fn node_list(&self) -> impl Future<Output = Result<Vec<Node>, Error>> + Send {
-        std::future::ready(Ok(Vec::new()))
+        std::future::ready(if self.demoted.load(Ordering::SeqCst) {
+            Err(not_manager_error())
+        } else {
+            Ok(Vec::new())
+        })
     }
 
     fn service_inspect(&self, _id: &str) -> impl Future<Output = Result<Service, Error>> + Send {
@@ -149,7 +179,11 @@ impl DockerApi for LifecycleDocker {
             calls.task_list_before_resync = true;
         }
         drop(calls);
-        std::future::ready(Ok(Vec::new()))
+        std::future::ready(if self.demoted.load(Ordering::SeqCst) {
+            Err(not_manager_error())
+        } else {
+            Ok(Vec::new())
+        })
     }
 
     fn container_list(&self) -> impl Future<Output = Result<Vec<ContainerSummary>, Error>> + Send {
@@ -437,6 +471,131 @@ async fn containers_poll_without_waiting_for_the_first_resync() {
         calls.task_list, 0,
         "no replicas poll before the first resync"
     );
+}
+
+fn plain_container() -> ContainerSummary {
+    ContainerSummary {
+        id: "c1".to_owned(),
+        names: vec!["/plain".to_owned()],
+        state: "running".to_owned(),
+        ..ContainerSummary::default()
+    }
+}
+
+/// Issue #140: on a daemon that is not a Swarm manager, `--containers` publishes the containers
+/// and is healthy on them; the replicas poller never polls.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_manager_with_containers_is_healthy_on_its_containers() {
+    let (registry, metrics) = configure_metrics_with(Duration::from_secs(1), true);
+    let docker = Arc::new(LifecycleDocker::not_manager().with_containers(vec![plain_container()]));
+    let cancel = CancellationToken::new();
+    let addr = serve_endpoints(&cancel, &registry, &metrics).await;
+    let workers = run_workers(&cancel, &docker, &metrics);
+    let deadline = Instant::now() + WAIT;
+    while get(addr, "/healthz").await != (200, "ok\n".to_owned()) {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for /healthz: {:?}",
+            get(addr, "/healthz").await
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (_, body) = get(addr, "/metrics").await;
+    assert!(
+        body.lines().any(
+            |line| line.starts_with("swarm_container_state{container=\"plain\"")
+                && line.contains("state=\"running\"")
+                && line.ends_with(" 1.0")
+        ),
+        "{body}"
+    );
+    let polls = gathered_value(&registry, "swarm_exporter_polls_total");
+    assert!(
+        polls.abs() < f64::EPSILON,
+        "swarm_exporter_polls_total = {polls}"
+    );
+    cancel.cancel();
+    wait_workers(workers).await;
+    assert_eq!(docker.calls().task_list, 0);
+}
+
+/// A manager demoted while the replicas poller runs: the poller's task list is refused first,
+/// the resync it asks for finds the demotion, the Swarm series go, and from then on the poller
+/// skips its ticks: no task list and no poll counted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_demoted_manager_stops_polling() {
+    let (registry, metrics) = configure_metrics(Duration::from_secs(1));
+    let docker = Arc::new(LifecycleDocker::new(0));
+    let cancel = CancellationToken::new();
+    let workers = start_workers(
+        &cancel,
+        Arc::clone(&docker),
+        &metrics,
+        Duration::from_millis(20),
+        &clock(),
+    );
+    wait_until("a few polls", || docker.calls().task_list > 2).await;
+    let mut before = String::new();
+    service_kit::prometheus_client::encoding::text::encode(&mut before, &registry)
+        .unwrap_or_else(|error| panic!("encode: {error}"));
+    assert!(
+        before
+            .lines()
+            .any(|line| line.starts_with("swarm_service_desired_replicas{")),
+        "{before}"
+    );
+    docker.demoted.store(true, Ordering::SeqCst);
+    wait_until("the demotion", || metrics.health.role() == Role::NotManager).await;
+    // A poll already past the role check when the demotion landed may still finish.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let polls = gathered_value(&registry, "swarm_exporter_polls_total");
+    let task_lists = docker.calls().task_list;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        docker.calls().task_list,
+        task_lists,
+        "task lists after the demotion"
+    );
+    let after = gathered_value(&registry, "swarm_exporter_polls_total");
+    assert!(
+        (after - polls).abs() < f64::EPSILON,
+        "swarm_exporter_polls_total {polls} -> {after}"
+    );
+    assert_eq!(
+        metrics.health.snapshot_now(),
+        (false, "not a swarm manager")
+    );
+    let mut body = String::new();
+    service_kit::prometheus_client::encoding::text::encode(&mut body, &registry)
+        .unwrap_or_else(|error| panic!("encode: {error}"));
+    assert!(
+        !body.lines().any(|line| line.starts_with("swarm_service_")),
+        "{body}"
+    );
+    cancel.cancel();
+    wait_workers(workers).await;
+}
+
+/// Without `--containers`, a daemon that is not a Swarm manager has nothing to export: unhealthy,
+/// with its own reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_non_manager_without_containers_is_unhealthy() {
+    let (registry, metrics) = configure_metrics(Duration::from_secs(1));
+    let docker = Arc::new(LifecycleDocker::not_manager());
+    let cancel = CancellationToken::new();
+    let addr = serve_endpoints(&cancel, &registry, &metrics).await;
+    let workers = run_workers(&cancel, &docker, &metrics);
+    let expected = (503, "not a swarm manager\n".to_owned());
+    let deadline = Instant::now() + WAIT;
+    while get(addr, "/healthz").await != expected {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    cancel.cancel();
+    wait_workers(workers).await;
 }
 
 /// Go: `TestWorkers_PermanentResyncFailureIsUnhealthy`

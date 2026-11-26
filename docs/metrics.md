@@ -150,7 +150,8 @@ fail the Docker call during decoding, rather than passing through as labels
   changed while its tasks were listed (see **Consistency** above).
 - `swarm_exporter_resyncs_total{result}` — resyncs (service and node list) by `result`: `success` or
   `failure`. Both series exist at `0` from startup, so `increase()` and "never failed" rules work
-  before the first resync. A resync interrupted by shutdown is not counted.
+  before the first resync. A resync interrupted by shutdown is not counted, and neither is one a
+  daemon that is not a Swarm manager refuses (see [Health](operations.md#health)).
 - `swarm_exporter_last_poll_success_timestamp_seconds` — Unix time of the latest successfully
   published task poll; `0` until the first one.
 - `swarm_exporter_last_resync_success_timestamp_seconds` — Unix time of the latest completed resync;
