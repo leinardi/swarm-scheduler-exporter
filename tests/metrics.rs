@@ -448,6 +448,8 @@ fn exporter_series(want: &mut BTreeMap<String, f64>) {
     );
     // Unbound: unhealthy until the reconciler is bound; no poll or resync yet.
     put("swarm_exporter_health", &[], 0.0);
+    // Unbound too: the role is not known.
+    put("swarm_exporter_swarm_manager", &[], 0.0);
     put(
         "swarm_exporter_last_poll_success_timestamp_seconds",
         &[],

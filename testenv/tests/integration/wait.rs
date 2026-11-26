@@ -53,6 +53,7 @@ pub const METRIC_CONTAINER_STATE: &str = "swarm_container_state";
 pub const METRIC_POLLS_TOTAL: &str = "swarm_exporter_polls_total";
 pub const METRIC_REPLICAS_STATE: &str = "swarm_task_replicas_state";
 pub const METRIC_HEALTH: &str = "swarm_exporter_health";
+pub const METRIC_SWARM_MANAGER: &str = "swarm_exporter_swarm_manager";
 pub const METRIC_BUILD_INFO: &str = "swarm_exporter_build_info";
 pub const METRIC_EVENTS_RECONNECTS: &str = "swarm_exporter_events_reconnects_total";
 

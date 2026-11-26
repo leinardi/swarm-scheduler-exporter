@@ -222,6 +222,41 @@ async fn a_404_is_not_found_and_a_500_is_not() {
     assert!(failed.to_string().contains("boom"), "{failed}");
 }
 
+/// Docker's 503 for a manager-only call on a worker, and on a host with Swarm inactive, is
+/// `is_not_manager`; a 503 with another message and a 500 are not.
+#[tokio::test]
+async fn a_503_not_a_swarm_manager_is_not_manager() {
+    let worker = "This node is not a swarm manager. Worker nodes can't be used to view or modify \
+                  cluster state. Please run this command on a manager node or promote the current \
+                  node to a manager.";
+    let inactive = "This node is not a swarm manager. Use \"docker swarm init\" or \"docker swarm \
+                    join\" to connect this node to swarm and try again.";
+    let engine = FakeEngine::start(&[
+        ("/services", Reply::error(503, worker)),
+        ("/nodes", Reply::error(503, inactive)),
+        ("/tasks", Reply::error(503, "service unavailable")),
+        ("/containers/json", Reply::error(500, "not a swarm manager")),
+    ])
+    .unwrap();
+    let client = client(&engine);
+    for error in [
+        client.service_list().await.unwrap_err(),
+        client.node_list().await.unwrap_err(),
+    ] {
+        assert!(error.is_not_manager(), "{error}");
+        assert_eq!(error.kind(), ErrorKind::Other);
+        assert!(!error.is_not_found());
+    }
+    for error in [
+        client.task_list().await.unwrap_err(),
+        client.container_list().await.unwrap_err(),
+    ] {
+        assert!(!error.is_not_manager(), "{error}");
+    }
+    assert!(Error::not_manager("This node is not a swarm manager.").is_not_manager());
+    assert!(!Error::deadline_exceeded().is_not_manager());
+}
+
 /// An empty ID is refused before any request, as moby refuses it.
 #[tokio::test]
 async fn an_empty_id_sends_nothing() {

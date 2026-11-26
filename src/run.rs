@@ -23,7 +23,7 @@
  */
 
 //! The exporter's wiring, Go's `run`: the flags, the log, the metrics, the Docker client, the
-//! workers (reconciler, event listener, poller) and the HTTP server, and the one shutdown
+//! workers (reconciler, event listener, replicas and containers pollers) and the HTTP server, and the one shutdown
 //! deadline they share (Q8).
 
 use std::future::Future;
@@ -43,7 +43,8 @@ use crate::collector::exporter_metrics::ExporterMetrics;
 use crate::collector::health::{Health, HealthGauges, Timestamps};
 use crate::collector::nodes::{NodeMetrics, NodesByState};
 use crate::collector::reconciler::{
-    Collectors, Reconciler, ReconcilerHandle, listen_swarm_events, poll_and_publish_replicas_state,
+    Collectors, PollError, Reconciler, ReconcilerHandle, Role, listen_swarm_events,
+    poll_and_publish_replicas_state,
 };
 use crate::collector::replicas_state::ReplicasState;
 use crate::collector::service_restart::ServiceRestartPolicy;
@@ -105,7 +106,12 @@ pub fn register_metrics(
     replica_gauges.register(registry);
     let replicas_state = Arc::new(ReplicasState::new(custom));
     replicas_state.register(registry);
-    let health = Health::unbound(Arc::clone(&timestamps), options.poll_delay, clock);
+    let health = Health::unbound(
+        Arc::clone(&timestamps),
+        options.poll_delay,
+        options.containers.enabled,
+        clock,
+    );
     let [version, commit, date] = &options.build;
     HealthGauges::new(health.clone(), version, commit, date).register(registry);
     let nodes_by_state = Arc::new(NodesByState::new());
@@ -161,12 +167,12 @@ impl Workers {
     }
 }
 
-/// Go's `startWorkers`: the reconciler, the event listener and the poller, until `root` is
-/// cancelled. The reconciler is created first and bound to the health check (Go installs it when
+/// Go's `startWorkers`: the reconciler, the event listener, the replicas poller and, with
+/// `--containers`, the containers poller, until `root` is cancelled. The reconciler is created first and bound to the health check (Go installs it when
 /// `Run` starts; a reconciler that has not completed its first resync reads the same either way),
 /// then the event-stream anchor is captured, before the reconciler's first resync lists anything,
-/// so every change made while that resync runs reaches the reconciler as an event. The poller
-/// waits for that first resync.
+/// so every change made while that resync runs reaches the reconciler as an event. The replicas
+/// poller waits for that first resync; the containers poller does not.
 #[must_use]
 pub fn start_workers<D: DockerApi + 'static>(
     root: &CancellationToken,
@@ -204,27 +210,35 @@ pub fn start_workers<D: DockerApi + 'static>(
         .await;
     });
 
+    let containers_task = metrics.containers.clone().map(|containers| {
+        let poller = ContainersPoller {
+            docker: Arc::clone(&docker),
+            containers,
+            exporter_metrics: Arc::clone(&metrics.collectors.metrics),
+            clock: Arc::clone(clock),
+            cancel: root.clone(),
+        };
+        tokio::spawn(poller.run(poll_delay))
+    });
+
     let poller = Poller {
         docker,
         handle,
         exporter_metrics: Arc::clone(&metrics.collectors.metrics),
-        containers: metrics.containers.clone(),
         cancel: root.clone(),
     };
     let poller_task = tokio::spawn(poller.run(poll_delay));
 
-    Workers {
-        tasks: vec![reconciler_task, listener_task, poller_task],
-    }
+    let mut tasks = vec![reconciler_task, listener_task, poller_task];
+    tasks.extend(containers_task);
+    Workers { tasks }
 }
 
-/// The poller: tasks, and containers when enabled, every poll delay, against the reconciler's
-/// polling snapshots.
+/// The replicas poller: the tasks every poll delay, against the reconciler's polling snapshots.
 struct Poller<D> {
     docker: Arc<D>,
     handle: ReconcilerHandle,
     exporter_metrics: Arc<ExporterMetrics>,
-    containers: Option<Arc<ContainersState>>,
     cancel: CancellationToken,
 }
 
@@ -260,27 +274,73 @@ impl<D: DockerApi> Poller<D> {
     }
 
     /// Go's `pollOnce`: the replicas state, its duration observed and the poll counted whatever
-    /// the outcome, a failure counted and logged; then the containers when enabled, a failure
-    /// logged with the previous set kept.
+    /// the outcome, a failure counted and logged. A tick while the daemon is not a Swarm manager
+    /// is skipped: there is nothing to poll, so no call and no count.
     async fn poll_once(&self) {
+        if self.handle.role() == Role::NotManager {
+            return;
+        }
         let start = Instant::now();
         let result =
             poll_and_publish_replicas_state(&*self.docker, &self.handle, &self.cancel).await;
         self.exporter_metrics.observe_poll_duration(start.elapsed());
         self.exporter_metrics.inc_polls();
-        if let Err(error) = result {
-            self.exporter_metrics.inc_poll_errors();
-            error!(error = %error, "poll replicas state failed");
+        match result {
+            Ok(()) => {}
+            // Demoted while the poll ran: nothing was published, and the reconciler logged it.
+            Err(PollError::NotManager) => debug!("replicas poll skipped: not a swarm manager"),
+            Err(error) => {
+                self.exporter_metrics.inc_poll_errors();
+                error!(error = %error, "poll replicas state failed");
+            }
         }
-        let Some(containers) = &self.containers else {
-            return;
-        };
+    }
+}
+
+/// The containers poller, when `--containers` is set: the container state every poll delay. It
+/// needs nothing from the reconciler, so it does not wait for the first resync: a host whose
+/// daemon is not a Swarm manager (a worker, or Swarm inactive) still gets its containers.
+struct ContainersPoller<D> {
+    docker: Arc<D>,
+    containers: Arc<ContainersState>,
+    exporter_metrics: Arc<ExporterMetrics>,
+    clock: Arc<dyn Clock>,
+    cancel: CancellationToken,
+}
+
+impl<D: DockerApi> ContainersPoller<D> {
+    /// Polls at once, then on every tick, a missed tick skipped as for the replicas poller.
+    async fn run(self, delay: Duration) {
+        debug!(every = ?delay, "start polling containers state");
+        let mut ticker = tokio::time::interval(delay);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        ticker.tick().await;
+        self.poll_once().await;
+        loop {
+            tokio::select! {
+                () = self.cancel.cancelled() => {
+                    debug!("containers polling loop: context canceled");
+                    return;
+                }
+                _ = ticker.tick() => self.poll_once().await,
+            }
+        }
+    }
+
+    /// One container poll: the rows published on success, and its time recorded for health; a
+    /// failure logged, with the previous set kept.
+    async fn poll_once(&self) {
         match self
             .cancel
-            .run_until_cancelled(containers.poll(&*self.docker))
+            .run_until_cancelled(self.containers.poll(&*self.docker))
             .await
         {
-            Some(Ok(rows)) => containers.update(&rows),
+            Some(Ok(rows)) => {
+                self.containers.update(&rows);
+                self.exporter_metrics
+                    .timestamps()
+                    .mark_containers_poll_ok(self.clock.now());
+            }
             Some(Err(error)) => warn!(error = %error, "poll containers state failed"),
             // Go's list fails at once on the cancelled context.
             None => warn!(

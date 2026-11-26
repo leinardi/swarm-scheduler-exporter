@@ -110,6 +110,10 @@ const TESTS: &[Test] = &[
         run: |test| Box::pin(containers::containers_opt_in(test)),
     },
     Test {
+        name: "TestContainers_NonManager",
+        run: |test| Box::pin(containers::containers_non_manager(test)),
+    },
+    Test {
         name: "TestEvents_ReconnectResyncs",
         run: |test| Box::pin(events::reconnect_resyncs(test)),
     },

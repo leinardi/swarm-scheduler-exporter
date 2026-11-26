@@ -9,9 +9,24 @@ been published, and the latest published poll is no older than `max(3 × --poll-
 with the default 10s poll delay). A requested resync that stays outstanding for longer than that
 same window, for example because listing services keeps failing, makes it unhealthy too.
 
+On a Docker daemon that is not a Swarm manager (a worker, or a host with Swarm inactive), Docker
+refuses the service, node and task lists with `503 This node is not a swarm manager`. The
+exporter reads that as a state, not as a failing resync: it logs one warning, exports no Swarm
+series, and retries the service list on the resync backoff (up to 30s), so `docker swarm init`
+or a promotion is picked up without a restart. Its health then depends on `--containers`:
+
+- without it there is nothing to export, and the exporter is unhealthy with the reason
+  `not a swarm manager`;
+- with it, the exporter is healthy once a container poll has been published and the latest one is
+  no older than the same `max(3 × --poll-delay, 30s)` window, so a global service on every node
+  stays healthy on its workers.
+
+A manager that is demoted drops every Swarm series and stops every manager-only call except that
+retried service list, until it is a manager again.
+
 - HTTP: `/healthz` responds `200` with body `ok` when healthy, and `503` with a short reason
-  (`initial resync not completed`, `no successful poll yet`, `last poll too old` or
-  `resync outstanding`) when not.
+  (`initial resync not completed`, `no successful poll yet`, `last poll too old`,
+  `resync outstanding` or `not a swarm manager`) when not.
 - Metric: `swarm_exporter_health` reports the same check as `1` healthy / `0` unhealthy, evaluated
   at every scrape.
 - Container health: the image is distroless (no shell, no curl), so it ships a `HEALTHCHECK` that
