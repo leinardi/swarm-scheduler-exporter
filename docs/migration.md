@@ -5,8 +5,9 @@ libraries and stops reproducing Go's behaviour byte for byte) and, below it, **1
 Either way every `swarm_*` metric keeps its name, type, help text, labels and values, `/metrics`
 and `/healthz` keep their paths, and the Docker access stays read-only. The metric names, types
 and label names are pinned by a committed inventory that started from the 1.3.2 exposition (minus
-the `go_*` and `promhttp_*` families) and has since gained the `swarm_node_*` and
-`swarm_service_restart_policy` families. The values the Docker fixtures feed are checked by tests.
+the `go_*` and `promhttp_*` families) and has since gained the `swarm_node_*`,
+`swarm_service_restart_policy` and `swarm_exporter_swarm_manager` families. The values the Docker
+fixtures feed are checked by tests.
 
 ## Upgrading from 2.x to 3.0
 
@@ -52,7 +53,9 @@ below.
   again, as it did before 1.3.0: the container poll no longer waits for a Swarm resync that such a
   daemon can never complete. On a daemon that is not a Swarm manager, health follows the container
   polls with `--containers` and reads `not a swarm manager` without it; such a daemon's refusals
-  are not counted as failed resyncs (see [Health](operations.md#health)).
+  are not counted as failed resyncs (see [Health](operations.md#health)). The new gauge
+  `swarm_exporter_swarm_manager` tells the two apart, and the example `SwarmExporterPollsStale`
+  alert in [metrics](metrics.md#exporter-self-metrics) is limited to managers with it.
 
 ## Coming from 1.x (Go)
 

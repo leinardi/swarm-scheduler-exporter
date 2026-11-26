@@ -190,7 +190,7 @@ const GOLDEN_FILE: &str = "tests/testdata/engine_wire/metrics.golden";
 
 /// The registered families the golden file deliberately does not pin, because their values
 /// depend on timing or have dedicated assertions outside the historical Go golden.
-const EXCLUDED_FAMILIES: [(&str, &str); 17] = [
+const EXCLUDED_FAMILIES: [(&str, &str); 18] = [
     (
         "swarm_node_info",
         "additive metric, covered by node snapshot tests",
@@ -229,6 +229,10 @@ const EXCLUDED_FAMILIES: [(&str, &str); 17] = [
         "derived from wall-clock poll freshness",
     ),
     ("swarm_exporter_build_info", "ldflags, not SDK data"),
+    (
+        "swarm_exporter_swarm_manager",
+        "the reconciler's role, asserted by the health unit tests instead",
+    ),
     (
         "swarm_exporter_events_reconnects_total",
         "asserted by the reconnect case instead",

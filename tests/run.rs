@@ -514,6 +514,11 @@ async fn a_non_manager_with_containers_is_healthy_on_its_containers() {
         polls.abs() < f64::EPSILON,
         "swarm_exporter_polls_total = {polls}"
     );
+    let manager = gathered_value(&registry, "swarm_exporter_swarm_manager");
+    assert!(
+        manager.abs() < f64::EPSILON,
+        "swarm_exporter_swarm_manager = {manager}"
+    );
     cancel.cancel();
     wait_workers(workers).await;
     assert_eq!(docker.calls().task_list, 0);
@@ -544,6 +549,11 @@ async fn a_demoted_manager_stops_polling() {
             .any(|line| line.starts_with("swarm_service_desired_replicas{")),
         "{before}"
     );
+    let manager = gathered_value(&registry, "swarm_exporter_swarm_manager");
+    assert!(
+        (manager - 1.0).abs() < f64::EPSILON,
+        "swarm_exporter_swarm_manager = {manager}"
+    );
     docker.demoted.store(true, Ordering::SeqCst);
     wait_until("the demotion", || metrics.health.role() == Role::NotManager).await;
     // A poll already past the role check when the demotion landed may still finish.
@@ -564,6 +574,11 @@ async fn a_demoted_manager_stops_polling() {
     assert_eq!(
         metrics.health.snapshot_now(),
         (false, "not a swarm manager")
+    );
+    let manager = gathered_value(&registry, "swarm_exporter_swarm_manager");
+    assert!(
+        manager.abs() < f64::EPSILON,
+        "swarm_exporter_swarm_manager = {manager}"
     );
     let mut body = String::new();
     service_kit::prometheus_client::encoding::text::encode(&mut body, &registry)

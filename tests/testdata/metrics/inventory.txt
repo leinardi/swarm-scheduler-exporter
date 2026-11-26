@@ -23,6 +23,7 @@ swarm_exporter_poll_errors_total counter
 swarm_exporter_poll_rejections_total counter
 swarm_exporter_polls_total counter
 swarm_exporter_resyncs_total counter result
+swarm_exporter_swarm_manager gauge
 swarm_node_availability gauge availability,node,node_id
 swarm_node_info gauge node,node_id,role
 swarm_node_manager_leader gauge node,node_id

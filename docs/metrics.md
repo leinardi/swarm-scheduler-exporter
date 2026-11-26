@@ -142,6 +142,10 @@ fail the Docker call during decoding, rather than passing through as labels
 
 - `swarm_exporter_health` — `1` healthy / `0` unhealthy.
 - `swarm_exporter_build_info{version,commit,date}` — `1`.
+- `swarm_exporter_swarm_manager` — `1` when the Docker daemon the exporter reads is a Swarm
+  manager, `0` when it is not (a worker, or Swarm inactive) or not yet known (before the first
+  resync). A daemon that is not a manager exports no `swarm_service_*`, `swarm_task_*`,
+  `swarm_node_*` or `swarm_cluster_*` series (see [Health](operations.md#health)).
 - `swarm_exporter_polls_total` / `swarm_exporter_poll_errors_total`.
 - `swarm_exporter_poll_duration_seconds` (histogram).
 - `swarm_exporter_events_reconnects_total`.
@@ -168,12 +172,19 @@ For example:
     summary: "Swarm exporter resyncs keep failing"
 
 - alert: SwarmExporterPollsStale
-  expr: time() - swarm_exporter_last_poll_success_timestamp_seconds > 120
+  expr: |
+    (time() - swarm_exporter_last_poll_success_timestamp_seconds > 120)
+    and on (job, instance) (swarm_exporter_swarm_manager == 1)
   labels:
     severity: warning
   annotations:
     summary: "Swarm exporter has not published a task poll for over 2 minutes"
 ```
+
+`SwarmExporterPollsStale` is limited to managers: an exporter on a worker never polls tasks, so
+its poll timestamp stays `0`. `SwarmExporterResyncsFailing` needs no such limit, because a daemon
+that is not a manager never counts a failed resync; limiting it would hide a manager whose every
+resync fails, whose role then stays unknown (`0`).
 
 ## Runtime metrics
 
@@ -198,7 +209,9 @@ same.
 ## Container-level (opt-in)
 
 If you also run non-Swarm workloads (e.g. plain Docker Compose or standalone containers),
-the exporter can expose **container state** metrics when started with `--containers`.
+the exporter can expose **container state** metrics when started with `--containers`. They work
+on any Docker host: a Swarm manager, a worker, or a host with Swarm inactive, where they are the
+only metrics exported besides the exporter's own.
 
 - `swarm_container_state{project,stack,service,container,orchestrator,display_name,state,exit_code}`
   Emits an **info-style one-hot series** per container across all known states.

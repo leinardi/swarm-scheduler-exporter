@@ -283,6 +283,32 @@ fn a_manager_with_containers_reads_the_replicas_checks() {
     );
 }
 
+/// `swarm_exporter_swarm_manager` reads the bound reconciler's role at every scrape: 1 for a
+/// manager only, 0 for a non-manager, an unknown role, or no reconciler bound.
+#[test]
+fn the_swarm_manager_gauge_follows_the_role() {
+    let fixture = fixture(Duration::from_secs(10));
+    let value = |gauges: &HealthGauges| gather_series(gauges.swarm_manager())["swarm_exporter_swarm_manager{}"];
+    let unbound = HealthGauges::new(
+        Health::unbound(
+            Arc::clone(&fixture.timestamps),
+            Duration::from_secs(10),
+            false,
+            Arc::clone(&fixture.clock) as Arc<dyn Clock>,
+        ),
+        "v",
+        "c",
+        "d",
+    );
+    assert_eq!(Some(value(&unbound)), Some(0.0), "no reconciler bound");
+    let gauges = HealthGauges::new(fixture.health.clone(), "v", "c", "d");
+    assert_eq!(Some(value(&gauges)), Some(0.0), "unknown");
+    fixture.reconciler.set_role(Role::Manager);
+    assert_eq!(Some(value(&gauges)), Some(1.0), "manager");
+    fixture.reconciler.set_role(Role::NotManager);
+    assert_eq!(Some(value(&gauges)), Some(0.0), "not a manager");
+}
+
 /// `swarm_exporter_build_info` carries the build at 1, with Go's names and HELP texts.
 #[test]
 fn build_info_is_one_with_the_build() {
@@ -312,10 +338,17 @@ fn build_info_is_one_with_the_build() {
                 "swarm_exporter_health".to_owned(),
                 "Exporter health status: 1=healthy, 0=unhealthy.".to_owned()
             ),
+            (
+                "swarm_exporter_swarm_manager".to_owned(),
+                "Whether the Docker daemon the exporter reads is a Swarm manager: 1=manager, \
+                 0=not a manager or not yet known."
+                    .to_owned()
+            ),
         ])
     );
     assert_eq!(text.types["swarm_exporter_build_info"], "gauge");
     assert_eq!(text.types["swarm_exporter_health"], "gauge");
+    assert_eq!(text.types["swarm_exporter_swarm_manager"], "gauge");
 }
 
 /// The timestamps are unix nanoseconds, 0 until marked.

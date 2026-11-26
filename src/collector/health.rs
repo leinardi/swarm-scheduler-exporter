@@ -262,16 +262,18 @@ fn exporter_name(name: &str) -> String {
     format!("{NAMESPACE}_{EXPORTER_SUBSYSTEM}_{name}")
 }
 
-/// `swarm_exporter_health` and `swarm_exporter_build_info`.
+/// `swarm_exporter_health`, `swarm_exporter_build_info` and `swarm_exporter_swarm_manager`.
 #[derive(Debug)]
 pub struct HealthGauges {
     health: Arc<ScrapeGauge>,
     build_info: Arc<GaugeVec>,
+    swarm_manager: Arc<ScrapeGauge>,
 }
 
 impl HealthGauges {
-    /// The health gauge, evaluating `health` on every scrape, and the build info set to 1 with
-    /// `version`, `commit` and `date`.
+    /// The health gauge, evaluating `health` on every scrape, the build info set to 1 with
+    /// `version`, `commit` and `date`, and the Swarm role of the daemon `health` reads, at
+    /// every scrape too.
     #[must_use]
     pub fn new(health: Health, version: &str, commit: &str, date: &str) -> Self {
         let build_info = Arc::new(GaugeVec::new(Desc::new(
@@ -280,6 +282,7 @@ impl HealthGauges {
             &["version", "commit", "date"],
         )));
         must(build_info.set(&[version, commit, date], 1.0));
+        let role = health.clone();
         Self {
             health: ScrapeGauge::new(
                 &exporter_name("health"),
@@ -287,13 +290,26 @@ impl HealthGauges {
                 move || if health.snapshot_now().0 { 1.0 } else { 0.0 },
             ),
             build_info,
+            swarm_manager: ScrapeGauge::new(
+                &exporter_name("swarm_manager"),
+                "Whether the Docker daemon the exporter reads is a Swarm manager: 1=manager, 0=not \
+                 a manager or not yet known.",
+                move || {
+                    if role.role() == Role::Manager {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                },
+            ),
         }
     }
 
-    /// Registers both gauges.
+    /// Registers the three gauges.
     pub fn register(&self, registry: &mut Registry) {
         metrics::register(registry, &self.health);
         metrics::register(registry, &self.build_info);
+        metrics::register(registry, &self.swarm_manager);
     }
 
     /// The health gauge.
@@ -306,6 +322,12 @@ impl HealthGauges {
     #[must_use]
     pub fn build_info(&self) -> &Arc<GaugeVec> {
         &self.build_info
+    }
+
+    /// The Swarm role gauge.
+    #[must_use]
+    pub fn swarm_manager(&self) -> &Arc<ScrapeGauge> {
+        &self.swarm_manager
     }
 }
 
