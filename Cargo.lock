@@ -103,12 +103,6 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bitflags"
-version = "1.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
-
-[[package]]
-name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
@@ -213,7 +207,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -224,8 +218,8 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clock"
-version = "3.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
+version = "4.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v4.0.0#41a21ea4fb9402b730ce3d8e9c989bf97c21d9c5"
 dependencies = [
  "jiff",
  "tokio",
@@ -263,37 +257,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "defmt"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4a0795ac740cb54d7b3775c9c17345f6aaecf884c01733b39d6017738e0e3e1"
-dependencies = [
- "bitflags 1.3.2",
- "defmt-macros",
-]
-
-[[package]]
-name = "defmt-macros"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "840bb056bd99c495c9188198a258ab787c79f306d864db3e6e8451442d6d8366"
-dependencies = [
- "defmt-parser",
- "proc-macro2",
- "quote",
- "syn 3.0.9",
-]
-
-[[package]]
-name = "defmt-parser"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71958f69fb2de856c5dd51ac9377e986ca1aa5919f931bf5395a807277f889a0"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -301,13 +264,13 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
 name = "docker-client"
-version = "3.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
+version = "4.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v4.0.0#41a21ea4fb9402b730ce3d8e9c989bf97c21d9c5"
 dependencies = [
  "bollard",
  "bytes",
@@ -428,7 +391,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -773,11 +736,10 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
-version = "0.2.38"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2b005715dcbeb0089a3c0dab99f2ff1cc3b2525323552703d648585d342a383"
+checksum = "107f2e89536b6818514025f6787b0d94d819e54fe3b40365275fc753de485b3f"
 dependencies = [
- "defmt",
  "jiff-core",
  "jiff-static",
  "log",
@@ -788,24 +750,23 @@ dependencies = [
 
 [[package]]
 name = "jiff-core"
-version = "0.1.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e52fe76043ccecc9005d2305ebaadf7d7fc0cc89ca6baa10a94d6bc68c7128c"
+checksum = "d44c923edf2bf456a982253f1a9ee1f6e89e421dffd0065d9b9a581da0def58f"
 dependencies = [
- "defmt",
  "log",
 ]
 
 [[package]]
 name = "jiff-static"
-version = "0.2.38"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cc9817253cf7c7ee4684451bd327e88d6f3658014e54a29198625590650695c"
+checksum = "4996f71e569e3a3e32b925c28ef8f0027dc30bb1d594b33eeda409eea185f5c8"
 dependencies = [
  "jiff-core",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn",
 ]
 
 [[package]]
@@ -993,9 +954,9 @@ dependencies = [
 
 [[package]]
 name = "prometheus-client"
-version = "0.25.2"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d150ad7bf80e60f45769d18a0a8c01028ab8f56355f33ed7bfce3a31f82e696"
+checksum = "f021d42d29841d029b61b45a25a7ef94feaf1d744913e59665103333a56045b8"
 dependencies = [
  "dtoa",
  "itoa",
@@ -1011,7 +972,7 @@ checksum = "01e34894696ff94f64a20c2c373a6440903e9c2789a303d68ec6e6f953f890e4"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -1035,7 +996,7 @@ version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags 2.13.2",
+ "bitflags",
 ]
 
 [[package]]
@@ -1069,8 +1030,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-meta"
-version = "3.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
+version = "4.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v4.0.0#41a21ea4fb9402b730ce3d8e9c989bf97c21d9c5"
 dependencies = [
  "regex",
  "serde-saphyr",
@@ -1100,7 +1061,7 @@ version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
- "bitflags 2.13.2",
+ "bitflags",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -1186,7 +1147,7 @@ version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
 dependencies = [
- "bitflags 2.13.2",
+ "bitflags",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -1244,7 +1205,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -1268,7 +1229,7 @@ checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -1294,8 +1255,8 @@ dependencies = [
 
 [[package]]
 name = "service-kit"
-version = "3.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
+version = "4.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v4.0.0#41a21ea4fb9402b730ce3d8e9c989bf97c21d9c5"
 dependencies = [
  "bytes",
  "hyper",
@@ -1400,26 +1361,13 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "jiff",
- "prometheus-client",
  "serde",
  "serde_json",
  "service-kit",
  "socket2",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-setup",
-]
-
-[[package]]
-name = "syn"
-version = "2.0.119"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
 ]
 
 [[package]]
@@ -1447,7 +1395,7 @@ checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -1467,7 +1415,6 @@ dependencies = [
 name = "testenv"
 version = "0.0.0"
 dependencies = [
- "bollard",
  "bytes",
  "clock",
  "futures-util",
@@ -1486,8 +1433,8 @@ dependencies = [
 
 [[package]]
 name = "testenv-core"
-version = "3.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
+version = "4.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v4.0.0#41a21ea4fb9402b730ce3d8e9c989bf97c21d9c5"
 dependencies = [
  "bollard",
  "futures-util",
@@ -1516,7 +1463,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -1562,7 +1509,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]
@@ -1687,8 +1634,8 @@ dependencies = [
 
 [[package]]
 name = "tracing-setup"
-version = "3.0.0"
-source = "git+https://github.com/leinardi/rust-common?tag=v3.0.0#3a2f44a5b1b90d825020ae9ed19b11b1e7bbc262"
+version = "4.0.0"
+source = "git+https://github.com/leinardi/rust-common?tag=v4.0.0#41a21ea4fb9402b730ce3d8e9c989bf97c21d9c5"
 dependencies = [
  "serde_json",
  "tracing",
@@ -1913,7 +1860,7 @@ checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
  "synstructure",
 ]
 
@@ -1934,7 +1881,7 @@ checksum = "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
  "synstructure",
 ]
 
@@ -1974,7 +1921,7 @@ checksum = "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn",
 ]
 
 [[package]]

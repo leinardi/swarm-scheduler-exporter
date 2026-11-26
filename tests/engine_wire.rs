@@ -46,14 +46,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
+use service_kit::tokio_util::sync::CancellationToken;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use clock::{Clock as _, SystemClock};
 use docker_client::Config;
 use docker_client::test_util::{FakeEngine, Reply};
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::reconciler::{
     ListenerStopped, Reconciler, ReconcilerHandle, listen_swarm_events,

@@ -26,9 +26,10 @@
 //! socket bind does not make the API read-only). It replaces Go's `docker-sdk-boundary` depguard
 //! rule for the Rust workspace:
 //!
-//! - bollard, the SDK the test harness creates and removes things with, is declared directly only
-//!   by `testenv`, only in its `[dependencies]` and only as `optional = true` (behind the
-//!   `integration` feature); the exporter reaches it only through `docker-client`;
+//! - bollard, the SDK the test harness creates and removes things with, is declared directly by
+//!   no manifest: `testenv` takes it as `testenv_core::bollard`, enabling testenv-core's
+//!   `bollard` feature only from its `integration` feature, never on the dependency itself;
+//!   the exporter reaches it only through `docker-client`;
 //! - the exporter package names neither bollard nor testenv nor testenv-core (whose `bollard`
 //!   feature brings bollard) in any dependency table, so none can reach the shipped binary;
 //! - nothing under `src/` names testenv, and bollard is named only in `src/docker`, as
@@ -57,6 +58,8 @@ const HARNESS: &str = "testenv";
 /// The harness's shared half (rust-common), whose `bollard` feature brings the SDK.
 const HARNESS_CORE: &str = "testenv-core";
 const HARNESS_MANIFEST: &str = "testenv/Cargo.toml";
+/// The harness feature that brings the SDK, enabled from `integration` only.
+const SDK_FEATURE: &str = "testenv-core/bollard";
 const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 /// The sanctioned Docker client, and the features that let it send requests of any method.
 const CLIENT: &str = "docker-client";
@@ -118,6 +121,46 @@ fn dependencies(manifest: &Table) -> Vec<Dependency> {
         .collect()
 }
 
+/// How many times the harness's `integration` feature enables [`SDK_FEATURE`].
+fn integration_enables_sdk(manifest: &Table) -> usize {
+    manifest
+        .get("features")
+        .and_then(|features| features.get("integration"))
+        .and_then(Value::as_array)
+        .map_or(0, |enabled| {
+            enabled
+                .iter()
+                .filter(|feature| feature.as_str() == Some(SDK_FEATURE))
+                .count()
+        })
+}
+
+/// The harness's features other than `integration` that enable testenv-core's `bollard` or
+/// `bollard-ssl` (which bring the SDK into a plain `cargo test`): one message each.
+fn other_features_enabling_sdk(manifest: &Table) -> Vec<String> {
+    let Some(features) = manifest.get("features").and_then(Value::as_table) else {
+        return Vec::new();
+    };
+    features
+        .iter()
+        .filter(|(name, _)| name.as_str() != "integration")
+        .filter(|(_, enabled)| {
+            enabled.as_array().is_some_and(|enabled| {
+                enabled.iter().filter_map(Value::as_str).any(|feature| {
+                    feature.starts_with("testenv-core/bollard")
+                        || feature.starts_with("testenv-core?/bollard")
+                })
+            })
+        })
+        .map(|(name, _)| {
+            format!(
+                "{HARNESS_MANIFEST} [features] {name}: {HARNESS_CORE}'s {SDK} feature is enabled \
+                 only from the integration feature"
+            )
+        })
+        .collect()
+}
+
 /// The manifest rules over `(path, text)` pairs, the root manifest at `Cargo.toml`: one message
 /// per violation.
 fn manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
@@ -127,6 +170,10 @@ fn manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
         let manifest: Table = text
             .parse()
             .unwrap_or_else(|error| panic!("parse {path}: {error}"));
+        if *path == HARNESS_MANIFEST {
+            confined += integration_enables_sdk(&manifest);
+            violations.extend(other_features_enabling_sdk(&manifest));
+        }
         for dependency in dependencies(&manifest) {
             let place = format!("{path} [{}] {}", dependency.table, dependency.crate_name);
             if *path == "Cargo.toml"
@@ -139,30 +186,35 @@ fn manifest_violations(manifests: &[(&str, &str)]) -> Vec<String> {
                 ));
                 continue;
             }
-            if dependency.crate_name != SDK {
+            if dependency.crate_name == SDK {
+                violations.push(format!(
+                    "{place}: {SDK} is declared nowhere: the harness takes it as \
+                     testenv_core::bollard"
+                ));
                 continue;
             }
-            let optional = dependency
+            let enables_sdk = dependency
                 .entry
-                .get("optional")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if *path != HARNESS_MANIFEST || dependency.table != "dependencies" {
+                .get("features")
+                .and_then(Value::as_array)
+                .is_some_and(|features| {
+                    features
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|feature| feature.starts_with(SDK))
+                });
+            if *path == HARNESS_MANIFEST && dependency.crate_name == HARNESS_CORE && enables_sdk {
                 violations.push(format!(
-                    "{place}: {SDK} is declared only in {HARNESS_MANIFEST} [dependencies]"
+                    "{place}: {HARNESS_CORE}'s {SDK} feature is enabled only behind the \
+                     integration feature"
                 ));
-            } else if !optional {
-                violations.push(format!(
-                    "{place}: {SDK} must be optional = true, behind the integration feature"
-                ));
-            } else {
-                confined += 1;
             }
         }
     }
     if confined != 1 {
         violations.push(format!(
-            "{HARNESS_MANIFEST} declares {SDK} {confined} times as an optional dependency, want once"
+            "{HARNESS_MANIFEST}'s integration feature enables {SDK_FEATURE} {confined} times, want \
+             once"
         ));
     }
     violations
@@ -470,8 +522,10 @@ const ROOT_OK: &str =
 const HARNESS_OK: &str = r#"
 [package]
 name = "testenv"
+[features]
+integration = ["testenv-core/bollard", "testenv-core/bollard-ssl"]
 [dependencies]
-bollard = { version = "=0.21.1", optional = true }
+testenv-core = { workspace = true }
 "#;
 
 /// Negative controls for the manifest rules: each manifest below breaks one, and the clean set
@@ -532,7 +586,7 @@ fn manifest_rules_reject_each_escape() {
                     "[dev-dependencies]\nbollard = \"0.21\"\n",
                 ),
             ],
-            "declared only in testenv/Cargo.toml",
+            "is declared nowhere",
         ),
         (
             "bollard as a harness dev-dependency",
@@ -540,15 +594,7 @@ fn manifest_rules_reject_each_escape() {
                 ("Cargo.toml", ROOT_OK),
                 (HARNESS_MANIFEST, "[dev-dependencies]\nbollard = \"0.21\"\n"),
             ],
-            "declared only in testenv/Cargo.toml",
-        ),
-        (
-            "bollard not optional",
-            &[
-                ("Cargo.toml", ROOT_OK),
-                (HARNESS_MANIFEST, "[dependencies]\nbollard = \"0.21\"\n"),
-            ],
-            "must be optional = true",
+            "is declared nowhere",
         ),
         (
             "bollard missing altogether",
@@ -568,14 +614,65 @@ fn manifest_rules_reject_each_escape() {
     }
 }
 
+/// Negative controls for the harness's bollard, which comes from testenv-core behind the
+/// `integration` feature only: an optional declaration of its own, or testenv-core's feature on
+/// the dependency itself, is refused.
+#[test]
+fn manifest_rules_keep_bollard_behind_testenv_core() {
+    let cases: &[ManifestCase] = &[
+        (
+            "bollard as an optional harness dependency",
+            &[
+                ("Cargo.toml", ROOT_OK),
+                (
+                    HARNESS_MANIFEST,
+                    "[features]\nintegration = [\"testenv-core/bollard\", \"dep:bollard\"]\n\
+                     [dependencies]\nbollard = { version = \"0.21\", optional = true }\n",
+                ),
+            ],
+            "is declared nowhere",
+        ),
+        (
+            "testenv-core's bollard feature on the dependency itself",
+            &[
+                ("Cargo.toml", ROOT_OK),
+                (
+                    HARNESS_MANIFEST,
+                    "[features]\nintegration = [\"testenv-core/bollard\"]\n[dependencies]\n\
+                     testenv-core = { workspace = true, features = [\"bollard-ssl\"] }\n",
+                ),
+            ],
+            "only behind the integration feature",
+        ),
+        (
+            "testenv-core's bollard-ssl feature from the default feature",
+            &[
+                ("Cargo.toml", ROOT_OK),
+                (
+                    HARNESS_MANIFEST,
+                    "[features]\ndefault = [\"testenv-core/bollard-ssl\"]\n\
+                     integration = [\"testenv-core/bollard\"]\n\
+                     [dependencies]\ntestenv-core = { workspace = true }\n",
+                ),
+            ],
+            "enabled only from the integration feature",
+        ),
+    ];
+    for (name, manifests, want) in cases {
+        let violations = manifest_violations(manifests);
+        assert!(
+            violations.iter().any(|violation| violation.contains(want)),
+            "{name}: want a violation containing {want:?}, got {violations:?}"
+        );
+    }
+}
+
 /// Negative controls for testenv-core, whose `bollard` feature would bring the SDK into the
 /// exporter: the workspace entry and the harness's own use pass, the exporter's does not.
 #[test]
 fn manifest_rules_keep_testenv_core_out_of_the_exporter() {
     let root = format!("{ROOT_OK}[workspace.dependencies]\ntestenv-core = {{ git = \"x\" }}\n");
-    let harness =
-        format!("{HARNESS_OK}testenv-core = {{ workspace = true, features = [\"bollard\"] }}\n");
-    let shared = manifest_violations(&[("Cargo.toml", &root), (HARNESS_MANIFEST, &harness)]);
+    let shared = manifest_violations(&[("Cargo.toml", &root), (HARNESS_MANIFEST, HARNESS_OK)]);
     assert!(shared.is_empty(), "{shared:?}");
 
     let cases: &[ManifestCase] = &[

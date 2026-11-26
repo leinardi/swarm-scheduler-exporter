@@ -38,10 +38,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use prometheus_client::collector::Collector;
-use prometheus_client::encoding::{DescriptorEncoder, EncodeMetric};
-use prometheus_client::metrics::MetricType;
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::collector::Collector;
+use service_kit::prometheus_client::encoding::{DescriptorEncoder, EncodeMetric};
+use service_kit::prometheus_client::metrics::MetricType;
+use service_kit::prometheus_client::registry::Registry;
 
 /// The default histogram buckets, as the Prometheus Go client's `DefBuckets`.
 pub const DEF_BUCKETS: [f64; 11] = [
@@ -326,7 +326,7 @@ impl fmt::Debug for ScrapeGauge {
 impl Collector for ScrapeGauge {
     fn encode(&self, mut encoder: DescriptorEncoder) -> Result<(), fmt::Error> {
         let metric = encoder.encode_descriptor(&self.name, &self.help, None, MetricType::Gauge)?;
-        prometheus_client::metrics::gauge::ConstGauge::new(self.value()).encode(metric)
+        service_kit::prometheus_client::metrics::gauge::ConstGauge::new(self.value()).encode(metric)
     }
 }
 
@@ -551,7 +551,7 @@ impl SnapshotBuilder {
 #[must_use]
 pub fn render(registry: &Registry) -> String {
     let mut body = String::new();
-    prometheus_client::encoding::text::encode(&mut body, registry)
+    service_kit::prometheus_client::encoding::text::encode(&mut body, registry)
         .unwrap_or_else(|error| panic!("encode the exposition: {error}"));
     body
 }

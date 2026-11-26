@@ -34,16 +34,16 @@ use std::fmt::Write as _;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use bollard::models::{ContainerCreateBody, HostConfig};
-use bollard::query_parameters::{
-    CreateContainerOptions, LogsOptions, RemoveContainerOptions, RestartContainerOptions,
-    StartContainerOptions,
-};
 use futures_util::StreamExt as _;
 use hyper::Method;
 use regex::Regex;
 use serde_json::Value;
 use testenv::config::ENV_IDS;
+use testenv_core::bollard::models::{ContainerCreateBody, HostConfig};
+use testenv_core::bollard::query_parameters::{
+    CreateContainerOptions, LogsOptions, RemoveContainerOptions, RestartContainerOptions,
+    StartContainerOptions,
+};
 use testenv_core::context::Context;
 
 use crate::http::{get, request, scrape_metrics};

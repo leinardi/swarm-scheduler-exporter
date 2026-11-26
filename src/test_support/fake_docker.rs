@@ -158,7 +158,7 @@ impl DockerApi for FakeDocker {
         &self,
         _since: Option<Timestamp>,
         _filters: &Filters,
-        _cancel: &tokio_util::sync::CancellationToken,
+        _cancel: &service_kit::tokio_util::sync::CancellationToken,
     ) -> impl Future<Output = Result<FakeEvents, Error>> + Send {
         ready(self.events_err.clone().map_or_else(
             || {

@@ -27,12 +27,12 @@
 
 use std::collections::HashMap;
 
-use bollard::models::NodeState;
-use bollard::query_parameters::{
-    InspectContainerOptions, ListContainersOptions, ListNetworksOptions, ListNodesOptions,
-};
 use testenv::config::ENV_IDS;
 use testenv::{Cluster, NodeRole};
+use testenv_core::bollard::models::NodeState;
+use testenv_core::bollard::query_parameters::{
+    InspectContainerOptions, ListContainersOptions, ListNetworksOptions, ListNodesOptions,
+};
 use testenv_core::context::Context;
 
 use crate::swarm::op;
@@ -253,7 +253,7 @@ fn check(condition: bool, message: String) -> Result<(), String> {
 /// A Docker call, under the test's timeout, with its error as text.
 async fn timed<V>(
     ctx: &Context,
-    call: impl std::future::Future<Output = Result<V, bollard::errors::Error>>,
+    call: impl std::future::Future<Output = Result<V, testenv_core::bollard::errors::Error>>,
 ) -> Result<V, String> {
     op(ctx, call).await.map_err(|error| error.to_string())
 }

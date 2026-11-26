@@ -227,3 +227,84 @@ fn the_poll_duration_histogram_buckets_the_observation() {
     assert_eq!(value(&text, &format!("{name}_count"), &[]), Some(1.0));
     assert!((value(&text, &format!("{name}_sum"), &[]).unwrap() - 0.03).abs() < 1e-12);
 }
+
+/// The exposition as the scrape golden holds it. A label-keyed family keeps its series in a hash
+/// map, so its series are put in the order of their labels (`le` aside); within a series (a
+/// histogram's buckets, `_count` and `_sum`) and in a family without labels, the lines keep the
+/// encoder's order. Every line is otherwise byte for byte what a scrape answers.
+fn canonical_scrape(body: &str) -> String {
+    /// The labels of a sample line, without the `le` a histogram bucket adds last.
+    fn series_key(line: &str) -> &str {
+        let labels = match (line.find('{'), line.rfind('}')) {
+            (Some(open), Some(close)) if open < close => &line[open + 1..close],
+            _ => "",
+        };
+        if labels.starts_with("le=\"") {
+            ""
+        } else if let Some(at) = labels.rfind(",le=\"") {
+            &labels[..at]
+        } else {
+            labels
+        }
+    }
+    fn flush(series: &mut Vec<(&str, Vec<&str>)>, out: &mut String) {
+        series.sort_by(|left, right| left.0.cmp(right.0));
+        for line in series.drain(..).flat_map(|(_, lines)| lines) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    let mut out = String::new();
+    let mut series: Vec<(&str, Vec<&str>)> = Vec::new();
+    for line in body.lines() {
+        if line.starts_with('#') {
+            flush(&mut series, &mut out);
+            out.push_str(line);
+            out.push('\n');
+        } else {
+            let key = series_key(line);
+            match series.iter_mut().find(|(known, _)| *known == key) {
+                Some((_, lines)) => lines.push(line),
+                None => series.push((key, vec![line])),
+            }
+        }
+    }
+    flush(&mut series, &mut out);
+    out
+}
+
+/// A scrape of the exporter's own metrics after a fixed sequence, beside a gauge vec with an
+/// escaped label, is byte for byte the committed golden (in the canonical form above), taken
+/// before the move to rust-common v4.0.0 and prometheus-client 0.26: the names, help texts,
+/// label escaping, value formatting and `# EOF` do not move with them.
+#[test]
+fn the_scrape_is_the_golden_byte_for_byte() {
+    let metrics = ExporterMetrics::new(Arc::new(Timestamps::default()));
+    metrics.inc_polls();
+    metrics.inc_polls();
+    metrics.inc_polls();
+    metrics.inc_poll_errors();
+    metrics.inc_event_reconnect();
+    metrics.inc_events_dropped();
+    metrics.inc_events_dropped();
+    metrics.inc_poll_rejections();
+    metrics.inc_resync(ResyncResult::Success);
+    metrics.inc_resync(ResyncResult::Success);
+    metrics.inc_resync(ResyncResult::Failure);
+    for millis in [3, 40, 700, 2500, 12_000] {
+        metrics.observe_poll_duration(std::time::Duration::from_millis(millis));
+    }
+    let mut registry = Registry::default();
+    metrics.register(&mut registry);
+    let vec = Arc::new(crate::metrics::GaugeVec::new(crate::metrics::Desc::new(
+        "swarm_golden_gauge",
+        "A gauge vec, \"quoted\".",
+        &["b", "a"],
+    )));
+    crate::metrics::must(vec.set(&["2", "1"], 5.0));
+    crate::metrics::must(vec.set(&["quote\" back\\slash\nnewline", "x"], 0.5));
+    crate::metrics::register(&mut registry, &vec);
+    let body = crate::metrics::render(&registry);
+    let want = include_str!("../../../tests/testdata/metrics/scrape.golden");
+    assert_eq!(canonical_scrape(&body), want);
+}

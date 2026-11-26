@@ -44,9 +44,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use service_kit::tokio_util::sync::CancellationToken;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use crate::docker::types::{Event, Node, Service};
 use crate::docker::{DockerApi, with_docker_timeout};

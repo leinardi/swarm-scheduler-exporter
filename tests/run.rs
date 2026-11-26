@@ -33,12 +33,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use service_kit::tokio_util::sync::CancellationToken;
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use clock::{Clock, SystemClock};
-use prometheus_client::registry::Registry;
 use service_kit::http::Lifecycle;
+use service_kit::prometheus_client::registry::Registry;
 use swarm_scheduler_exporter::collector::containers::ContainersConfig;
 use swarm_scheduler_exporter::collector::types::CustomLabels;
 use swarm_scheduler_exporter::docker::types::{
@@ -276,7 +276,7 @@ async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
 /// Go's `gatheredValue`: the value of the single series of the gauge `name`.
 fn gathered_value(registry: &Registry, name: &str) -> f64 {
     let mut body = String::new();
-    prometheus_client::encoding::text::encode(&mut body, registry)
+    service_kit::prometheus_client::encoding::text::encode(&mut body, registry)
         .unwrap_or_else(|error| panic!("encode: {error}"));
     let values: Vec<f64> = body
         .lines()

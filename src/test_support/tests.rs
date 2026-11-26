@@ -92,7 +92,7 @@ async fn fake_docker_returns_the_errors_it_is_given() {
         fake.events(
             Some(jiff::Timestamp::UNIX_EPOCH),
             &Filters::new(),
-            &tokio_util::sync::CancellationToken::new(),
+            &service_kit::tokio_util::sync::CancellationToken::new(),
         )
         .await
         .is_err()
@@ -106,7 +106,7 @@ async fn fake_events_stream_from_the_channel_and_end_when_it_closes() {
         .events(
             Some(jiff::Timestamp::UNIX_EPOCH),
             &Filters::new(),
-            &tokio_util::sync::CancellationToken::new(),
+            &service_kit::tokio_util::sync::CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -120,7 +120,7 @@ async fn fake_events_stream_from_the_channel_and_end_when_it_closes() {
         .events(
             Some(jiff::Timestamp::UNIX_EPOCH),
             &Filters::new(),
-            &tokio_util::sync::CancellationToken::new(),
+            &service_kit::tokio_util::sync::CancellationToken::new(),
         )
         .await
         .unwrap();

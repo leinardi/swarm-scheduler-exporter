@@ -26,11 +26,11 @@
 
 use std::time::Duration;
 
-use bollard::models::ContainerCreateBody;
-use bollard::query_parameters::{
+use testenv::metrics_text::labels;
+use testenv_core::bollard::models::ContainerCreateBody;
+use testenv_core::bollard::query_parameters::{
     CreateContainerOptions, RemoveContainerOptions, StartContainerOptions,
 };
-use testenv::metrics_text::labels;
 
 use crate::launcher::Launch;
 use crate::swarm::{

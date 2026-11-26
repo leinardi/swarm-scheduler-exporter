@@ -26,11 +26,11 @@
 
 use std::time::Duration;
 
-use bollard::models::{
+use testenv::metrics_text::Labels;
+use testenv_core::bollard::models::{
     HealthConfig, ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
     ServiceSpecUpdateConfigOrderEnum, ServiceUpdateStatusStateEnum, TaskState,
 };
-use testenv::metrics_text::Labels;
 
 use crate::launcher::Launch;
 use crate::swarm::{

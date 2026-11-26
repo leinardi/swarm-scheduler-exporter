@@ -21,9 +21,9 @@ workspace = true
 integration = [
     "testenv-core/async",
     "testenv-core/bollard",
+    "testenv-core/bollard-ssl",
     "testenv-core/dind",
     "testenv-core/redact",
-    "dep:bollard",
     "dep:futures-util",
     "dep:tempfile",
     "dep:tokio",
@@ -36,22 +36,12 @@ integration = [
 # binary.
 # The wall clock the harness and its logs read.
 clock.workspace = true
-jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std"] }
 # The generic half of the harness (rust-common): Go's -run filter, the envid, the sweep rules and
 # the owner labels, the error type, and (with integration) Go's context and testing packages, the
 # redacting logger and the host daemon's sweep and cleanup. Its features follow integration, so a
 # plain cargo test does not build bollard.
 testenv-core.workspace = true
-# The Docker SDK, for the harness only, which creates and removes containers, networks and a
-# Swarm on purpose. An optional normal dependency, not a dev-dependency: the suite reaches it
-# through this library's API, and a dev-dependency is not available to library code. ring, not
-# aws-lc-sys, behind ssl. testenv-core's own entry takes pipe only; http (the nodes' daemons over
-# TCP) and ssl are this harness's, and cargo unifies them.
-bollard = { version = "=0.21.1", default-features = false, features = [
-    "http",
-    "pipe",
-    "ssl",
-], optional = true }
 futures-util = { version = "0.3.34", default-features = false, features = [
     "std",
 ], optional = true }
@@ -63,7 +53,9 @@ tokio = { version = "1.54.1", default-features = false, features = [
     "rt",
     "time",
 ], optional = true }
-# io for the workload image archive's byte stream.
+# io for the workload image archive's byte stream. Declared here, beside service-kit's
+# re-export, which has rt only: an exception of meta/tests/rust_common_boundary.rs, still held to
+# rust-common's one package.
 tokio-util = { version = "0.7.20", default-features = false, features = ["io"], optional = true }
 
 # The suite's own needs, beside the library's: the exporter child processes, the signal that

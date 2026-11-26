@@ -24,8 +24,8 @@
 
 //! A removed service's series.
 
-use bollard::models::TaskSpecRestartPolicyConditionEnum;
 use std::time::Duration;
+use testenv_core::bollard::models::TaskSpecRestartPolicyConditionEnum;
 
 use testenv::metrics_text::{format_sample, labels, labels_include};
 use testenv_core::context::Context;

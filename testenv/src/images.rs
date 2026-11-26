@@ -25,11 +25,11 @@
 //! The workload image: pulled once on the host, saved to one archive, and loaded from it into
 //! every node.
 
-use bollard::Docker;
-use bollard::errors::Error as DockerError;
-use bollard::query_parameters::ImportImageOptions;
 use futures_util::StreamExt as _;
 use tempfile::TempPath;
+use testenv_core::bollard::Docker;
+use testenv_core::bollard::errors::Error as DockerError;
+use testenv_core::bollard::query_parameters::ImportImageOptions;
 use testenv_core::context::Context;
 use testenv_core::host::{OP_TIMEOUT, OpError, with_timeout};
 use testenv_core::redact::{Log as _, Logger};

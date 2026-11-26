@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bollard::models::TaskSpecRestartPolicyConditionEnum;
 use testenv::metrics_text::{format_sample, format_series, labels};
+use testenv_core::bollard::models::TaskSpecRestartPolicyConditionEnum;
 use testenv_core::context::Context;
 
 use crate::cluster_smoke::node_count;

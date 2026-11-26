@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use crate::docker::types::{GoTime, Service};
 use crate::num::from_int;
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 
 use crate::metrics::{self, Desc, GaugeVec, LabelsMismatch};
 

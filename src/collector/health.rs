@@ -33,7 +33,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 
 use clock::Clock;
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 
 use crate::metrics::{self, Desc, GaugeVec, ScrapeGauge, must};
 

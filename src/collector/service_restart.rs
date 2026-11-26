@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use prometheus_client::registry::Registry;
+use service_kit::prometheus_client::registry::Registry;
 use tracing::error;
 
 use super::metrics_ids::{LABEL_DISPLAY_NAME, LABEL_SERVICE, LABEL_SERVICE_MODE, LABEL_STACK};
